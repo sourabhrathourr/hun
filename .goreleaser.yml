@@ -1,0 +1,38 @@
+version: 2
+
+builds:
+  - main: ./cmd/hun
+    binary: hun
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+
+archives:
+  - format: tar.gz
+    name_template: "hun_{{ .Os }}_{{ .Arch }}"
+
+brews:
+  - repository:
+      owner: hun-sh
+      name: homebrew-tap
+    homepage: "https://hun.sh"
+    description: "Seamless project context switching for developers"
+    install: |
+      bin.install "hun"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
