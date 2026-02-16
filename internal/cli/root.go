@@ -5,8 +5,8 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/hun-sh/hun/internal/client"
-	"github.com/hun-sh/hun/internal/tui"
+	"github.com/sourabhrathourr/hun/internal/client"
+	"github.com/sourabhrathourr/hun/internal/tui"
 	"github.com/spf13/cobra"
 )
 

@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/hun-sh/hun/internal/client"
-	"github.com/hun-sh/hun/internal/daemon"
+	"github.com/sourabhrathourr/hun/internal/client"
+	"github.com/sourabhrathourr/hun/internal/daemon"
 	"github.com/spf13/cobra"
 )
 

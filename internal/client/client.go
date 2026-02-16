@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/hun-sh/hun/internal/daemon"
+	"github.com/sourabhrathourr/hun/internal/daemon"
 )
 
 // Client communicates with the hun daemon over a Unix socket.

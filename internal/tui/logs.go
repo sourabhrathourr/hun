@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/hun-sh/hun/internal/daemon"
+	"github.com/sourabhrathourr/hun/internal/daemon"
 )
 
 type logsModel struct {

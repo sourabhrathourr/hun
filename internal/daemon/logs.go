@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hun-sh/hun/internal/config"
+	"github.com/sourabhrathourr/hun/internal/config"
 )
 
 // LogLine represents a single log entry.

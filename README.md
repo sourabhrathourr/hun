@@ -17,7 +17,7 @@ brew install hun-sh/tap/hun
 **Go install:**
 
 ```sh
-go install github.com/hun-sh/hun@latest
+go install github.com/sourabhrathourr/hun@latest
 ```
 
 **Direct download:**

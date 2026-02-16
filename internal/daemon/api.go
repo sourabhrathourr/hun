@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/hun-sh/hun/internal/config"
+	"github.com/sourabhrathourr/hun/internal/config"
 )
 
 // Request represents a JSON command from CLI/TUI.

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/hun-sh/hun/internal/config"
+	"github.com/sourabhrathourr/hun/internal/config"
 )
 
 // State represents the global hun state persisted at ~/.hun/state.json.

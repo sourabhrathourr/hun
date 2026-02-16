@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/hun-sh/hun/internal/config"
-	"github.com/hun-sh/hun/internal/state"
+	"github.com/sourabhrathourr/hun/internal/config"
+	"github.com/sourabhrathourr/hun/internal/state"
 	"github.com/spf13/cobra"
 )
 

@@ -8,9 +8,9 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/hun-sh/hun/internal/client"
-	"github.com/hun-sh/hun/internal/daemon"
-	"github.com/hun-sh/hun/internal/state"
+	"github.com/sourabhrathourr/hun/internal/client"
+	"github.com/sourabhrathourr/hun/internal/daemon"
+	"github.com/sourabhrathourr/hun/internal/state"
 )
 
 // Model is the main TUI model.

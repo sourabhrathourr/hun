@@ -1,4 +1,4 @@
-module github.com/hun-sh/hun
+module github.com/sourabhrathourr/hun
 
 go 1.22
 
