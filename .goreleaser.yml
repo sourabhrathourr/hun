@@ -20,7 +20,7 @@ archives:
 
 brews:
   - repository:
-      owner: hun-sh
+      owner: hundotsh
       name: homebrew-tap
     homepage: "https://hun.sh"
     description: "Seamless project context switching for developers"
