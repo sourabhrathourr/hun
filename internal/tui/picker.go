@@ -23,17 +23,34 @@ type pickerItem struct {
 
 func (m *pickerModel) filter() {
 	if m.input == "" {
-		m.filtered = m.items
-		return
+		m.filtered = m.buildFiltered(m.items)
+	} else {
+		lower := strings.ToLower(m.input)
+		var matched []pickerItem
+		for _, item := range m.items {
+			if strings.Contains(strings.ToLower(item.name), lower) {
+				matched = append(matched, item)
+			}
+		}
+		m.filtered = m.buildFiltered(matched)
 	}
+	m.clampSelected()
+}
 
-	lower := strings.ToLower(m.input)
-	m.filtered = nil
-	for _, item := range m.items {
-		if strings.Contains(strings.ToLower(item.name), lower) {
-			m.filtered = append(m.filtered, item)
+// buildFiltered returns items sorted: running first, then stopped.
+func (m *pickerModel) buildFiltered(items []pickerItem) []pickerItem {
+	var running, stopped []pickerItem
+	for _, item := range items {
+		if item.running {
+			running = append(running, item)
+		} else {
+			stopped = append(stopped, item)
 		}
 	}
+	return append(running, stopped...)
+}
+
+func (m *pickerModel) clampSelected() {
 	if m.selected >= len(m.filtered) {
 		m.selected = len(m.filtered) - 1
 	}
@@ -48,7 +65,7 @@ func (m pickerModel) View() string {
 	}
 
 	title := pickerTitle.Render("projects")
-	input := pickerInput.Render("> " + m.input + "_")
+	input := pickerInput.Render("> " + m.input + "\u2588")
 
 	var lines []string
 	lines = append(lines, title)
@@ -56,40 +73,36 @@ func (m pickerModel) View() string {
 	lines = append(lines, input)
 	lines = append(lines, "")
 
-	// Running projects first
-	hasRunning := false
-	for i, item := range m.filtered {
-		if !item.running {
-			continue
-		}
-		hasRunning = true
-		cursor := "  "
-		style := pickerItemNormal
-		if i == m.selected {
-			cursor = "\u25b8 "
-			style = pickerItemActive
-		}
-		dot := pickerItemRunning.Render("\u25cf ")
-		svcs := descStyle.Render(fmt.Sprintf("%d svcs", item.svcs))
-		lines = append(lines, cursor+dot+style.Render(item.name)+"    "+svcs)
-	}
+	if len(m.filtered) == 0 {
+		lines = append(lines, pickerEmpty.Render("No matching projects"))
+	} else {
+		// Single pass through filtered (running first, then stopped)
+		passedRunning := false
+		for i, item := range m.filtered {
+			// Insert separator when transitioning from running to stopped
+			if !item.running && !passedRunning {
+				// Check if there were any running items before
+				if i > 0 {
+					lines = append(lines, descStyle.Render("  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"))
+				}
+				passedRunning = true
+			}
 
-	if hasRunning {
-		lines = append(lines, descStyle.Render("  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"))
-	}
+			cursor := "  "
+			style := pickerItemNormal
+			if i == m.selected {
+				cursor = serviceCursor.Render("\u25b8") + " "
+				style = pickerItemActive
+			}
 
-	// Stopped projects
-	for i, item := range m.filtered {
-		if item.running {
-			continue
+			if item.running {
+				dot := pickerItemRunning.Render("\u25cf ")
+				svcs := descStyle.Render(fmt.Sprintf("%d svcs", item.svcs))
+				lines = append(lines, cursor+dot+style.Render(item.name)+"    "+svcs)
+			} else {
+				lines = append(lines, cursor+style.Render(item.name))
+			}
 		}
-		cursor := "  "
-		style := pickerItemNormal
-		if i == m.selected {
-			cursor = "\u25b8 "
-			style = pickerItemActive
-		}
-		lines = append(lines, cursor+style.Render(item.name))
 	}
 
 	lines = append(lines, "")

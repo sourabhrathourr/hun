@@ -19,8 +19,14 @@ type projectTab struct {
 }
 
 func (m topBarModel) View() string {
-	left := lipgloss.NewStyle().Bold(true).Render("hun")
-	modeLabel := modeStyle.Render(" \u2500\u2500 " + m.mode + " ")
+	left := lipgloss.NewStyle().Bold(true).Foreground(colorFg).Render("hun")
+
+	var badge string
+	if m.mode == "focus" {
+		badge = modeFocusBadge.Render("FOCUS")
+	} else {
+		badge = modeMultitaskBadge.Render("MULTI")
+	}
 
 	var tabs []string
 	for i, p := range m.projects {
@@ -40,6 +46,7 @@ func (m topBarModel) View() string {
 	}
 
 	projList := strings.Join(tabs, "    ")
-	bar := left + modeLabel + projList
+
+	bar := left + "  " + badge + "  " + projList
 	return topBarStyle.Width(m.width).Render(bar)
 }

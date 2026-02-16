@@ -22,17 +22,10 @@ type servicesModel struct {
 }
 
 func (m servicesModel) View() string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(colorFg).Render("Services")
+	title := serviceTitleStyle.Render("Services") + " " + serviceTitleCount.Render(fmt.Sprintf("(%d)", len(m.items)))
 	lines := []string{title, ""}
 
 	for i, item := range m.items {
-		cursor := "  "
-		style := serviceNormal
-		if i == m.selected {
-			cursor = "\u25b8 "
-			style = serviceSelected
-		}
-
 		dot := dotStopped
 		if item.crashed {
 			dot = dotCrashed
@@ -40,17 +33,24 @@ func (m servicesModel) View() string {
 			dot = dotRunning
 		}
 
+		cursor := "  "
+		style := serviceNormal
+		if i == m.selected {
+			cursor = serviceCursor.Render("\u25b8") + " "
+			style = serviceSelected
+		}
+
 		port := ""
 		if item.port > 0 {
-			port = portStyle.Render(fmt.Sprintf(":%d", item.port))
+			port = " " + portStyle.Render(fmt.Sprintf(":%d", item.port))
 		}
 
-		ready := " "
+		ready := ""
 		if item.ready {
-			ready = readyCheck
+			ready = " " + readyCheck
 		}
 
-		line := fmt.Sprintf("%s%s %s %s %s", cursor, style.Render(item.name), port, ready, dot)
+		line := fmt.Sprintf("%s%s %s%s%s", cursor, dot, style.Render(item.name), ready, port)
 		lines = append(lines, line)
 	}
 

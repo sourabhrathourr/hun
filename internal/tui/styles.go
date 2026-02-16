@@ -3,21 +3,24 @@ package tui
 import "github.com/charmbracelet/lipgloss"
 
 var (
-	// Colors
-	colorPrimary   = lipgloss.Color("#FF6B35")
-	colorSecondary = lipgloss.Color("#6C757D")
-	colorSuccess   = lipgloss.Color("#28A745")
-	colorDanger    = lipgloss.Color("#DC3545")
-	colorMuted     = lipgloss.Color("#6C757D")
-	colorBg        = lipgloss.Color("#1A1A2E")
+	// Colors — neutral + green palette
+	colorPrimary   = lipgloss.Color("#04B575")
+	colorSecondary = lipgloss.Color("#888888")
+	colorSuccess   = lipgloss.Color("#04B575")
+	colorDanger    = lipgloss.Color("#E55561")
+	colorWarning   = lipgloss.Color("#E2B714")
+	colorMuted     = lipgloss.Color("#888888")
+	colorDim       = lipgloss.Color("#555555")
+	colorBg        = lipgloss.Color("#101010")
+	colorPanelBg   = lipgloss.Color("#1C1C1C")
 	colorFg        = lipgloss.Color("#E0E0E0")
-	colorBorder    = lipgloss.Color("#333355")
-	colorHighlight = lipgloss.Color("#FF6B35")
+	colorBorder    = lipgloss.Color("#333333")
+	colorHighlight = lipgloss.Color("#04B575")
 
 	// Dot indicators
 	dotRunning = lipgloss.NewStyle().Foreground(colorSuccess).Render("\u25cf")
 	dotCrashed = lipgloss.NewStyle().Foreground(colorDanger).Render("\u25cf")
-	dotStopped = lipgloss.NewStyle().Foreground(colorMuted).Render("\u25cb")
+	dotStopped = lipgloss.NewStyle().Foreground(colorDim).Render("\u25cb")
 
 	// Top bar
 	topBarStyle = lipgloss.NewStyle().
@@ -31,12 +34,29 @@ var (
 	topBarProjectInactive = lipgloss.NewStyle().
 				Foreground(colorMuted)
 
-	modeStyle = lipgloss.NewStyle().
-			Foreground(colorSecondary)
+	// Mode badges
+	modeFocusBadge = lipgloss.NewStyle().
+			Background(colorSuccess).
+			Foreground(lipgloss.Color("#101010")).
+			Padding(0, 1).
+			Bold(true)
+
+	modeMultitaskBadge = lipgloss.NewStyle().
+				Background(colorWarning).
+				Foreground(lipgloss.Color("#101010")).
+				Padding(0, 1).
+				Bold(true)
 
 	// Service list
 	serviceListStyle = lipgloss.NewStyle().
 				Padding(0, 1)
+
+	serviceTitleStyle = lipgloss.NewStyle().
+				Foreground(colorHighlight).
+				Bold(true)
+
+	serviceTitleCount = lipgloss.NewStyle().
+				Foreground(colorMuted)
 
 	serviceSelected = lipgloss.NewStyle().
 			Foreground(colorHighlight).
@@ -44,6 +64,9 @@ var (
 
 	serviceNormal = lipgloss.NewStyle().
 			Foreground(colorFg)
+
+	serviceCursor = lipgloss.NewStyle().
+			Foreground(colorHighlight)
 
 	portStyle = lipgloss.NewStyle().
 			Foreground(colorMuted)
@@ -61,6 +84,20 @@ var (
 	logError = lipgloss.NewStyle().
 			Foreground(colorDanger)
 
+	logEmptyStyle = lipgloss.NewStyle().
+			Foreground(colorDim)
+
+	// Search bar
+	searchLabelStyle = lipgloss.NewStyle().
+				Foreground(colorHighlight).
+				Bold(true)
+
+	searchBarStyle = lipgloss.NewStyle().
+			Bold(true)
+
+	searchHintStyle = lipgloss.NewStyle().
+			Foreground(colorDim)
+
 	// Status bar
 	statusBarStyle = lipgloss.NewStyle().
 			Padding(0, 1).
@@ -75,7 +112,7 @@ var (
 
 	// Borders
 	borderStyle = lipgloss.NewStyle().
-			Border(lipgloss.NormalBorder()).
+			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorBorder)
 
 	// Picker
@@ -100,4 +137,30 @@ var (
 
 	pickerItemRunning = lipgloss.NewStyle().
 			Foreground(colorSuccess)
+
+	pickerEmpty = lipgloss.NewStyle().
+			Foreground(colorDim)
+
+	// Toast
+	toastStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorHighlight).
+			Padding(0, 1)
+
+	toastErrorStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorDanger).
+			Padding(0, 1)
+
+	// Welcome / empty state
+	welcomeTitleStyle = lipgloss.NewStyle().
+				Foreground(colorHighlight).
+				Bold(true)
+
+	welcomeTextStyle = lipgloss.NewStyle().
+				Foreground(colorMuted)
+
+	welcomeKeyStyle = lipgloss.NewStyle().
+			Foreground(colorHighlight).
+			Bold(true)
 )

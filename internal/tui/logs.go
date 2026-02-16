@@ -15,13 +15,18 @@ type logsModel struct {
 	height     int
 	width      int
 	search     string
+	searching  bool
 }
 
 func (m logsModel) View() string {
 	title := serviceSelected.Render(m.service)
 	header := title
-	if m.search != "" {
-		header += "  " + descStyle.Render("/" + m.search)
+
+	// Search bar
+	if m.searching {
+		header += "  " + searchLabelStyle.Render("/") + " " + searchBarStyle.Render(m.search+"\u2588")
+	} else if m.search != "" {
+		header += "  " + searchLabelStyle.Render("/"+m.search) + "  " + searchHintStyle.Render("[esc to clear]")
 	}
 
 	visible := m.height - 2 // Reserve for header
@@ -30,6 +35,15 @@ func (m logsModel) View() string {
 	}
 
 	filtered := m.filteredLines()
+
+	// Empty state
+	if len(filtered) == 0 {
+		var lines []string
+		lines = append(lines, header)
+		lines = append(lines, "")
+		lines = append(lines, logEmptyStyle.Render("No log output yet..."))
+		return strings.Join(lines, "\n")
+	}
 
 	start := m.offset
 	if m.autoScroll {

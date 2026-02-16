@@ -32,12 +32,16 @@ type Model struct {
 	searching bool
 	searchBuf string
 
+	toast      string
+	toastTimer int
+
 	err error
 }
 
 type tickMsg time.Time
 type statusUpdateMsg map[string]map[string]daemon.ServiceInfo
 type logMsg daemon.LogLine
+type toastExpireMsg struct{ id int }
 
 // New creates a new TUI model.
 func New(multi bool) Model {
@@ -96,6 +100,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		return m, tea.Batch(m.fetchStatusCmd(), m.tickCmd())
 
+	case toastExpireMsg:
+		if msg.id == m.toastTimer {
+			m.toast = ""
+		}
+		return m, nil
+
 	case error:
 		m.err = msg
 		return m, nil
@@ -110,53 +120,111 @@ func (m Model) View() string {
 		return "Loading..."
 	}
 
-	topBar := m.topBar.View()
-	statusBar := m.statusBar.View()
+	var view string
 
-	// Calculate middle area height
-	middleHeight := m.height - 4 // top bar + separator + status bar lines
+	// Welcome / empty state
+	if len(m.services.items) == 0 && len(m.topBar.projects) == 0 {
+		view = m.viewWelcome()
+	} else {
+		topBar := m.topBar.View()
+		statusBar := m.statusBar.View()
 
-	sidebarWidth := 24
-	if m.width < 60 {
-		sidebarWidth = 16
+		// Calculate middle area height
+		middleHeight := m.height - 4 // top bar + separator + status bar lines
+
+		sidebarWidth := 24
+		if m.width < 60 {
+			sidebarWidth = 16
+		}
+
+		m.services.width = sidebarWidth
+		m.services.height = middleHeight
+
+		logsWidth := m.width - sidebarWidth - 3 // border
+		m.logs.width = logsWidth
+		m.logs.height = middleHeight
+
+		sidebar := m.services.View()
+		logView := m.logs.View()
+
+		middle := lipgloss.JoinHorizontal(
+			lipgloss.Top,
+			sidebar,
+			lipgloss.NewStyle().Foreground(colorBorder).Render(" \u2502 "),
+			logView,
+		)
+
+		sep := lipgloss.NewStyle().Foreground(colorBorder).Width(m.width).Render(
+			"\u2500" + repeat("\u2500", m.width-1),
+		)
+
+		// Toast overlay above status bar
+		toastLine := ""
+		if m.toast != "" {
+			rendered := toastStyle.Render(m.toast)
+			pad := m.width - lipgloss.Width(rendered)
+			if pad < 0 {
+				pad = 0
+			}
+			toastLine = lipgloss.NewStyle().Width(m.width).Render(
+				repeat(" ", pad) + rendered,
+			)
+		}
+
+		parts := []string{topBar, sep, middle, sep}
+		if toastLine != "" {
+			parts = append(parts, toastLine)
+		}
+		parts = append(parts, statusBar)
+
+		view = lipgloss.JoinVertical(lipgloss.Left, parts...)
 	}
 
-	m.services.width = sidebarWidth
-	m.services.height = middleHeight
-
-	logsWidth := m.width - sidebarWidth - 3 // border
-	m.logs.width = logsWidth
-	m.logs.height = middleHeight
-
-	sidebar := m.services.View()
-	logView := m.logs.View()
-
-	middle := lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		sidebar,
-		lipgloss.NewStyle().Foreground(colorBorder).Render(" \u2502 "),
-		logView,
-	)
-
-	sep := lipgloss.NewStyle().Foreground(colorBorder).Width(m.width).Render(
-		"\u2500" + repeat("\u2500", m.width-1),
-	)
-
-	view := lipgloss.JoinVertical(lipgloss.Left,
-		topBar,
-		sep,
-		middle,
-		sep,
-		statusBar,
-	)
-
-	// Overlay picker if visible
+	// Overlay picker if visible — must be outside the if/else
+	// so it renders on top of the welcome screen too
 	if m.picker.visible {
 		overlay := m.picker.View()
 		view = placeOverlay(m.width, m.height, overlay, view)
 	}
 
 	return view
+}
+
+func (m Model) viewWelcome() string {
+	title := welcomeTitleStyle.Render("Welcome to hun")
+	subtitle := welcomeTextStyle.Render("Seamless dev project context switching")
+
+	keys := welcomeKeyStyle.Render("p") + welcomeTextStyle.Render(" open picker") + "    " +
+		welcomeKeyStyle.Render("q") + welcomeTextStyle.Render(" quit")
+
+	hint := welcomeTextStyle.Render("or run ") + welcomeKeyStyle.Render("hun run <project>") + welcomeTextStyle.Render(" from your terminal")
+
+	content := lipgloss.JoinVertical(lipgloss.Center,
+		"",
+		title,
+		"",
+		subtitle,
+		"",
+		keys,
+		"",
+		hint,
+		"",
+	)
+
+	return lipgloss.NewStyle().
+		Width(m.width).
+		Height(m.height).
+		Align(lipgloss.Center, lipgloss.Center).
+		Render(content)
+}
+
+func (m *Model) showToast(text string) tea.Cmd {
+	m.toastTimer++
+	m.toast = text
+	id := m.toastTimer
+	return tea.Tick(2500*time.Millisecond, func(t time.Time) tea.Msg {
+		return toastExpireMsg{id: id}
+	})
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -193,10 +261,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("r"))):
-		return m, m.restartServiceCmd()
+		svcName := ""
+		if len(m.services.items) > 0 {
+			svcName = m.services.items[m.services.selected].name
+		}
+		cmd := tea.Batch(m.restartServiceCmd(), m.showToast("Restarting "+svcName+"..."))
+		return m, cmd
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("R"))):
-		return m, m.restartProjectCmd()
+		cmd := tea.Batch(m.restartProjectCmd(), m.showToast("Restarting project..."))
+		return m, cmd
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("p"))):
 		m.openPicker()
@@ -206,6 +280,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.mode = "multitask"
 			m.topBar.mode = "multitask"
 			m.statusBar.mode = "multitask"
+			return m, m.showToast("Switched to multitask mode")
 		}
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("f"))):
@@ -213,16 +288,19 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.mode = "focus"
 			m.topBar.mode = "focus"
 			m.statusBar.mode = "focus"
+			return m, m.showToast("Switched to focus mode")
 		}
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("s"))):
-		if m.mode == "multitask" && m.focusedProject != "" {
-			return m, m.stopFocusedProjectCmd()
+		if m.focusedProject != "" {
+			cmd := tea.Batch(m.stopFocusedProjectCmd(), m.showToast("Stopping "+m.focusedProject+"..."))
+			return m, cmd
 		}
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("/"))):
 		m.searching = true
 		m.searchBuf = ""
+		m.logs.searching = true
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("a"))):
 		// Show all logs combined
@@ -235,6 +313,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
+	case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+c"))):
+		return m, tea.Quit
+
 	case key.Matches(msg, key.NewBinding(key.WithKeys("esc"))):
 		m.picker.visible = false
 
@@ -242,7 +323,8 @@ func (m Model) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.picker.filtered) > 0 && m.picker.selected < len(m.picker.filtered) {
 			item := m.picker.filtered[m.picker.selected]
 			m.picker.visible = false
-			return m, m.startProject(item.name)
+			cmd := tea.Batch(m.startProject(item.name), m.showToast("Starting "+item.name+"..."))
+			return m, cmd
 		}
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("up"))):
@@ -272,8 +354,16 @@ func (m Model) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
-	case key.Matches(msg, key.NewBinding(key.WithKeys("esc", "enter"))):
+	case key.Matches(msg, key.NewBinding(key.WithKeys("esc"))):
 		m.searching = false
+		m.logs.searching = false
+		// Clear search on esc
+		m.searchBuf = ""
+		m.logs.search = ""
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("enter"))):
+		m.searching = false
+		m.logs.searching = false
 		m.logs.search = m.searchBuf
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("backspace"))):
