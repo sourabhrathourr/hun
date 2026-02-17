@@ -22,8 +22,13 @@ brews:
   - repository:
       owner: hundotsh
       name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: "https://hun.sh"
     description: "Seamless project context switching for developers"
+    commit_author:
+      name: hun-bot
+      email: bots@hun.sh
+    commit_msg_template: "Brew formula update for {{ .ProjectName }} {{ .Tag }}"
     install: |
       bin.install "hun"
 
