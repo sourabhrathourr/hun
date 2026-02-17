@@ -13,7 +13,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  authorize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Restrict release actor
+        run: |
+          if [ "${{ github.actor }}" != "sourabhrathourr" ]; then
+            echo "Release is restricted to sourabhrathourr. Current actor: ${{ github.actor }}"
+            exit 1
+          fi
+
   verify:
+    needs: authorize
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,8 +40,9 @@ jobs:
         run: go test -race ./internal/cli ./internal/daemon ./internal/detect ./internal/state ./internal/tui
 
   release:
-    needs: verify
+    needs: [authorize, verify]
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write
     steps:
