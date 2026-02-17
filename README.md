@@ -1,5 +1,7 @@
 # hun.sh
 
+![hun.sh banner](https://res.cloudinary.com/djvbs5a8x/image/upload/v1771356053/hun-og_2x_xoflgq.png)
+
 Seamless project context switching for developers.
 
 hun.sh manages your development services, captures logs, and lets you switch between projects instantly. Unlike terminal multiplexers like tmux, hun operates at the **project level** — it understands what services a project needs, manages their lifecycle, and provides instant access to logs from anywhere.
