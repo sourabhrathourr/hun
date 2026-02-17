@@ -193,6 +193,25 @@ make test
 make lint
 ```
 
+## Release
+
+`vX.Y.Z` is a Git tag, not a branch. Pushing the tag triggers the release workflow.
+
+```sh
+# Dry run (checks branch/state/tests, no tag push)
+make release-dry-run RELEASE_VERSION=0.1.0
+
+# Create and push release tag (runs checks + tests first)
+make release RELEASE_VERSION=0.1.0
+```
+
+Optional flags:
+
+```sh
+./scripts/release.sh --version 0.1.0 --yes
+./scripts/release.sh --version 0.1.0 --skip-tests
+```
+
 ## License
 
 MIT
