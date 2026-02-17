@@ -11,7 +11,11 @@ hun.sh manages your development services, captures logs, and lets you switch bet
 **Homebrew (macOS & Linux):**
 
 ```sh
-brew install --cask hundotsh/tap/hun
+# one-time
+brew tap hundotsh/tap
+
+# install/update
+brew install hun
 ```
 
 **Go install:**

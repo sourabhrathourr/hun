@@ -67,4 +67,13 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update Homebrew formula
+        run: |
+          bash ./scripts/update-homebrew-formula.sh \
+            --version "${{ github.ref_name }}" \
+            --checksums "dist/checksums.txt" \
+            --source-repo "${{ github.repository }}" \
+            --tap-repo "hundotsh/homebrew-tap"
+        env:
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
