@@ -119,9 +119,15 @@ git clone "$CLONE_URL" "$TMP_DIR/tap" >/dev/null 2>&1
 
 cd "$TMP_DIR/tap"
 CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-mkdir -p Formula
+FORMULA_PATH="Formula/hun.rb"
+if [[ -f "hun.rb" ]]; then
+  # Keep backward compatibility with taps that store formulas at repo root.
+  FORMULA_PATH="hun.rb"
+else
+  mkdir -p Formula
+fi
 
-cat > Formula/hun.rb <<EOF
+cat > "$FORMULA_PATH" <<EOF
 class Hun < Formula
   desc "Seamless project context switching for developers"
   homepage "https://hun.sh"
@@ -156,15 +162,15 @@ class Hun < Formula
 end
 EOF
 
-if git diff --quiet -- Formula/hun.rb; then
+if [[ -z "$(git status --porcelain -- "$FORMULA_PATH")" ]]; then
   echo "Formula already up to date; nothing to commit."
   exit 0
 fi
 
 git config user.name "hun-bot"
 git config user.email "bots@hun.sh"
-git add Formula/hun.rb
+git add "$FORMULA_PATH"
 git commit -m "formula: hun ${VERSION}" >/dev/null
 git push origin "HEAD:${CURRENT_BRANCH}" >/dev/null
 
-echo "Updated ${TAP_REPO}: Formula/hun.rb for ${VERSION}"
+echo "Updated ${TAP_REPO}: ${FORMULA_PATH} for ${VERSION}"
