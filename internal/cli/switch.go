@@ -26,13 +26,20 @@ var switchCmd = &cobra.Command{
 		if note != "" {
 			st, err := state.Load()
 			if err == nil {
-				for name, ps := range st.Projects {
-					if ps.Status == "running" {
-						ps.LastNote = note
-						st.Projects[name] = ps
-						st.Save()
-						break
+				target := st.ActiveProject
+				if target == "" {
+					for name, ps := range st.Projects {
+						if ps.Status == "running" {
+							target = name
+							break
+						}
 					}
+				}
+				if target != "" {
+					ps := st.Projects[target]
+					ps.LastNote = note
+					st.Projects[target] = ps
+					_ = st.Save()
 				}
 			}
 		}

@@ -9,11 +9,11 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 
 	"github.com/sourabhrathourr/hun/internal/config"
-	"github.com/sourabhrathourr/hun/internal/state"
 )
 
 // Daemon is the background process managing all services.
@@ -65,6 +65,10 @@ func (d *Daemon) Run() error {
 		d.shutdown()
 		os.Exit(0)
 	}()
+
+	// Recover previously running projects from persisted state in background.
+	// The daemon should start serving socket requests immediately.
+	go d.recoverRunningProjects()
 
 	// Accept connections
 	for {
@@ -135,16 +139,8 @@ func (d *Daemon) shutdown() {
 	os.Remove(d.pidPath)
 }
 
-func (d *Daemon) loadState() (*state.State, error) {
-	return state.Load()
-}
-
 func (d *Daemon) saveGitContext(project string) {
-	st, err := d.loadState()
-	if err != nil {
-		return
-	}
-	path, ok := st.Registry[project]
+	path, ok := d.manager.ProjectPath(project)
 	if !ok {
 		return
 	}
@@ -156,10 +152,42 @@ func (d *Daemon) saveGitContext(project string) {
 		return
 	}
 	branch := strings.TrimSpace(string(out))
-	ps := st.Projects[project]
-	ps.GitBranch = branch
-	st.Projects[project] = ps
-	st.Save()
+	d.manager.SetGitBranch(project, branch)
+}
+
+func (d *Daemon) recoverRunningProjects() {
+	snapshot := d.manager.StateSnapshot()
+	type projectToRecover struct {
+		name   string
+		path   string
+		offset int
+	}
+
+	var running []projectToRecover
+	for name, ps := range snapshot.Projects {
+		if ps.Status != "running" {
+			continue
+		}
+		path, ok := snapshot.Registry[name]
+		if !ok {
+			continue
+		}
+		running = append(running, projectToRecover{name: name, path: path, offset: ps.Offset})
+	}
+	sort.Slice(running, func(i, j int) bool { return running[i].offset < running[j].offset })
+
+	for idx, item := range running {
+		proj, err := config.LoadProject(item.path)
+		if err != nil {
+			continue
+		}
+		d.manager.ports.SetOffset(item.name, item.offset)
+		exclusive := snapshot.Mode == "focus" && len(running) == 1 && idx == 0
+		if err := d.manager.StartProject(item.name, proj, item.path, exclusive); err != nil {
+			continue
+		}
+	}
+	_ = d.manager.SetFocus(snapshot.ActiveProject, snapshot.Mode)
 }
 
 // SocketPath returns the daemon socket path.

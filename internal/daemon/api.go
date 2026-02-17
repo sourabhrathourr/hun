@@ -51,6 +51,8 @@ func (d *Daemon) HandleRequest(req Request) Response {
 		return d.handleLogs(req)
 	case "ports":
 		return d.handlePorts()
+	case "focus":
+		return d.handleFocus(req)
 	case "subscribe":
 		// Handled at connection level, not here
 		return errorResponse("subscribe must be handled at connection level")
@@ -64,12 +66,8 @@ func (d *Daemon) handleStart(req Request) Response {
 		return errorResponse("project name required")
 	}
 
-	st, err := d.loadState()
-	if err != nil {
-		return errorResponse(err.Error())
-	}
-
-	path, ok := st.Registry[req.Project]
+	d.manager.RefreshRegistry()
+	path, ok := d.manager.ProjectPath(req.Project)
 	if !ok {
 		return errorResponse(fmt.Sprintf("project %q not in registry", req.Project))
 	}
@@ -129,11 +127,7 @@ func (d *Daemon) handleRestart(req Request) Response {
 	}
 	if req.Service == "" {
 		// Restart entire project
-		st, err := d.loadState()
-		if err != nil {
-			return errorResponse(err.Error())
-		}
-		path, ok := st.Registry[req.Project]
+		path, ok := d.manager.ProjectPath(req.Project)
 		if !ok {
 			return errorResponse("project not in registry")
 		}
@@ -172,4 +166,22 @@ func (d *Daemon) handleLogs(req Request) Response {
 
 func (d *Daemon) handlePorts() Response {
 	return successResponse(d.manager.Ports())
+}
+
+func (d *Daemon) handleFocus(req Request) Response {
+	mode := req.Mode
+	switch mode {
+	case "exclusive":
+		mode = "focus"
+	case "parallel":
+		mode = "multitask"
+	}
+
+	if req.Project == "" && mode == "" {
+		return errorResponse("project or mode required")
+	}
+	if err := d.manager.SetFocus(req.Project, mode); err != nil {
+		return errorResponse(err.Error())
+	}
+	return successResponse(map[string]string{"status": "ok"})
 }

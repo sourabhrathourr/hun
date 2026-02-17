@@ -129,27 +129,27 @@ var (
 			Foreground(colorFg)
 
 	pickerItemActive = lipgloss.NewStyle().
-			Foreground(colorHighlight).
-			Bold(true)
+				Foreground(colorHighlight).
+				Bold(true)
 
 	pickerItemNormal = lipgloss.NewStyle().
-			Foreground(colorFg)
+				Foreground(colorFg)
 
 	pickerItemRunning = lipgloss.NewStyle().
-			Foreground(colorSuccess)
+				Foreground(colorSuccess)
 
 	pickerEmpty = lipgloss.NewStyle().
 			Foreground(colorDim)
 
 	// Toast
 	toastStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorHighlight).
+			Foreground(colorFg).
+			Background(lipgloss.Color("#1A1A1A")).
 			Padding(0, 1)
 
 	toastErrorStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorDanger).
+			Foreground(colorDanger).
+			Background(lipgloss.Color("#1A1A1A")).
 			Padding(0, 1)
 
 	// Welcome / empty state

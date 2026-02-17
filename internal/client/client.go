@@ -2,7 +2,9 @@ package client
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -47,8 +49,9 @@ func (c *Client) EnsureDaemon() error {
 	// Detach
 	cmd.Process.Release()
 
-	// Wait for socket to appear
-	for i := 0; i < 50; i++ {
+	// Wait for daemon to become responsive with a hard deadline.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
 		time.Sleep(100 * time.Millisecond)
 		if c.ping() {
 			return nil
@@ -91,6 +94,11 @@ func (c *Client) Send(req daemon.Request) (*daemon.Response, error) {
 
 // Subscribe connects to the daemon and streams log lines.
 func (c *Client) Subscribe(project, service string, callback func(daemon.LogLine)) error {
+	return c.SubscribeWithContext(context.Background(), project, service, callback)
+}
+
+// SubscribeWithContext connects to the daemon and streams log lines until context cancellation.
+func (c *Client) SubscribeWithContext(ctx context.Context, project, service string, callback func(daemon.LogLine)) error {
 	if err := c.EnsureDaemon(); err != nil {
 		return err
 	}
@@ -100,6 +108,10 @@ func (c *Client) Subscribe(project, service string, callback func(daemon.LogLine
 		return fmt.Errorf("connecting to daemon: %w", err)
 	}
 	defer conn.Close()
+	go func() {
+		<-ctx.Done()
+		_ = conn.Close()
+	}()
 
 	req := daemon.Request{
 		Action:  "subscribe",
@@ -114,7 +126,14 @@ func (c *Client) Subscribe(project, service string, callback func(daemon.LogLine
 
 	// First line is the OK response
 	if !scanner.Scan() {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return nil
+		}
 		return fmt.Errorf("no response from daemon")
+	}
+	var ack daemon.Response
+	if err := json.Unmarshal(scanner.Bytes(), &ack); err == nil && !ack.OK {
+		return fmt.Errorf("subscribe rejected: %s", ack.Error)
 	}
 
 	// Stream log lines
@@ -125,11 +144,17 @@ func (c *Client) Subscribe(project, service string, callback func(daemon.LogLine
 		}
 		callback(line)
 	}
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return nil
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
 	return nil
 }
 
 func (c *Client) ping() bool {
-	conn, err := net.DialTimeout("unix", c.sockPath, time.Second)
+	conn, err := net.DialTimeout("unix", c.sockPath, 250*time.Millisecond)
 	if err != nil {
 		return false
 	}
@@ -139,7 +164,7 @@ func (c *Client) ping() bool {
 	data, _ := json.Marshal(req)
 	conn.Write(append(data, '\n'))
 
-	conn.SetReadDeadline(time.Now().Add(time.Second))
+	conn.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
 	scanner := bufio.NewScanner(conn)
 	if !scanner.Scan() {
 		return false

@@ -10,11 +10,15 @@ import (
 	"github.com/sourabhrathourr/hun/internal/config"
 )
 
+const CurrentSchemaVersion = 2
+
 // State represents the global hun state persisted at ~/.hun/state.json.
 type State struct {
-	Mode     string                  `json:"mode"`
-	Projects map[string]ProjectState `json:"projects"`
-	Registry map[string]string       `json:"registry"` // name → path
+	SchemaVersion int                     `json:"schema_version,omitempty"`
+	Mode          string                  `json:"mode"`
+	ActiveProject string                  `json:"active_project,omitempty"`
+	Projects      map[string]ProjectState `json:"projects"`
+	Registry      map[string]string       `json:"registry"` // name → path
 
 	mu   sync.Mutex `json:"-"`
 	path string     `json:"-"`
@@ -47,10 +51,11 @@ func Load() (*State, error) {
 
 	path := filepath.Join(dir, "state.json")
 	s := &State{
-		Mode:     "focus",
-		Projects: make(map[string]ProjectState),
-		Registry: make(map[string]string),
-		path:     path,
+		SchemaVersion: CurrentSchemaVersion,
+		Mode:          "focus",
+		Projects:      make(map[string]ProjectState),
+		Registry:      make(map[string]string),
+		path:          path,
 	}
 
 	data, err := os.ReadFile(path)
@@ -66,11 +71,25 @@ func Load() (*State, error) {
 	}
 	s.path = path
 
+	if s.SchemaVersion == 0 {
+		s.SchemaVersion = CurrentSchemaVersion
+	}
+	if s.Mode == "" {
+		s.Mode = "focus"
+	}
 	if s.Projects == nil {
 		s.Projects = make(map[string]ProjectState)
 	}
 	if s.Registry == nil {
 		s.Registry = make(map[string]string)
+	}
+	if s.ActiveProject == "" {
+		for name, ps := range s.Projects {
+			if ps.Status == "running" {
+				s.ActiveProject = name
+				break
+			}
+		}
 	}
 	return s, nil
 }
@@ -79,6 +98,10 @@ func Load() (*State, error) {
 func (s *State) Save() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.SchemaVersion = CurrentSchemaVersion
+	if s.Mode == "" {
+		s.Mode = "focus"
+	}
 
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {

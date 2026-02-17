@@ -4,10 +4,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sourabhrathourr/hun/internal/config"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 // LogLine represents a single log entry.
@@ -64,12 +68,45 @@ func (rb *RingBuffer) Lines(n int) []LogLine {
 	return result
 }
 
+type rotationConfig struct {
+	maxSizeMB    int
+	maxFiles     int
+	retentionDay int
+}
+
+func defaultRotationConfig() rotationConfig {
+	return rotationConfig{
+		maxSizeMB:    10,
+		maxFiles:     3,
+		retentionDay: 7,
+	}
+}
+
+type serviceLogWriter struct {
+	ch      chan LogLine
+	closed  atomic.Bool
+	closeMu sync.Mutex
+	done    chan struct{}
+}
+
+func (w *serviceLogWriter) close() {
+	w.closeMu.Lock()
+	defer w.closeMu.Unlock()
+	if w.closed.Load() {
+		return
+	}
+	w.closed.Store(true)
+	close(w.ch)
+	<-w.done
+}
+
 // LogManager handles log buffering and disk writing for all services.
 type LogManager struct {
-	buffers map[string]*RingBuffer // "project:service" → buffer
-	writers map[string]*os.File
-	mu      sync.RWMutex
-	logDir  string
+	buffers    map[string]*RingBuffer // "project:service" → buffer
+	writers    map[string]*serviceLogWriter
+	projectCfg map[string]rotationConfig
+	mu         sync.RWMutex
+	logDir     string
 }
 
 // NewLogManager creates a new log manager.
@@ -79,18 +116,41 @@ func NewLogManager() (*LogManager, error) {
 		return nil, err
 	}
 	logDir := filepath.Join(dir, "logs")
-	if err := os.MkdirAll(logDir, 0755); err != nil {
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return nil, err
 	}
 	return &LogManager{
-		buffers: make(map[string]*RingBuffer),
-		writers: make(map[string]*os.File),
-		logDir:  logDir,
+		buffers:    make(map[string]*RingBuffer),
+		writers:    make(map[string]*serviceLogWriter),
+		projectCfg: make(map[string]rotationConfig),
+		logDir:     logDir,
 	}, nil
 }
 
 func (lm *LogManager) bufferKey(project, service string) string {
 	return project + ":" + service
+}
+
+// SetProjectConfig stores per-project log rotation settings.
+func (lm *LogManager) SetProjectConfig(project string, logs config.LogsConfig) {
+	cfg := defaultRotationConfig()
+	if logs.MaxSize != "" {
+		if v := parseSizeMB(logs.MaxSize); v > 0 {
+			cfg.maxSizeMB = v
+		}
+	}
+	if logs.MaxFiles > 0 {
+		cfg.maxFiles = logs.MaxFiles
+	}
+	if logs.Retention != "" {
+		if v := parseRetentionDays(logs.Retention); v > 0 {
+			cfg.retentionDay = v
+		}
+	}
+
+	lm.mu.Lock()
+	lm.projectCfg[project] = cfg
+	lm.mu.Unlock()
 }
 
 // GetBuffer returns the ring buffer for a service, creating one if needed.
@@ -106,39 +166,80 @@ func (lm *LogManager) GetBuffer(project, service string) *RingBuffer {
 	return rb
 }
 
-// WriteLog writes a log line to both ring buffer and disk.
+// WriteLog writes a log line to both ring buffer and asynchronous disk writer.
 func (lm *LogManager) WriteLog(line LogLine) {
 	rb := lm.GetBuffer(line.Project, line.Service)
 	rb.Write(line)
-
-	// Write to disk
-	lm.writeToDisk(line)
+	lm.writeAsync(line)
 }
 
-func (lm *LogManager) writeToDisk(line LogLine) {
-	key := lm.bufferKey(line.Project, line.Service)
-	lm.mu.Lock()
-	f, ok := lm.writers[key]
-	if !ok {
-		projDir := filepath.Join(lm.logDir, line.Project)
-		os.MkdirAll(projDir, 0755)
-		path := filepath.Join(projDir, line.Service+".log")
-		var err error
-		f, err = os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err != nil {
-			lm.mu.Unlock()
-			return
-		}
-		lm.writers[key] = f
+func (lm *LogManager) writeAsync(line LogLine) {
+	writer := lm.getOrCreateWriter(line.Project, line.Service)
+	if writer == nil {
+		return
 	}
-	lm.mu.Unlock()
+	select {
+	case writer.ch <- line:
+	default:
+		// Drop disk write if queue is full; ring buffer still keeps recent logs.
+	}
+}
 
-	ts := line.Timestamp.Format("2006-01-02 15:04:05")
-	stream := "out"
-	if line.IsErr {
-		stream = "err"
+func (lm *LogManager) getOrCreateWriter(project, service string) *serviceLogWriter {
+	key := lm.bufferKey(project, service)
+
+	lm.mu.RLock()
+	if w, ok := lm.writers[key]; ok {
+		lm.mu.RUnlock()
+		return w
 	}
-	fmt.Fprintf(f, "[%s] [%s] %s\n", ts, stream, line.Text)
+	cfg, ok := lm.projectCfg[project]
+	if !ok {
+		cfg = defaultRotationConfig()
+	}
+	logDir := lm.logDir
+	lm.mu.RUnlock()
+
+	projDir := filepath.Join(logDir, project)
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		return nil
+	}
+
+	path := filepath.Join(projDir, service+".log")
+	rotator := &lumberjack.Logger{
+		Filename:   path,
+		MaxSize:    cfg.maxSizeMB,
+		MaxBackups: cfg.maxFiles,
+		MaxAge:     cfg.retentionDay,
+		Compress:   false,
+	}
+
+	writer := &serviceLogWriter{
+		ch:   make(chan LogLine, 2048),
+		done: make(chan struct{}),
+	}
+	go func() {
+		defer close(writer.done)
+		for line := range writer.ch {
+			ts := line.Timestamp.Format("2006-01-02 15:04:05")
+			stream := "out"
+			if line.IsErr {
+				stream = "err"
+			}
+			_, _ = fmt.Fprintf(rotator, "[%s] [%s] %s\n", ts, stream, line.Text)
+		}
+		_ = rotator.Close()
+	}()
+
+	lm.mu.Lock()
+	if existing, ok := lm.writers[key]; ok {
+		lm.mu.Unlock()
+		writer.close()
+		return existing
+	}
+	lm.writers[key] = writer
+	lm.mu.Unlock()
+	return writer
 }
 
 // GetLines returns buffered log lines for a service.
@@ -147,24 +248,79 @@ func (lm *LogManager) GetLines(project, service string, n int) []LogLine {
 	return rb.Lines(n)
 }
 
-// Close closes all open log files.
+// Close closes all asynchronous log writers.
 func (lm *LogManager) Close() {
 	lm.mu.Lock()
-	defer lm.mu.Unlock()
-	for _, f := range lm.writers {
-		f.Close()
+	writers := make([]*serviceLogWriter, 0, len(lm.writers))
+	for _, w := range lm.writers {
+		writers = append(writers, w)
+	}
+	lm.writers = make(map[string]*serviceLogWriter)
+	lm.mu.Unlock()
+
+	for _, w := range writers {
+		w.close()
 	}
 }
 
 // CleanProject removes buffers and writers for a project.
 func (lm *LogManager) CleanProject(project string) {
 	lm.mu.Lock()
-	defer lm.mu.Unlock()
-	for key, f := range lm.writers {
-		if len(key) > len(project) && key[:len(project)+1] == project+":" {
-			f.Close()
+	writers := make([]*serviceLogWriter, 0)
+	prefix := project + ":"
+	for key, w := range lm.writers {
+		if strings.HasPrefix(key, prefix) {
+			writers = append(writers, w)
 			delete(lm.writers, key)
 			delete(lm.buffers, key)
 		}
 	}
+	delete(lm.projectCfg, project)
+	lm.mu.Unlock()
+
+	for _, w := range writers {
+		w.close()
+	}
+}
+
+func parseSizeMB(raw string) int {
+	s := strings.TrimSpace(strings.ToUpper(raw))
+	if s == "" {
+		return 0
+	}
+	if strings.HasSuffix(s, "MB") {
+		n, _ := strconv.Atoi(strings.TrimSpace(strings.TrimSuffix(s, "MB")))
+		return n
+	}
+	if strings.HasSuffix(s, "M") {
+		n, _ := strconv.Atoi(strings.TrimSpace(strings.TrimSuffix(s, "M")))
+		return n
+	}
+	if strings.HasSuffix(s, "GB") {
+		n, _ := strconv.Atoi(strings.TrimSpace(strings.TrimSuffix(s, "GB")))
+		if n > 0 {
+			return n * 1024
+		}
+	}
+	n, _ := strconv.Atoi(s)
+	return n
+}
+
+func parseRetentionDays(raw string) int {
+	s := strings.TrimSpace(strings.ToLower(raw))
+	if s == "" {
+		return 0
+	}
+	if strings.HasSuffix(s, "d") {
+		n, _ := strconv.Atoi(strings.TrimSpace(strings.TrimSuffix(s, "d")))
+		return n
+	}
+	if d, err := time.ParseDuration(s); err == nil {
+		days := int(d.Hours() / 24)
+		if days > 0 {
+			return days
+		}
+	}
+	n, _ := strconv.Atoi(s)
+	return n
 }

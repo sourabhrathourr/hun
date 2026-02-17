@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -14,11 +15,15 @@ import (
 
 // Manager orchestrates processes for all running projects.
 type Manager struct {
-	processes    map[string]map[string]*Process // project → service → process
-	logs         *LogManager
-	subscribers  *SubscriberManager
-	ports        *PortManager
-	mu           sync.RWMutex
+	processes   map[string]map[string]*Process // project → service → process
+	projectCfgs map[string]*config.Project
+	logs        *LogManager
+	subscribers *SubscriberManager
+	ports       *PortManager
+
+	mu      sync.RWMutex
+	stateMu sync.Mutex
+	st      *state.State
 }
 
 // NewManager creates a new process manager.
@@ -27,12 +32,63 @@ func NewManager() (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
+	st, err := state.Load()
+	if err != nil {
+		return nil, err
+	}
 	return &Manager{
 		processes:   make(map[string]map[string]*Process),
+		projectCfgs: make(map[string]*config.Project),
 		logs:        logMgr,
 		subscribers: NewSubscriberManager(),
 		ports:       NewPortManager(),
+		st:          st,
 	}, nil
+}
+
+// RefreshRegistry merges on-disk registry changes into in-memory state.
+func (m *Manager) RefreshRegistry() {
+	onDisk, err := state.Load()
+	if err != nil {
+		return
+	}
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+	for name, path := range onDisk.Registry {
+		m.st.Registry[name] = path
+	}
+	_ = m.st.Save()
+}
+
+func (m *Manager) ProjectPath(name string) (string, bool) {
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+	path, ok := m.st.Registry[name]
+	return path, ok
+}
+
+func (m *Manager) StateSnapshot() *state.State {
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+	clone := &state.State{
+		SchemaVersion: m.st.SchemaVersion,
+		Mode:          m.st.Mode,
+		ActiveProject: m.st.ActiveProject,
+	}
+	clone.Registry = make(map[string]string, len(m.st.Registry))
+	for k, v := range m.st.Registry {
+		clone.Registry[k] = v
+	}
+	clone.Projects = make(map[string]state.ProjectState, len(m.st.Projects))
+	for k, v := range m.st.Projects {
+		services := make(map[string]state.ServiceState, len(v.Services))
+		for sn, sv := range v.Services {
+			services[sn] = sv
+		}
+		v.Services = services
+		clone.Projects[k] = v
+	}
+	return clone
 }
 
 // StartProject starts all services for a project.
@@ -42,26 +98,41 @@ func (m *Manager) StartProject(projectName string, projConfig *config.Project, p
 		m.mu.Unlock()
 		return fmt.Errorf("project %s already running", projectName)
 	}
+	// Register project immediately so status/tui can observe startup progress.
 	m.processes[projectName] = make(map[string]*Process)
+	m.projectCfgs[projectName] = projConfig
 	m.mu.Unlock()
 
-	// Run pre_start hook
 	if projConfig.Hooks.PreStart != "" {
 		if err := runHook(projConfig.Hooks.PreStart, projectPath); err != nil {
 			return fmt.Errorf("pre_start hook failed: %w", err)
 		}
 	}
 
-	// Assign port offset
+	m.logs.SetProjectConfig(projectName, projConfig.Logs)
 	offset := m.ports.AssignOffset(projectName, exclusive)
 
-	// Topological sort for dependency ordering
 	order, err := topoSort(projConfig)
 	if err != nil {
+		m.ports.ReleaseOffset(projectName)
 		return err
 	}
 
-	// Start services in order
+	started := make(map[string]*Process)
+	rollback := func(startErr error) error {
+		for _, proc := range started {
+			_ = proc.Stop()
+		}
+		m.ports.ReleaseOffset(projectName)
+		m.logs.CleanProject(projectName)
+		m.mu.Lock()
+		delete(m.processes, projectName)
+		delete(m.projectCfgs, projectName)
+		m.mu.Unlock()
+		m.setProjectStopped(projectName)
+		return startErr
+	}
+
 	for _, svcName := range order {
 		svcConfig := projConfig.Services[svcName]
 		actualPort := svcConfig.Port + offset
@@ -71,8 +142,10 @@ func (m *Manager) StartProject(projectName string, projConfig *config.Project, p
 			dir = filepath.Join(projectPath, svcConfig.Cwd)
 		}
 
+		serviceName := svcName
+		restartPolicy := svcConfig.Restart
 		proc := &Process{
-			Name:         svcName,
+			Name:         serviceName,
 			Cmd:          svcConfig.Cmd,
 			Dir:          dir,
 			Env:          svcConfig.Env,
@@ -84,7 +157,7 @@ func (m *Manager) StartProject(projectName string, projConfig *config.Project, p
 		proc.onOutput = func(line string, isErr bool) {
 			logLine := LogLine{
 				Timestamp: time.Now(),
-				Service:   svcName,
+				Service:   serviceName,
 				Project:   projectName,
 				Text:      line,
 				IsErr:     isErr,
@@ -93,17 +166,17 @@ func (m *Manager) StartProject(projectName string, projConfig *config.Project, p
 			m.subscribers.Broadcast(logLine)
 		}
 
-		proc.onExit = func(err error) {
+		proc.onExit = func(err error, intentional bool) {
 			status := "stopped"
-			if err != nil {
+			if !intentional && err != nil {
 				status = "crashed"
 			}
-			m.updateServiceState(projectName, svcName, 0, actualPort, status)
-
-			// Auto-restart on failure if configured
-			if status == "crashed" && svcConfig.Restart == "on_failure" {
+			m.updateServiceState(projectName, serviceName, 0, actualPort, status)
+			if status == "crashed" && restartPolicy == "on_failure" {
 				time.Sleep(time.Second)
-				proc.Start()
+				if restartErr := proc.Start(); restartErr == nil {
+					m.updateServiceState(projectName, serviceName, proc.PID(), actualPort, "running")
+				}
 			}
 		}
 
@@ -116,40 +189,25 @@ func (m *Manager) StartProject(projectName string, projConfig *config.Project, p
 		}
 
 		if err := proc.Start(); err != nil {
-			return fmt.Errorf("starting service %s: %w", svcName, err)
+			return rollback(fmt.Errorf("starting service %s: %w", serviceName, err))
 		}
-
+		started[serviceName] = proc
 		m.mu.Lock()
-		m.processes[projectName][svcName] = proc
+		m.processes[projectName][serviceName] = proc
 		m.mu.Unlock()
+		m.updateServiceState(projectName, serviceName, proc.PID(), actualPort, "running")
 
-		m.updateServiceState(projectName, svcName, proc.PID(), actualPort, "running")
-
-		// Wait for ready if pattern defined
 		if svcConfig.Ready != "" {
 			select {
 			case <-readyCh:
 			case <-time.After(30 * time.Second):
-				// Warn but continue
 			}
 		} else {
-			// No ready pattern: wait 1 second
 			time.Sleep(time.Second)
 		}
 	}
 
-	// Update project state
-	st, err := state.Load()
-	if err == nil {
-		ps := st.Projects[projectName]
-		ps.Status = "running"
-		ps.Offset = offset
-		ps.Path = projectPath
-		ps.StartedAt = time.Now().UTC().Format(time.RFC3339)
-		st.Projects[projectName] = ps
-		st.Save()
-	}
-
+	m.setProjectRunning(projectName, projectPath, offset, exclusive)
 	return nil
 }
 
@@ -157,43 +215,41 @@ func (m *Manager) StartProject(projectName string, projConfig *config.Project, p
 func (m *Manager) StopProject(projectName string) error {
 	m.mu.RLock()
 	procs, exists := m.processes[projectName]
+	projCfg := m.projectCfgs[projectName]
+	m.mu.RUnlock()
 	if !exists {
-		m.mu.RUnlock()
 		return fmt.Errorf("project %s not running", projectName)
 	}
-	m.mu.RUnlock()
 
-	// Stop in reverse dependency order
 	for _, proc := range procs {
-		proc.Stop()
+		_ = proc.Stop()
 	}
 
-	// Run post_stop hook
-	st, _ := state.Load()
-	if st != nil {
-		if path, ok := st.Registry[projectName]; ok {
-			proj, err := config.LoadProject(path)
-			if err == nil && proj.Hooks.PostStop != "" {
-				runHook(proj.Hooks.PostStop, path)
-			}
-		}
+	path := ""
+	if p, ok := m.ProjectPath(projectName); ok {
+		path = p
+	}
+	if projCfg != nil && projCfg.Hooks.PostStop != "" && path != "" {
+		_ = runHook(projCfg.Hooks.PostStop, path)
 	}
 
 	m.ports.ReleaseOffset(projectName)
+	m.logs.CleanProject(projectName)
 
 	m.mu.Lock()
 	delete(m.processes, projectName)
+	delete(m.projectCfgs, projectName)
+	nextActive := ""
+	for name := range m.processes {
+		nextActive = name
+		break
+	}
 	m.mu.Unlock()
 
-	// Update state
-	if st != nil {
-		ps := st.Projects[projectName]
-		ps.Status = "stopped"
-		ps.Services = nil
-		st.Projects[projectName] = ps
-		st.Save()
+	m.setProjectStopped(projectName)
+	if nextActive != "" {
+		m.SetFocus(nextActive, m.currentMode())
 	}
-
 	return nil
 }
 
@@ -207,7 +263,7 @@ func (m *Manager) StopAll() error {
 	m.mu.RUnlock()
 
 	for _, name := range names {
-		m.StopProject(name)
+		_ = m.StopProject(name)
 	}
 	return nil
 }
@@ -227,8 +283,13 @@ func (m *Manager) RestartService(projectName, serviceName string) error {
 	}
 	m.mu.RUnlock()
 
-	proc.Stop()
-	return proc.Start()
+	_ = proc.Stop()
+	if err := proc.Start(); err != nil {
+		m.updateServiceState(projectName, serviceName, 0, proc.Port, "crashed")
+		return err
+	}
+	m.updateServiceState(projectName, serviceName, proc.PID(), proc.Port, "running")
+	return nil
 }
 
 // Status returns current status of all running projects and services.
@@ -291,9 +352,45 @@ func (m *Manager) IsRunning(project string) bool {
 	return exists
 }
 
+// RunningProjects returns sorted running project names.
+func (m *Manager) RunningProjects() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	projects := make([]string, 0, len(m.processes))
+	for name := range m.processes {
+		projects = append(projects, name)
+	}
+	sort.Strings(projects)
+	return projects
+}
+
+// SetFocus updates active project and mode without process restarts.
+func (m *Manager) SetFocus(project, mode string) error {
+	if mode != "focus" && mode != "multitask" && mode != "" {
+		return fmt.Errorf("invalid mode %q", mode)
+	}
+	return m.mutateState(func(st *state.State) {
+		if project != "" {
+			st.ActiveProject = project
+		}
+		if mode != "" {
+			st.Mode = mode
+		}
+	})
+}
+
+// SetGitBranch persists the last observed git branch for a project.
+func (m *Manager) SetGitBranch(project, branch string) {
+	_ = m.mutateState(func(st *state.State) {
+		ps := st.Projects[project]
+		ps.GitBranch = branch
+		st.Projects[project] = ps
+	})
+}
+
 // Shutdown performs graceful shutdown of all processes.
 func (m *Manager) Shutdown() {
-	m.StopAll()
+	_ = m.StopAll()
 	m.logs.Close()
 }
 
@@ -306,21 +403,73 @@ type ServiceInfo struct {
 }
 
 func (m *Manager) updateServiceState(project, service string, pid, port int, status string) {
-	st, err := state.Load()
-	if err != nil {
-		return
+	_ = m.mutateState(func(st *state.State) {
+		ps := st.Projects[project]
+		if ps.Services == nil {
+			ps.Services = make(map[string]state.ServiceState)
+		}
+		ps.Services[service] = state.ServiceState{
+			PID:    pid,
+			Port:   port,
+			Status: status,
+		}
+		st.Projects[project] = ps
+	})
+}
+
+func (m *Manager) setProjectRunning(project, path string, offset int, exclusive bool) {
+	_ = m.mutateState(func(st *state.State) {
+		ps := st.Projects[project]
+		ps.Status = "running"
+		ps.Offset = offset
+		ps.Path = path
+		ps.StartedAt = time.Now().UTC().Format(time.RFC3339)
+		if ps.Services == nil {
+			ps.Services = make(map[string]state.ServiceState)
+		}
+		st.Projects[project] = ps
+		st.ActiveProject = project
+		if exclusive {
+			st.Mode = "focus"
+		} else {
+			st.Mode = "multitask"
+		}
+	})
+}
+
+func (m *Manager) setProjectStopped(project string) {
+	_ = m.mutateState(func(st *state.State) {
+		ps := st.Projects[project]
+		ps.Status = "stopped"
+		ps.Services = nil
+		st.Projects[project] = ps
+		if st.ActiveProject == project {
+			st.ActiveProject = ""
+		}
+	})
+}
+
+func (m *Manager) currentMode() string {
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+	if m.st.Mode == "" {
+		return "focus"
 	}
-	ps := st.Projects[project]
-	if ps.Services == nil {
-		ps.Services = make(map[string]state.ServiceState)
+	return m.st.Mode
+}
+
+func (m *Manager) mutateState(fn func(st *state.State)) error {
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+	if m.st == nil {
+		st, err := state.Load()
+		if err != nil {
+			return err
+		}
+		m.st = st
 	}
-	ps.Services[service] = state.ServiceState{
-		PID:    pid,
-		Port:   port,
-		Status: status,
-	}
-	st.Projects[project] = ps
-	st.Save()
+	fn(m.st)
+	return m.st.Save()
 }
 
 // topoSort returns services in dependency order.

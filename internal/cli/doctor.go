@@ -1,10 +1,14 @@
 package cli
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/sourabhrathourr/hun/internal/config"
@@ -89,6 +93,36 @@ var doctorCmd = &cobra.Command{
 			printCheck(true, "logs directory", logsDir)
 		}
 
+		// Check unsupported global config fields and active port offset behavior.
+		globalCfg, err := config.LoadGlobal()
+		if err != nil {
+			printCheck(false, "global config", fmt.Sprintf("read error: %v", err))
+			allOK = false
+		} else {
+			unsupported := config.UnsupportedGlobalSettings(globalCfg)
+			if len(unsupported) > 0 {
+				printCheck(false, "global config", fmt.Sprintf("unsupported keys configured: %s", strings.Join(unsupported, ", ")))
+				allOK = false
+			} else {
+				printCheck(true, "global config", fmt.Sprintf("ports.default_offset=%d", globalCfg.Ports.DefaultOffset))
+			}
+		}
+
+		// Non-blocking version check with timeout.
+		latest, err := fetchLatestReleaseTag(2 * time.Second)
+		if err != nil {
+			printCheck(false, "version check", fmt.Sprintf("skipped: %v", err))
+		} else {
+			current := strings.TrimSpace(versionStr)
+			if current == "" || current == "dev" {
+				printCheck(true, "version check", fmt.Sprintf("development build (latest: %s)", latest))
+			} else if normalizeVersion(current) != normalizeVersion(latest) {
+				printCheck(false, "version check", fmt.Sprintf("update available: %s -> %s", current, latest))
+			} else {
+				printCheck(true, "version check", fmt.Sprintf("up to date (%s)", current))
+			}
+		}
+
 		fmt.Println()
 		if allOK {
 			fmt.Println("All checks passed!")
@@ -106,4 +140,42 @@ func printCheck(ok bool, label, detail string) {
 		mark = "\u2717"
 	}
 	fmt.Printf("  %s %-25s %s\n", mark, label, detail)
+}
+
+func fetchLatestReleaseTag(timeout time.Duration) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/sourabhrathourr/hun/releases/latest", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "hun-doctor")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("http %d", resp.StatusCode)
+	}
+
+	var payload struct {
+		Tag string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(payload.Tag) == "" {
+		return "", fmt.Errorf("missing tag_name in response")
+	}
+	return payload.Tag, nil
+}
+
+func normalizeVersion(v string) string {
+	v = strings.TrimSpace(v)
+	v = strings.TrimPrefix(v, "v")
+	return v
 }

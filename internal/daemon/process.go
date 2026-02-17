@@ -22,14 +22,15 @@ type Process struct {
 	PortEnv      string
 	ReadyPattern string
 
-	cmd     *exec.Cmd
-	pid     int
-	running bool
-	ready   bool
-	mu      sync.Mutex
+	cmd      *exec.Cmd
+	pid      int
+	running  bool
+	ready    bool
+	stopping bool
+	mu       sync.Mutex
 
 	onOutput func(line string, isErr bool)
-	onExit   func(err error)
+	onExit   func(err error, intentional bool)
 	onReady  func()
 }
 
@@ -80,10 +81,15 @@ func (p *Process) Start() error {
 	p.pid = p.cmd.Process.Pid
 	p.running = true
 	p.ready = false
+	p.stopping = false
 
 	go p.scanOutput(stdout, false)
 	go p.scanOutput(stderr, true)
 	go p.waitForExit()
+
+	if p.ReadyPattern == "" {
+		go p.markReadyAfterGracePeriod()
+	}
 
 	return nil
 }
@@ -96,6 +102,7 @@ func (p *Process) Stop() error {
 		return nil
 	}
 	pid := p.pid
+	p.stopping = true
 	p.mu.Unlock()
 
 	// Send SIGTERM to entire process group
@@ -180,8 +187,24 @@ func (p *Process) waitForExit() {
 	err := p.cmd.Wait()
 	p.mu.Lock()
 	p.running = false
+	intentional := p.stopping
+	p.stopping = false
 	p.mu.Unlock()
 	if p.onExit != nil {
-		p.onExit(err)
+		p.onExit(err, intentional)
+	}
+}
+
+func (p *Process) markReadyAfterGracePeriod() {
+	time.Sleep(time.Second)
+	p.mu.Lock()
+	if !p.running || p.ready {
+		p.mu.Unlock()
+		return
+	}
+	p.ready = true
+	p.mu.Unlock()
+	if p.onReady != nil {
+		p.onReady()
 	}
 }

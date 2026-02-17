@@ -1,7 +1,9 @@
 package daemon
 
 import (
+	"fmt"
 	"sync"
+	"time"
 )
 
 // Subscriber receives log lines for specific project/service combinations.
@@ -10,6 +12,7 @@ type Subscriber struct {
 	Project string
 	Service string // empty means all services
 	Ch      chan LogLine
+	dropped int
 }
 
 // SubscriberManager manages log subscribers.
@@ -53,8 +56,8 @@ func (sm *SubscriberManager) Unsubscribe(id int) {
 
 // Broadcast sends a log line to all matching subscribers.
 func (sm *SubscriberManager) Broadcast(line LogLine) {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 	for _, sub := range sm.subscribers {
 		if sub.Project != line.Project {
 			continue
@@ -62,10 +65,28 @@ func (sm *SubscriberManager) Broadcast(line LogLine) {
 		if sub.Service != "" && sub.Service != line.Service {
 			continue
 		}
+
+		if sub.dropped > 0 {
+			warn := LogLine{
+				Timestamp: time.Now(),
+				Project:   line.Project,
+				Service:   line.Service,
+				IsErr:     true,
+				Text:      fmt.Sprintf("hun: dropped %d log lines due to slow subscriber", sub.dropped),
+			}
+			select {
+			case sub.Ch <- warn:
+				sub.dropped = 0
+			default:
+				sub.dropped++
+				continue
+			}
+		}
+
 		select {
 		case sub.Ch <- line:
 		default:
-			// Drop if subscriber is slow
+			sub.dropped++
 		}
 	}
 }

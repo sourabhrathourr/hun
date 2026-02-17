@@ -109,5 +109,9 @@ func (m pickerModel) View() string {
 	lines = append(lines, descStyle.Render("[enter] start/focus  [esc] cancel"))
 
 	content := strings.Join(lines, "\n")
-	return pickerStyle.Render(content)
+	style := pickerStyle
+	if m.width > 0 {
+		style = style.Width(m.width)
+	}
+	return style.Render(content)
 }

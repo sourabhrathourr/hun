@@ -54,3 +54,24 @@ func defaultGlobal() *Global {
 		},
 	}
 }
+
+// UnsupportedGlobalSettings returns configured fields that are currently parsed but not applied.
+func UnsupportedGlobalSettings(g *Global) []string {
+	if g == nil {
+		return nil
+	}
+	unsupported := make([]string, 0, 3)
+
+	defaults := defaultGlobal()
+	if g.Defaults.AutoCD != defaults.Defaults.AutoCD || g.Defaults.ShowLogsOnSwitch != defaults.Defaults.ShowLogsOnSwitch {
+		unsupported = append(unsupported, "defaults")
+	}
+	if len(g.ScanDirs) > 0 {
+		unsupported = append(unsupported, "scan_dirs")
+	}
+	if g.Hotkeys.Peek != "" || g.Hotkeys.Switch != "" {
+		unsupported = append(unsupported, "hotkeys")
+	}
+
+	return unsupported
+}
