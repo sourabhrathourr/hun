@@ -15,22 +15,26 @@ builds:
       - -X main.commit={{.ShortCommit}}
 
 archives:
-  - format: tar.gz
+  - formats:
+      - tar.gz
     name_template: "hun_{{ .Os }}_{{ .Arch }}"
 
-brews:
+homebrew_casks:
   - repository:
       owner: hundotsh
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    name: hun
+    binaries:
+      - hun
     homepage: "https://hun.sh"
     description: "Seamless project context switching for developers"
+    url:
+      verified: "github.com/sourabhrathourr/hun/"
     commit_author:
       name: hun-bot
       email: bots@hun.sh
-    commit_msg_template: "Brew formula update for {{ .ProjectName }} {{ .Tag }}"
-    install: |
-      bin.install "hun"
+    commit_msg_template: "Brew cask update for {{ .ProjectName }} {{ .Tag }}"
 
 checksum:
   name_template: checksums.txt
