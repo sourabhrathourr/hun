@@ -50,10 +50,25 @@ var initCmd = &cobra.Command{
 			}
 			existing = proj
 			if !reconfigure {
-				fmt.Printf(".hun.yml already exists (project: %s)\n", proj.Name)
-				return registerProject(proj.Name, dir)
+				if isInteractiveTerminal() {
+					question := fmt.Sprintf(".hun.yml already exists (project: %s). Override it? [y/N] ", proj.Name)
+					override, err := confirmPromptWithDefault(question, false)
+					if err != nil {
+						return err
+					}
+					if !override {
+						fmt.Println("Keeping existing .hun.yml")
+						return registerProject(proj.Name, dir)
+					}
+					reconfigure = true
+					fmt.Printf("Reconfiguring .hun.yml (project: %s)\n", proj.Name)
+				} else {
+					fmt.Printf(".hun.yml already exists (project: %s)\n", proj.Name)
+					return registerProject(proj.Name, dir)
+				}
+			} else {
+				fmt.Printf("Reconfiguring .hun.yml (project: %s)\n", proj.Name)
 			}
-			fmt.Printf("Reconfiguring .hun.yml (project: %s)\n", proj.Name)
 		}
 
 		name, _ := cmd.Flags().GetString("name")
@@ -201,6 +216,10 @@ func detectedToProject(name string, result detect.Result) *config.Project {
 }
 
 func confirmPrompt(question string) (bool, error) {
+	return confirmPromptWithDefault(question, true)
+}
+
+func confirmPromptWithDefault(question string, defaultYes bool) (bool, error) {
 	fmt.Print(question)
 	reader := bufio.NewReader(os.Stdin)
 	answer, err := reader.ReadString('\n')
@@ -211,11 +230,21 @@ func confirmPrompt(question string) (bool, error) {
 			return false, err
 		}
 	}
-	answer = strings.TrimSpace(strings.ToLower(answer))
-	if answer == "" || answer == "y" || answer == "yes" {
-		return true, nil
+	return parseConfirmPromptAnswer(answer, defaultYes), nil
+}
+
+func parseConfirmPromptAnswer(answer string, defaultYes bool) bool {
+	normalized := strings.TrimSpace(strings.ToLower(answer))
+	if normalized == "" {
+		return defaultYes
 	}
-	return false, nil
+	if normalized == "y" || normalized == "yes" {
+		return true
+	}
+	if normalized == "n" || normalized == "no" {
+		return false
+	}
+	return defaultYes
 }
 
 func promptProfileSelection(conflicts []detect.Conflict) (string, error) {

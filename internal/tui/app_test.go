@@ -15,12 +15,16 @@ import (
 func TestNewRestoresModeAndActiveProjectFromState(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, ".hun.yml"), []byte("name: proj-a\nservices:\n  app:\n    cmd: echo ok\n"), 0o644); err != nil {
+		t.Fatalf("write project config: %v", err)
+	}
 
 	hunDir := filepath.Join(home, ".hun")
 	if err := os.MkdirAll(hunDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	stateJSON := `{"mode":"multitask","active_project":"proj-a","projects":{},"registry":{}}`
+	stateJSON := `{"mode":"multitask","active_project":"proj-a","projects":{"proj-a":{"status":"running"}},"registry":{"proj-a":"` + projectDir + `"}}`
 	if err := os.WriteFile(filepath.Join(hunDir, "state.json"), []byte(stateJSON), 0o644); err != nil {
 		t.Fatalf("write state: %v", err)
 	}

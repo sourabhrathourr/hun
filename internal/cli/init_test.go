@@ -40,3 +40,29 @@ func TestApplyPortOverridesToProject(t *testing.T) {
 		t.Fatalf("web port = %d, want 5180", proj.Services["web"].Port)
 	}
 }
+
+func TestParseConfirmPromptAnswer(t *testing.T) {
+	tests := []struct {
+		name       string
+		answer     string
+		defaultYes bool
+		want       bool
+	}{
+		{name: "empty uses default yes", answer: "", defaultYes: true, want: true},
+		{name: "empty uses default no", answer: "", defaultYes: false, want: false},
+		{name: "yes short", answer: "y", defaultYes: false, want: true},
+		{name: "yes long", answer: " yes ", defaultYes: false, want: true},
+		{name: "no short", answer: "n", defaultYes: true, want: false},
+		{name: "no long", answer: "No", defaultYes: true, want: false},
+		{name: "unknown falls back to default", answer: "maybe", defaultYes: true, want: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseConfirmPromptAnswer(tc.answer, tc.defaultYes)
+			if got != tc.want {
+				t.Fatalf("parseConfirmPromptAnswer(%q, %v) = %v, want %v", tc.answer, tc.defaultYes, got, tc.want)
+			}
+		})
+	}
+}

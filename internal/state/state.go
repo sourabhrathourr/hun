@@ -92,6 +92,12 @@ func Load() (*State, error) {
 			}
 		}
 	}
+
+	if pruneStaleRegistryEntries(s) {
+		if err := s.Save(); err != nil {
+			return nil, fmt.Errorf("syncing state registry: %w", err)
+		}
+	}
 	return s, nil
 }
 
@@ -140,4 +146,42 @@ func (s *State) IsRegistered(name string) bool {
 	defer s.mu.Unlock()
 	_, ok := s.Registry[name]
 	return ok
+}
+
+func pruneStaleRegistryEntries(s *State) bool {
+	if s == nil {
+		return false
+	}
+
+	dirty := false
+	for name, path := range s.Registry {
+		if path == "" || !config.ProjectExists(path) {
+			delete(s.Registry, name)
+			delete(s.Projects, name)
+			if s.ActiveProject == name {
+				s.ActiveProject = ""
+			}
+			dirty = true
+		}
+	}
+
+	if s.ActiveProject != "" {
+		if _, ok := s.Registry[s.ActiveProject]; !ok {
+			s.ActiveProject = ""
+			dirty = true
+		}
+	}
+
+	if s.ActiveProject == "" {
+		for name, ps := range s.Projects {
+			if ps.Status == "running" {
+				if _, ok := s.Registry[name]; ok {
+					s.ActiveProject = name
+					break
+				}
+			}
+		}
+	}
+
+	return dirty
 }
