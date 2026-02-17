@@ -145,6 +145,12 @@ func (m *Manager) StartProject(projectName string, projConfig *config.Project, p
 	}
 
 	started := make(map[string]*Process)
+	dependentCount := make(map[string]int)
+	for _, svc := range projConfig.Services {
+		for _, dep := range svc.DependsOn {
+			dependentCount[dep]++
+		}
+	}
 	rollback := func(startErr error) error {
 		for _, proc := range started {
 			_ = proc.Stop()
@@ -226,13 +232,13 @@ func (m *Manager) StartProject(projectName string, projConfig *config.Project, p
 		m.mu.Unlock()
 		m.updateServiceState(projectName, serviceName, proc.PID(), actualPort, "running")
 
-		if svcConfig.Ready != "" {
+		// Only block startup on readiness when other services depend on this one.
+		// This avoids adding startup latency for leaf services.
+		if svcConfig.Ready != "" && dependentCount[serviceName] > 0 {
 			select {
 			case <-readyCh:
 			case <-time.After(30 * time.Second):
 			}
-		} else {
-			time.Sleep(time.Second)
 		}
 	}
 
@@ -250,8 +256,33 @@ func (m *Manager) StopProject(projectName string) error {
 		return fmt.Errorf("project %s not running", projectName)
 	}
 
+	procList := make([]*Process, 0, len(procs))
 	for _, proc := range procs {
-		_ = proc.Stop()
+		procList = append(procList, proc)
+	}
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, len(procList))
+	for _, proc := range procList {
+		wg.Add(1)
+		go func(p *Process) {
+			defer wg.Done()
+			if err := p.Stop(); err != nil {
+				errCh <- err
+			}
+		}(proc)
+	}
+	wg.Wait()
+	close(errCh)
+
+	var stopErr error
+	for err := range errCh {
+		if stopErr == nil {
+			stopErr = err
+		}
+	}
+	if stopErr != nil {
+		return stopErr
 	}
 
 	path := ""
@@ -313,7 +344,9 @@ func (m *Manager) RestartService(projectName, serviceName string) error {
 	}
 	m.mu.RUnlock()
 
-	_ = proc.Stop()
+	if err := proc.Stop(); err != nil {
+		return err
+	}
 	m.clearRuntimePortSignal(projectName, serviceName)
 	if err := proc.Start(); err != nil {
 		m.updateServiceState(projectName, serviceName, 0, proc.Port, "crashed")

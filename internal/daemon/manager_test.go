@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"os/exec"
+	"syscall"
 	"testing"
 	"time"
 
@@ -207,4 +209,104 @@ func TestRuntimePortOverrideStoresBasePortWithOffset(t *testing.T) {
 
 	_ = m.StopProject("offset-target")
 	_ = m.StopProject("offset-base")
+}
+
+func TestStartProjectSkipsLeafServiceStartupDelay(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer m.Shutdown()
+
+	projectPath := t.TempDir()
+	proj := &config.Project{
+		Name: "fast-start",
+		Services: map[string]*config.Service{
+			"svc-a": {Cmd: "sleep 3"},
+			"svc-b": {Cmd: "sleep 3"},
+			"svc-c": {Cmd: "sleep 3"},
+		},
+	}
+
+	started := time.Now()
+	if err := m.StartProject("fast-start", proj, projectPath, false); err != nil {
+		t.Fatalf("start project: %v", err)
+	}
+	elapsed := time.Since(started)
+	if elapsed > 1500*time.Millisecond {
+		t.Fatalf("start took %v, expected no per-service 1s delay", elapsed)
+	}
+
+	if err := m.StopProject("fast-start"); err != nil {
+		t.Fatalf("stop project: %v", err)
+	}
+}
+
+func TestStopProjectStopsServicesConcurrently(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not available; skipping concurrent stop timing test")
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer m.Shutdown()
+
+	projectPath := t.TempDir()
+	ignoreTerm := `python3 -c "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN);` +
+		`exec('while True:\\n  time.sleep(1)')"`
+	proj := &config.Project{
+		Name: "slow-stop",
+		Services: map[string]*config.Service{
+			"a": {Cmd: ignoreTerm},
+			"b": {Cmd: ignoreTerm},
+		},
+	}
+
+	if err := m.StartProject("slow-stop", proj, projectPath, false); err != nil {
+		t.Fatalf("start project: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		status := m.Status()
+		a, aok := status["slow-stop"]["a"]
+		b, bok := status["slow-stop"]["b"]
+		if aok && bok && a.Running && b.Running && a.PID > 0 && b.PID > 0 && pidAlive(a.PID) && pidAlive(b.PID) {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	status := m.Status()
+	a, aok := status["slow-stop"]["a"]
+	b, bok := status["slow-stop"]["b"]
+	if !aok || !bok || !a.Running || !b.Running || a.PID <= 0 || b.PID <= 0 {
+		t.Fatalf("services must be running before stop timing check, got status: %+v", status["slow-stop"])
+	}
+	time.Sleep(250 * time.Millisecond)
+	if !pidAlive(a.PID) || !pidAlive(b.PID) {
+		t.Fatalf("services exited before stop timing check, got pids a=%d b=%d", a.PID, b.PID)
+	}
+
+	stopped := time.Now()
+	if err := m.StopProject("slow-stop"); err != nil {
+		t.Fatalf("stop project: %v", err)
+	}
+	elapsed := time.Since(stopped)
+	if elapsed > 8*time.Second {
+		t.Fatalf("stop took %v, expected concurrent shutdown across services", elapsed)
+	}
+}
+
+func pidAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	return syscall.Kill(pid, 0) == nil
 }

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -27,6 +28,8 @@ type Process struct {
 	running  bool
 	ready    bool
 	stopping bool
+	exited   chan struct{}
+	exitOnce sync.Once
 	mu       sync.Mutex
 
 	onOutput func(line string, isErr bool)
@@ -82,10 +85,12 @@ func (p *Process) Start() error {
 	p.running = true
 	p.ready = false
 	p.stopping = false
+	p.exited = make(chan struct{})
+	p.exitOnce = sync.Once{}
 
 	go p.scanOutput(stdout, false)
 	go p.scanOutput(stderr, true)
-	go p.waitForExit()
+	go p.waitForExit(p.cmd)
 
 	if p.ReadyPattern == "" {
 		go p.markReadyAfterGracePeriod()
@@ -102,43 +107,27 @@ func (p *Process) Stop() error {
 		return nil
 	}
 	pid := p.pid
+	exited := p.exited
 	p.stopping = true
 	p.mu.Unlock()
 
 	// Send SIGTERM to entire process group
-	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil {
-		// Process might already be dead
+	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("sending SIGTERM to %s: %w", p.Name, err)
+	}
+
+	if waitForProcessExit(exited, 5*time.Second) {
 		return nil
 	}
 
-	// Wait up to 5 seconds for graceful shutdown
-	done := make(chan struct{})
-	go func() {
-		for i := 0; i < 50; i++ {
-			p.mu.Lock()
-			running := p.running
-			p.mu.Unlock()
-			if !running {
-				close(done)
-				return
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-		close(done)
-	}()
-
-	<-done
-
-	p.mu.Lock()
-	if p.running {
-		p.mu.Unlock()
-		// Force kill
-		syscall.Kill(-pid, syscall.SIGKILL)
-	} else {
-		p.mu.Unlock()
+	// Force kill remaining process group and wait for final exit notification.
+	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("sending SIGKILL to %s: %w", p.Name, err)
 	}
-
-	return nil
+	if waitForProcessExit(exited, 2*time.Second) {
+		return nil
+	}
+	return fmt.Errorf("process %s did not exit after SIGKILL", p.Name)
 }
 
 // IsRunning returns whether the process is currently running.
@@ -183,13 +172,14 @@ func (p *Process) scanOutput(r io.Reader, isErr bool) {
 	}
 }
 
-func (p *Process) waitForExit() {
-	err := p.cmd.Wait()
+func (p *Process) waitForExit(cmd *exec.Cmd) {
+	err := cmd.Wait()
 	p.mu.Lock()
 	p.running = false
 	intentional := p.stopping
 	p.stopping = false
 	p.mu.Unlock()
+	p.signalExited()
 	if p.onExit != nil {
 		p.onExit(err, intentional)
 	}
@@ -206,5 +196,23 @@ func (p *Process) markReadyAfterGracePeriod() {
 	p.mu.Unlock()
 	if p.onReady != nil {
 		p.onReady()
+	}
+}
+
+func (p *Process) signalExited() {
+	p.exitOnce.Do(func() {
+		close(p.exited)
+	})
+}
+
+func waitForProcessExit(exited <-chan struct{}, timeout time.Duration) bool {
+	if exited == nil {
+		return true
+	}
+	select {
+	case <-exited:
+		return true
+	case <-time.After(timeout):
+		return false
 	}
 }
