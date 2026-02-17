@@ -6,6 +6,7 @@ type Project struct {
 	Services map[string]*Service `yaml:"services"`
 	Hooks    Hooks               `yaml:"hooks,omitempty"`
 	Logs     LogsConfig          `yaml:"logs,omitempty"`
+	Detect   DetectConfig        `yaml:"detect,omitempty"`
 }
 
 // Service represents a single service within a project.
@@ -28,9 +29,15 @@ type Hooks struct {
 
 // LogsConfig controls log rotation settings.
 type LogsConfig struct {
-	MaxSize   string `yaml:"max_size,omitempty"`   // e.g. "10MB"
-	MaxFiles  int    `yaml:"max_files,omitempty"`   // e.g. 3
-	Retention string `yaml:"retention,omitempty"`   // e.g. "7d"
+	MaxSize   string `yaml:"max_size,omitempty"`  // e.g. "10MB"
+	MaxFiles  int    `yaml:"max_files,omitempty"` // e.g. 3
+	Retention string `yaml:"retention,omitempty"` // e.g. "7d"
+}
+
+// DetectConfig stores metadata about auto-detection mode used to generate the file.
+type DetectConfig struct {
+	Version string `yaml:"version,omitempty"` // v2
+	Profile string `yaml:"profile,omitempty"` // local, compose, hybrid
 }
 
 // Global represents ~/.hun/config.yml global configuration.
@@ -43,7 +50,7 @@ type Global struct {
 
 // GlobalDefaults holds default behavior settings.
 type GlobalDefaults struct {
-	AutoCD          bool `yaml:"auto_cd"`
+	AutoCD           bool `yaml:"auto_cd"`
 	ShowLogsOnSwitch bool `yaml:"show_logs_on_switch"`
 }
 

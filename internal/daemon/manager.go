@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,10 +22,18 @@ type Manager struct {
 	logs        *LogManager
 	subscribers *SubscriberManager
 	ports       *PortManager
+	portSignals map[string]runtimePortSignal
 
 	mu      sync.RWMutex
 	stateMu sync.Mutex
 	st      *state.State
+}
+
+type runtimePortSignal struct {
+	port      int
+	count     int
+	lastSeen  time.Time
+	confirmed bool
 }
 
 // NewManager creates a new process manager.
@@ -42,6 +52,7 @@ func NewManager() (*Manager, error) {
 		logs:        logMgr,
 		subscribers: NewSubscriberManager(),
 		ports:       NewPortManager(),
+		portSignals: make(map[string]runtimePortSignal),
 		st:          st,
 	}, nil
 }
@@ -86,6 +97,13 @@ func (m *Manager) StateSnapshot() *state.State {
 			services[sn] = sv
 		}
 		v.Services = services
+		if len(v.PortOverrides) > 0 {
+			overrides := make(map[string]int, len(v.PortOverrides))
+			for sn, sp := range v.PortOverrides {
+				overrides[sn] = sp
+			}
+			v.PortOverrides = overrides
+		}
 		clone.Projects[k] = v
 	}
 	return clone
@@ -105,6 +123,10 @@ func (m *Manager) StartProject(projectName string, projConfig *config.Project, p
 
 	if projConfig.Hooks.PreStart != "" {
 		if err := runHook(projConfig.Hooks.PreStart, projectPath); err != nil {
+			m.mu.Lock()
+			delete(m.processes, projectName)
+			delete(m.projectCfgs, projectName)
+			m.mu.Unlock()
 			return fmt.Errorf("pre_start hook failed: %w", err)
 		}
 	}
@@ -115,6 +137,10 @@ func (m *Manager) StartProject(projectName string, projConfig *config.Project, p
 	order, err := topoSort(projConfig)
 	if err != nil {
 		m.ports.ReleaseOffset(projectName)
+		m.mu.Lock()
+		delete(m.processes, projectName)
+		delete(m.projectCfgs, projectName)
+		m.mu.Unlock()
 		return err
 	}
 
@@ -125,6 +151,7 @@ func (m *Manager) StartProject(projectName string, projConfig *config.Project, p
 		}
 		m.ports.ReleaseOffset(projectName)
 		m.logs.CleanProject(projectName)
+		m.clearRuntimePortSignals(projectName)
 		m.mu.Lock()
 		delete(m.processes, projectName)
 		delete(m.projectCfgs, projectName)
@@ -135,7 +162,8 @@ func (m *Manager) StartProject(projectName string, projConfig *config.Project, p
 
 	for _, svcName := range order {
 		svcConfig := projConfig.Services[svcName]
-		actualPort := svcConfig.Port + offset
+		basePort := m.resolveBasePort(projectName, svcName, svcConfig.Port)
+		actualPort := basePort + offset
 
 		dir := projectPath
 		if svcConfig.Cwd != "" {
@@ -164,6 +192,7 @@ func (m *Manager) StartProject(projectName string, projConfig *config.Project, p
 			}
 			m.logs.WriteLog(logLine)
 			m.subscribers.Broadcast(logLine)
+			m.observeRuntimePort(projectName, serviceName, line)
 		}
 
 		proc.onExit = func(err error, intentional bool) {
@@ -235,6 +264,7 @@ func (m *Manager) StopProject(projectName string) error {
 
 	m.ports.ReleaseOffset(projectName)
 	m.logs.CleanProject(projectName)
+	m.clearRuntimePortSignals(projectName)
 
 	m.mu.Lock()
 	delete(m.processes, projectName)
@@ -284,6 +314,7 @@ func (m *Manager) RestartService(projectName, serviceName string) error {
 	m.mu.RUnlock()
 
 	_ = proc.Stop()
+	m.clearRuntimePortSignal(projectName, serviceName)
 	if err := proc.Start(); err != nil {
 		m.updateServiceState(projectName, serviceName, 0, proc.Port, "crashed")
 		return err
@@ -402,6 +433,12 @@ type ServiceInfo struct {
 	Ready   bool `json:"ready"`
 }
 
+var runtimePortPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`https?://[^\s:]+:(\d{2,5})`),
+	regexp.MustCompile(`\b(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|::1):(\d{2,5})\b`),
+	regexp.MustCompile(`\bport(?:\s+is|\s*=|\s+)?\s*(\d{2,5})\b`),
+}
+
 func (m *Manager) updateServiceState(project, service string, pid, port int, status string) {
 	_ = m.mutateState(func(st *state.State) {
 		ps := st.Projects[project]
@@ -415,6 +452,147 @@ func (m *Manager) updateServiceState(project, service string, pid, port int, sta
 		}
 		st.Projects[project] = ps
 	})
+}
+
+func (m *Manager) resolveBasePort(project, service string, configured int) int {
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+	if m.st == nil {
+		return configured
+	}
+	if ps, ok := m.st.Projects[project]; ok {
+		if ps.PortOverrides != nil {
+			if override := ps.PortOverrides[service]; override > 0 {
+				return override
+			}
+		}
+	}
+	return configured
+}
+
+func (m *Manager) setPortOverride(project, service string, basePort int) {
+	if basePort <= 0 {
+		return
+	}
+	_ = m.mutateState(func(st *state.State) {
+		ps := st.Projects[project]
+		if ps.PortOverrides == nil {
+			ps.PortOverrides = make(map[string]int)
+		}
+		ps.PortOverrides[service] = basePort
+		st.Projects[project] = ps
+	})
+}
+
+func (m *Manager) observeRuntimePort(project, service, line string) {
+	if strings.Contains(line, "[hun] detected runtime port") {
+		return
+	}
+	detected := extractRuntimePort(line)
+	if detected <= 0 {
+		return
+	}
+
+	key := project + ":" + service
+	now := time.Now()
+
+	m.mu.Lock()
+	procs := m.processes[project]
+	proc := procs[service]
+	if proc == nil {
+		m.mu.Unlock()
+		return
+	}
+	current := proc.Port
+	signal := m.portSignals[key]
+	if signal.port == detected && now.Sub(signal.lastSeen) <= 10*time.Second {
+		signal.count++
+	} else {
+		signal.port = detected
+		signal.count = 1
+	}
+	signal.lastSeen = now
+	m.portSignals[key] = signal
+
+	threshold := 2
+	if current == 0 {
+		threshold = 1
+	}
+	if signal.count < threshold || current == detected {
+		m.mu.Unlock()
+		return
+	}
+	proc.Port = detected
+	procPID := proc.PID()
+	m.portSignals[key] = runtimePortSignal{
+		port:      detected,
+		count:     signal.count,
+		lastSeen:  now,
+		confirmed: true,
+	}
+	m.mu.Unlock()
+
+	offset := m.ports.GetOffset(project)
+	basePort := detected - offset
+	if basePort <= 0 {
+		basePort = detected
+	}
+
+	m.updateServiceState(project, service, procPID, detected, "running")
+	m.setPortOverride(project, service, basePort)
+
+	note := LogLine{
+		Timestamp: time.Now(),
+		Service:   service,
+		Project:   project,
+		Text:      fmt.Sprintf("[hun] detected runtime port %d (base %d, offset %d)", detected, basePort, offset),
+		IsErr:     false,
+	}
+	m.logs.WriteLog(note)
+	m.subscribers.Broadcast(note)
+}
+
+func (m *Manager) clearRuntimePortSignals(project string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	prefix := project + ":"
+	for key := range m.portSignals {
+		if strings.HasPrefix(key, prefix) {
+			delete(m.portSignals, key)
+		}
+	}
+}
+
+func (m *Manager) clearRuntimePortSignal(project, service string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.portSignals, project+":"+service)
+}
+
+func extractRuntimePort(line string) int {
+	for _, re := range runtimePortPatterns {
+		matches := re.FindAllStringSubmatch(line, -1)
+		for _, m := range matches {
+			if len(m) != 2 {
+				continue
+			}
+			if p := parseRuntimePort(m[1]); p > 0 {
+				return p
+			}
+		}
+	}
+	return 0
+}
+
+func parseRuntimePort(raw string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return 0
+	}
+	if n <= 0 || n > 65535 {
+		return 0
+	}
+	return n
 }
 
 func (m *Manager) setProjectRunning(project, path string, offset int, exclusive bool) {

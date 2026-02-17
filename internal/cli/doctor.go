@@ -76,12 +76,30 @@ var doctorCmd = &cobra.Command{
 					allOK = false
 					continue
 				}
-				if _, err := config.LoadProject(path); err != nil {
+				proj, err := config.LoadProject(path)
+				if err != nil {
 					printCheck(false, fmt.Sprintf("project %s", name), fmt.Sprintf("config error: %v", err))
 					allOK = false
 					continue
 				}
 				printCheck(true, fmt.Sprintf("project %s", name), "config valid")
+
+				if ps, ok := st.Projects[name]; ok && len(ps.PortOverrides) > 0 {
+					mismatches := make([]string, 0)
+					for svc, override := range ps.PortOverrides {
+						cfgSvc, exists := proj.Services[svc]
+						if !exists || override <= 0 {
+							continue
+						}
+						if cfgSvc.Port != override {
+							mismatches = append(mismatches, fmt.Sprintf("%s(%d→%d)", svc, cfgSvc.Port, override))
+						}
+					}
+					if len(mismatches) > 0 {
+						printCheck(false, fmt.Sprintf("project %s ports", name), fmt.Sprintf("runtime overrides differ: %s (run 'hun init --reconfigure --apply-port-overrides' in %s)", strings.Join(mismatches, ", "), path))
+						allOK = false
+					}
+				}
 			}
 		}
 

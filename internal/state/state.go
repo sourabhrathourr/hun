@@ -26,13 +26,14 @@ type State struct {
 
 // ProjectState holds runtime state for a single project.
 type ProjectState struct {
-	Status    string                  `json:"status"`
-	Offset    int                     `json:"offset"`
-	Path      string                  `json:"path"`
-	Services  map[string]ServiceState `json:"services"`
-	GitBranch string                  `json:"git_branch"`
-	LastNote  string                  `json:"last_note"`
-	StartedAt string                  `json:"started_at"`
+	Status        string                  `json:"status"`
+	Offset        int                     `json:"offset"`
+	Path          string                  `json:"path"`
+	Services      map[string]ServiceState `json:"services"`
+	PortOverrides map[string]int          `json:"port_overrides,omitempty"` // service -> base port (pre-offset)
+	GitBranch     string                  `json:"git_branch"`
+	LastNote      string                  `json:"last_note"`
+	StartedAt     string                  `json:"started_at"`
 }
 
 // ServiceState holds runtime state for a single service.

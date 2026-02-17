@@ -4,18 +4,24 @@ import "github.com/charmbracelet/lipgloss"
 
 var (
 	// Colors — neutral + green palette
-	colorPrimary   = lipgloss.Color("#04B575")
-	colorSecondary = lipgloss.Color("#888888")
-	colorSuccess   = lipgloss.Color("#04B575")
-	colorDanger    = lipgloss.Color("#E55561")
-	colorWarning   = lipgloss.Color("#E2B714")
-	colorMuted     = lipgloss.Color("#888888")
-	colorDim       = lipgloss.Color("#555555")
-	colorBg        = lipgloss.Color("#101010")
-	colorPanelBg   = lipgloss.Color("#1C1C1C")
-	colorFg        = lipgloss.Color("#E0E0E0")
-	colorBorder    = lipgloss.Color("#333333")
-	colorHighlight = lipgloss.Color("#04B575")
+	colorPrimary      = lipgloss.Color("#04B575")
+	colorSecondary    = lipgloss.Color("#888888")
+	colorSuccess      = lipgloss.Color("#04B575")
+	colorDanger       = lipgloss.Color("#D86A72")
+	colorWarning      = lipgloss.Color("#D9B86A")
+	colorMuted        = lipgloss.Color("#888888")
+	colorDim          = lipgloss.Color("#555555")
+	colorBg           = lipgloss.Color("#101010")
+	colorPanelBg      = lipgloss.Color("#1C1C1C")
+	colorFg           = lipgloss.Color("#C8C0B6")
+	colorBorder       = lipgloss.Color("#333333")
+	colorHighlight    = lipgloss.Color("#04B575")
+	colorLogTimestamp = lipgloss.Color("#7A7268")
+	colorLogText      = lipgloss.Color("#B8B0A6")
+	colorLogInfo      = lipgloss.Color("#C2B8AA")
+	colorLogDebug     = lipgloss.Color("#8A8178")
+	colorLogWarning   = lipgloss.Color("#D8BA72")
+	colorLogError     = lipgloss.Color("#D88178")
 
 	// Dot indicators
 	dotRunning = lipgloss.NewStyle().Foreground(colorSuccess).Render("\u25cf")
@@ -76,13 +82,22 @@ var (
 
 	// Log viewer
 	logTimestamp = lipgloss.NewStyle().
-			Foreground(colorMuted)
+			Foreground(colorLogTimestamp)
 
 	logText = lipgloss.NewStyle().
-		Foreground(colorFg)
+		Foreground(colorLogText)
+
+	logInfo = lipgloss.NewStyle().
+		Foreground(colorLogInfo)
+
+	logDebug = lipgloss.NewStyle().
+			Foreground(colorLogDebug)
+
+	logWarning = lipgloss.NewStyle().
+			Foreground(colorLogWarning)
 
 	logError = lipgloss.NewStyle().
-			Foreground(colorDanger)
+			Foreground(colorLogError)
 
 	logEmptyStyle = lipgloss.NewStyle().
 			Foreground(colorDim)

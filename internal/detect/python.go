@@ -38,10 +38,17 @@ func (d *PythonDetector) Detect(dir string) []DetectedService {
 	name := filepath.Base(dir)
 	return []DetectedService{
 		{
-			Name:  name,
-			Cmd:   cmd,
-			Port:  port,
-			Ready: "listening on",
+			Name:           name,
+			LogicalName:    name,
+			Cmd:            cmd,
+			Port:           port,
+			Ready:          "listening on",
+			Runtime:        "python",
+			Strategy:       "local",
+			Class:          "app",
+			Source:         filepath.ToSlash(dir),
+			Confidence:     0.7,
+			PortConfidence: 0.55,
 		},
 	}
 }

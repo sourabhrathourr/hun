@@ -52,6 +52,13 @@ func validateProject(proj *Project) error {
 	if proj.Name == "" {
 		return fmt.Errorf("project name is required")
 	}
+	if proj.Detect.Profile != "" {
+		switch proj.Detect.Profile {
+		case "local", "compose", "hybrid":
+		default:
+			return fmt.Errorf("detect.profile must be one of local|compose|hybrid")
+		}
+	}
 	if len(proj.Services) == 0 {
 		return fmt.Errorf("at least one service is required")
 	}

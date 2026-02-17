@@ -44,10 +44,17 @@ func (d *GoDetector) Detect(dir string) []DetectedService {
 
 	return []DetectedService{
 		{
-			Name:  name,
-			Cmd:   mainCmd,
-			Port:  8080,
-			Ready: "listening on",
+			Name:           name,
+			LogicalName:    name,
+			Cmd:            mainCmd,
+			Port:           8080,
+			Ready:          "listening on",
+			Runtime:        "go",
+			Strategy:       "local",
+			Class:          "app",
+			Source:         filepath.ToSlash(modPath),
+			Confidence:     0.7,
+			PortConfidence: 0.35,
 		},
 	}
 }
