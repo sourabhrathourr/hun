@@ -55,12 +55,160 @@ function resolveSize(url: URL) {
 }
 
 export async function GET(request: Request) {
-  const { width, height } = resolveSize(new URL(request.url));
+  const url = new URL(request.url);
+  const { width, height } = resolveSize(url);
+  const title = url.searchParams.get("title") || "Documentation";
+  const description = url.searchParams.get("description");
+  const type = url.searchParams.get("type") || "home";
+
   const renderScale = Math.min(width / BASE_WIDTH, height / BASE_HEIGHT);
   const [instrumentSerifData, jetbrainsMonoData] = await Promise.all([
     readFile(join(process.cwd(), "app/api/og/instrument-serif.woff")),
     readFile(join(process.cwd(), "app/api/og/jetbrains-mono.ttf")),
   ]);
+
+  if (type === "docs") {
+    return new ImageResponse(
+      <div
+        style={{
+          width: "100%",
+          height: "100%",
+          display: "flex",
+          backgroundColor: "#0a0a0a",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <div
+          style={{
+            width: `${BASE_WIDTH}px`,
+            height: `${BASE_HEIGHT}px`,
+            display: "flex",
+            flexDirection: "column",
+            backgroundColor: "#0a0a0a",
+            position: "relative",
+            overflow: "hidden",
+            fontFamily: "JetBrains Mono",
+            transform: `scale(${renderScale})`,
+            transformOrigin: "center center",
+            flexShrink: 0,
+            boxSizing: "border-box",
+            padding: "80px",
+          }}
+        >
+          {/* Subtle background gradient/glow */}
+          <div
+            style={{
+              position: "absolute",
+              top: "-200px",
+              right: "-200px",
+              width: "600px",
+              height: "600px",
+              background: "radial-gradient(circle, rgba(255,255,255,0.03) 0%, rgba(0,0,0,0) 70%)",
+              borderRadius: "50%",
+            }}
+          />
+
+          {/* Border */}
+          <div
+            style={{
+              position: "absolute",
+              inset: "40px",
+              border: "1px solid rgba(255,255,255,0.08)",
+              borderRadius: "24px",
+            }}
+          />
+
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "space-between",
+              height: "100%",
+              zIndex: 10,
+            }}
+          >
+            <div style={{ display: "flex", flexDirection: "column" }}>
+              <div
+                style={{
+                  fontFamily: "Instrument Serif",
+                  fontSize: 84,
+                  color: "#f5f3ef",
+                  lineHeight: 1.1,
+                  letterSpacing: "-0.02em",
+                  marginBottom: 24,
+                  maxWidth: "900px",
+                }}
+              >
+                {title}
+              </div>
+
+              {description && (
+                <div
+                  style={{
+                    fontSize: 28,
+                    color: "#a79f92",
+                    lineHeight: 1.5,
+                    maxWidth: "800px",
+                    fontFamily: "JetBrains Mono",
+                  }}
+                >
+                  {description}
+                </div>
+              )}
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                fontSize: 20,
+                color: "#5c5750",
+                fontFamily: "JetBrains Mono",
+                borderTop: "1px solid rgba(255,255,255,0.08)",
+                paddingTop: 32,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <img
+                  src="https://hun.sh/favicon.svg"
+                  width="32"
+                  height="32"
+                  style={{ opacity: 0.8 }}
+                />
+                <span style={{ color: "#d0c8bc" }}>hun.sh</span>
+                <span>/</span>
+                <span>docs</span>
+              </div>
+
+              <div>
+                seamless project context switching
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>,
+      {
+        width,
+        height,
+        fonts: [
+          {
+            name: "Instrument Serif",
+            data: instrumentSerifData,
+            style: "normal",
+            weight: 400,
+          },
+          {
+            name: "JetBrains Mono",
+            data: jetbrainsMonoData,
+            style: "normal",
+            weight: 400,
+          },
+        ],
+      }
+    );
+  }
 
   return new ImageResponse(
     <div

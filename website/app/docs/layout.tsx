@@ -11,7 +11,18 @@ export default function Layout({ children }: { children: ReactNode }) {
         <DocsLayout
           tree={source.getPageTree()}
           nav={{
-            title: "hun.sh",
+            title: (
+              <div className="flex items-center gap-2 font-medium">
+                <img
+                  src="/favicon.svg"
+                  alt="hun.sh"
+                  width={24}
+                  height={24}
+                  className="rounded-sm"
+                />
+                hun.sh
+              </div>
+            ),
           }}
           themeSwitch={{ enabled: false }}
         >
