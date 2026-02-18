@@ -1,0 +1,83 @@
+---
+title: Getting Started
+description: Your first 5 minutes with hun.
+---
+
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+Let's take `hun` for a spin.
+We will initialize a project, switch to it, and see how it feels to have your development environment managed for you.
+
+<Steps>
+
+<Step>
+### Initialize a Project
+
+Go to one of your existing projects. It could be a simple Node.js app, a Go service, or a Docker Compose stack.
+
+```bash
+cd ~/my-cool-project
+hun init
+```
+
+**hun** will scan your directory. It looks for `package.json`, `go.mod`, `docker-compose.yml`, and other common indicators. It will then generate a `.hun.yml` configuration file for you.
+
+</Step>
+
+<Step>
+### Switch and Enter TUI
+
+This is the magic moment. Run `hun` to enter the TUI (Terminal User Interface).
+If the project isn't running, **hun** will automatically start it for you.
+
+```bash
+hun
+```
+
+You are now in the **Command Center**.
+-   **Services are starting**: Watch them go from `STARTING` to `RUNNING` in real-time.
+-   **Logs are live**: Select any service to see its output immediately.
+
+**This is your new home.** You don't need to juggle multiple tabs anymore.
+
+</Step>
+
+<Step>
+### View Logs
+
+Navigate with `↑` / `↓` keys.
+Press `Enter` on a service to expand its logs.
+
+Press `Esc` to go back to the list.
+
+</Step>
+
+<Step>
+### Restart a Service
+
+Did you change a config file? Need to bounce the API?
+Just hover over the service and press `r`.
+
+</Step>
+
+<Step>
+### Quit TUI (Keep Running)
+
+When you are done looking at logs, just press `q`.
+**Your project keeps running in the background.**
+
+You can close your terminal, open a new one, and run `hun` again. Everything will be exactly where you left it.
+
+</Step>
+
+<Step>
+### Stop Everything
+
+When you are actually done for the day:
+
+```bash
+hun stop
+```
+
+</Step>
+</Steps>

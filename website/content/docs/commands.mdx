@@ -1,0 +1,43 @@
+---
+title: CLI Reference
+description: Every command, explained.
+---
+
+## Project Control
+
+### `hun switch <project>`
+**Effect**: Stops the currently focused project (if any). Starts `<project>` in **Focus Mode**.
+-   `<project>`: The name defined in `.hun.yml` (or directory name).
+-   `-m, --message`: Add a note to the switch event (shows in logs).
+
+### `hun run <project>`
+**Effect**: Starts `<project>` in **Multitask Mode** alongside any currently running projects.
+-   **Port Offsets**: Automatically applied to prevent collisions.
+
+### `hun stop [project]`
+**Effect**: Stops the specified project.
+-   If no project is specified, stops the currently focused project.
+-   `--all`: Stops ALL running projects.
+
+### `hun restart <service>`
+**Effect**: Restarts a specific service within the active project.
+-   `<service>`: Format `<project>:<service_name>`.
+
+## System
+
+### `hun init`
+**Effect**: Scans the current directory and generates a `.hun.yml`.
+-   `--name`: Force a specific project name.
+-   `--reconfigure`: Overwrite existing config.
+
+### `hun status`
+**Effect**: Lists all running projects and services, their PID, status, and health.
+
+### `hun logs <service>`
+**Effect**: Prints recent logs for a service.
+-   `<service>`: `<project>:<service_name>`.
+-   `-n, --lines`: Number of lines to show (default: 100).
+-   `-f, --follow`: Stream logs (like `tail -f`).
+
+### `hun doctor`
+**Effect**: Checks for common issues (socket permissions, daemon health, version mismatch).

@@ -1,0 +1,37 @@
+---
+title: Troubleshooting
+description: When things go wrong.
+---
+
+## Common Issues
+
+### "Service Starting..." forever
+Check the `ready` configuration in `.hun.yml`.
+If you set `ready: "Server started"`, **hun** greps the logs for that exact string.
+If your server actually prints `Server is running`, **hun** will never switch from `STARTING` to `RUNNING`.
+
+**Fix:** Update `.hun.yml` or remove the `ready` check.
+
+### "Address already in use"
+This usually happens if:
+1.  You have a stray process running outside of **hun**.
+2.  Two services in the same project try to use the same port.
+3.  You are in Multitask mode and the port offset logic failed (rare).
+
+**Fix**:
+1.  `hun stop --all`
+2.  `lsof -i :3000` (check for stray processes)
+3.  `kill -9 <PID>`
+
+### Daemon won't start
+Check `~/.hun/logs/daemon.log`.
+Ensure permissions on `~/.hun/daemon.sock` are correct (your user should own it).
+
+## Reporting Bugs
+
+Please open an issue on GitHub with:
+1.  Your OS (macOS/Linux)
+2.  `hun --version`
+3.  Relevant logs from `~/.hun/logs/`
+
+We appreciate it!

@@ -1,0 +1,52 @@
+---
+title: Installation
+description: One minute to install, zero minutes to maintain.
+---
+
+## Choose your OS
+
+**hun** is a single binary with zero runtime dependencies. It installs in seconds.
+
+### macOS & Linux
+
+The easiest way is via Homebrew.
+
+```bash
+brew tap hundotsh/tap
+brew install hun
+```
+
+Or if you prefer a direct script (auditable, of course):
+
+```bash
+curl -fsSL https://hun.sh/install.sh | sh
+```
+
+### From Source (Go)
+
+If you have Go installed and want to build from source:
+
+```bash
+go install github.com/sourabhrathourr/hun@latest
+```
+
+## Verify Installation
+
+Once installed, verify that `hun` is in your PATH.
+
+```bash
+hun --version
+```
+
+If that prints a version number, you are good to go.
+
+### Note on Shell Integration
+
+**hun** does *not* require any shell plugins, aliases, or weird `.rc` file modifications. It just works as a standard CLI tool.
+
+However, many users like to alias `h` to `hun` because they use it so much.
+
+```bash
+# Optional: Add to basic shell config
+alias h=hun
+```

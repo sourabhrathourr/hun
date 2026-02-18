@@ -1,0 +1,52 @@
+---
+title: The TUI
+description: Your mission control center.
+---
+
+The Terminal User Interface (TUI) is the **primary** way to interact with **hun**.
+It connects directly to the daemon's ring buffer, making it faster and more comprehensive than any CLI command.
+
+Access it by running:
+
+```bash
+hun
+```
+
+## Why TUI First?
+
+1.  **Instant Feedback**: See services go from `STARTING` to `RUNNING` (or `ERROR`) in real-time.
+2.  **Unified Logs**: see multiple services interleaving their logs without mixing them up.
+3.  **Zero Latency**: No overhead of starting a new process just to check status.
+
+## Navigation
+
+| Key | Action |
+| :--- | :--- |
+| `↑` / `↓` | Select a service |
+| `Enter` | View logs for selected service |
+| `Esc` | Back to service list |
+| `q` | Quit TUI (services **keep running**) |
+
+## Actions
+
+| Key | Action |
+| :--- | :--- |
+| `r` | Restart selected service |
+| `R` | Restart **all** services in project |
+| `s` | Stop selected service |
+| `/` | Filter logs (search mode) |
+| `c` | Copy mode (pause scrolling to select text) |
+| `p` | Project Switcher (fuzzy find) |
+
+## The Project Switcher (`p`)
+
+Press `p` to open a fuzzy finder of all your registered projects.
+-   Select one and press `Enter` to switch to it immediately.
+-   If you are in Multitask mode, it will switch focus to that project in the UI.
+
+## Viewing Logs
+
+When viewing logs:
+-   `f` toggles "Follow" mode (auto-scroll).
+-   `w` toggles wrapping lines.
+-   `Shift + ↑/↓` scrolls faster.

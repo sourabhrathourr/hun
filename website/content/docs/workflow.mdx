@@ -1,0 +1,66 @@
+---
+title: Daily Workflow
+description: A day in the life with hun.
+---
+
+Here is how **hun** fits into a typical developer's day.
+
+## 09:00 AM - Start the day
+
+You open your terminal. You are working on the main product, `acme-core`.
+
+```bash
+cd ~/code/acme-core
+hun
+```
+
+You are instantly in the TUI. You see the database come up (Green), then the API (Green), then the Frontend (Green).
+You verify everything looks good, maybe check a log or two.
+You press `q` to dismiss the TUI. Everything runs in the background.
+You open `localhost:3000` and start coding.
+
+## 11:30 AM - The "Quick favor"
+
+A coworker asks you to look at a bug in the legacy reporting service (`acme-legacy`).
+You don't want to shut down your main environment just to check something quick.
+
+```bash
+hun run acme-legacy
+```
+
+Now `acme-legacy` is running alongside `acme-core`.
+**hun** notices that both use port 8080. It automatically shifts `acme-legacy` to 8081.
+You check the bug, fix it, and kill the legacy app.
+
+```bash
+hun stop acme-legacy
+```
+
+You are back to just `acme-core`. Zero Friction.
+
+## 02:00 PM - Deep Debugging
+
+Something is wrong with the payment webhook. You need to see the logs *and* the worker output at the same time.
+You open the TUI again.
+
+```bash
+hun
+```
+
+You see the `payment-worker` service is red. You select it and press `Enter` to see the crash log.
+Ah, a missing env var. You fix it in `.hun.yml` or your `.env` file.
+You press `r` to restart just that service. It goes green.
+
+## 05:00 PM - Clean up
+
+You are done for the day. You don't want stray node processes eating your battery overnight.
+
+```bash
+hun stop --all
+```
+
+Silence.
+
+---
+
+**hun** isn't about adding *more* to your workflow. It's about removing the friction between you and your work.

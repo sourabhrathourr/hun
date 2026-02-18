@@ -1,6 +1,8 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
 @import "@fontsource-variable/jetbrains-mono";
 @import "@fontsource/instrument-serif/400.css";
 
@@ -113,4 +115,19 @@
   html::-webkit-scrollbar-thumb:hover {
     background: oklch(1 0 0 / 20%);
   }
+}
+
+/* Docs section: Geist Sans, override fumadocs font sizes */
+.docs-root {
+  font-size: 1rem;
+}
+
+.docs-root :is(p, li, td, th, blockquote) {
+  font-size: 1rem;
+  line-height: 1.75;
+}
+
+/* Sidebar: slightly lighter than primary page background */
+.docs-root #nd-sidebar {
+  background-color: #101010;
 }

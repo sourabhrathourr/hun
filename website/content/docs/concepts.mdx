@@ -1,0 +1,64 @@
+---
+title: Core Concepts
+description: How hun thinks about your code.
+---
+
+To get the most out of **hun**, it helps to understand its mental model.
+It's simple, but it might be different from what you are used to.
+
+## The "Project" Unit
+
+Most tools operate on **files** (editors), **containers** (Docker), or **processes** (supervisord).
+**hun** operates on **Project**.
+
+A Project is a collection of services that need to run together to do useful work.
+-   A backend API (Python)
+-   A frontend SPA (React)
+-   A database (Postgres)
+-   A cache (Redis)
+
+In **hun**, you don't start the "backend". You start the **Project**. The backend is just a detail.
+
+## The Daemon
+
+When you run `hun` commands, you aren't actually running the logic in your current shell.
+You are sending instructions to the **Hun Daemon**.
+
+The Daemon is a background process that acts as the "sysadmin" for your local machine.
+It:
+-   **Owns the child processes.** If you close your terminal window, your server doesn't die.
+-   **Captures output.** It acts as a middleman for stdout/stderr, saving logs to a ring buffer and disk.
+-   **Manages ports.** It ensures projects don't fight over port 3000.
+
+This architecture is why you can run `hun switch` in one terminal, close it, open a simplified VS Code terminal, run `hun status`, and see everything is still fine.
+
+## Focus Mode vs. Multitask Mode
+
+**hun** acknowledges two different ways of working.
+
+### Focus Mode (Default)
+*"I am doing one thing right now."*
+
+When you `hun switch project-a`:
+1.  `project-b` (if running) is stopped.
+2.  Ports are freed.
+3.  `project-a` starts.
+4.  Services bind to their default ports (e.g., `3000`).
+
+This is how most of us want to work 90% of the time. It keeps your machine cool and your CPU happy.
+
+### Multitask Mode
+*"I need to reference Project A while working on Project B."*
+
+Sometimes you need two things running at once. Maybe `Project B` consumes an API from `Project A`.
+
+```bash
+hun run project-b
+```
+
+In this mode:
+1.  `project-a` stays running.
+2.  `project-b` starts *alongside* it.
+3.  **Port Offsets**: If both try to bind port 3000, **hun** will automatically shift `project-b` to 3001 (or another offset) to prevent collisions.
+
+This keeps you flexible without the manual "port tetris".

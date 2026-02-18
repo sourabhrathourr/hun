@@ -1,0 +1,121 @@
+---
+title: Configuration
+description: The .hun.yml file reference.
+---
+
+The `.hun.yml` file is the brain of your project. Ideally, you commit this to git so your team shares the same environment.
+
+## The Basics
+
+A minimal config looks like this:
+
+```yaml
+name: my-project
+
+services:
+  web:
+    cmd: npm run dev
+    port: 3000
+```
+
+## Service Definition
+
+Each key under `services` is a unique service name.
+
+### `cmd` (Required)
+The command to run.
+```yaml
+cmd: python manage.py runserver
+```
+
+### `cwd` (Optional)
+Directory to run the command in, relative to project root.
+```yaml
+cwd: ./backend
+```
+
+### `port` (Optional)
+The port this service listens on. **hun** needs to know this to manage port collisions in Multitask Mode.
+If omitted, **hun** assumes the service doesn't bind a port (like a worker).
+
+```yaml
+port: 8080
+```
+
+### `port_env` (Optional)
+If your app reads the port from an environment variable, tell **hun** which one. 
+**hun** will inject the correct port (including offsets) into this variable.
+
+```yaml
+port_env: PORT  # hun will set PORT=3000 (or 3001, etc.)
+```
+
+### `env` (Optional)
+Environment variables specific to this service.
+
+```yaml
+env:
+  NODE_ENV: development
+  DATABASE_URL: postgres://localhost:5432/db
+```
+
+### `ready` (Optional)
+A string to look for in the logs to know when the service is "Ready".
+Until this string appears, **hun status** will show the service as `STARTING`.
+
+```yaml
+ready: "Listening on port 3000"
+```
+
+## Global Hooks
+
+You can define scripts to run before starting or after stopping the project.
+
+```yaml
+hooks:
+  pre_start: ./scripts/ensure-db-running.sh
+  post_stop: ./scripts/cleanup-temp-files.sh
+```
+
+## Log Configuration
+
+Control how logs are handled for this project.
+
+```yaml
+logs:
+  max_size: 10MB   # Rotate after 10MB
+  max_files: 5     # Keep 5 rotated files
+  retention: 7d    # Delete logs older than 7 days
+```
+
+## Example: Full Stack App
+
+Here is a common setup for a modern web app.
+
+```yaml
+name: social-network
+
+services:
+  # Frontend (Next.js)
+  web:
+    cmd: npm run dev
+    cwd: ./web
+    port: 3000
+    port_env: PORT
+    ready: "Ready in"
+
+  # Backend (Go)
+  api:
+    cmd: go run main.go
+    cwd: ./api
+    port: 8080
+    port_env: A_PORT
+    env:
+      DB_HOST: localhost
+    ready: "Server starting on :8080"
+
+  # Database (Docker)
+  db:
+    cmd: docker compose up postgres
+    ready: "database system is ready to accept connections"
+```

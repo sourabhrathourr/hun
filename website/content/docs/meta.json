@@ -1,0 +1,18 @@
+{
+  "title": "Documentation",
+  "pages": [
+    "index",
+    "---Getting Started---",
+    "install",
+    "getting-started",
+    "---Core Concepts---",
+    "concepts",
+    "workflow",
+    "configuration",
+    "tui",
+    "---Reference---",
+    "commands",
+    "architecture",
+    "troubleshooting"
+  ]
+}

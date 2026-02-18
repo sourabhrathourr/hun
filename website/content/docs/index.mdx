@@ -1,0 +1,51 @@
+---
+title: Introduction
+description: Why context switching is the enemy, and how hun defeats it.
+---
+
+<img
+  src="https://res.cloudinary.com/djvbs5a8x/image/upload/v1771356053/hun-og_2x_xoflgq.png"
+  alt="hun.sh banner"
+  className="rounded-lg border border-white/10"
+/>
+
+Welcome to **hun**.
+
+If you are a developer in 2026, your brain is probably doing way more work than it should.
+
+You are working on `Project A`. A notification pops up. You need to fix a critical bug in `Project B`.
+So you:
+1.  Stop the dev server for `Project A`.
+2.  Stop the database container.
+3.  Maybe kill a Redis instance you forgot about.
+4.  Navigate to `Project B`.
+5.  Start the database.
+6.  Start the backend.
+7.  Start the frontend.
+8.  Waiter... where is the log for the backend?
+
+By the time you are ready to write code, you have lost your flow. The "context switch" tax is real, and you pay it every single day.
+
+## The "Project First" Philosophy
+
+**hun** changes the unit of operation from "process" to "project".
+
+It doesn't just run commands. It understands that your backend, frontend, database, and message queue are all part of *one thing*. When you want to work on that thing, you shouldn't have to assemble it manually every time.
+
+With hun:
+-   **Switching is instant.** One command (`hun`) brings up your entire environment.
+-   **The TUI is King.** A lightning-fast dashboard for all your running services. No more alt-tabbing between 5 terminal windows.
+-   **Logs are civilized.** Logs are captured, categorized, and queryable from a unified interface.
+-   **Ports are managed.** Need to run two projects at once? **hun** can auto-offset ports so they don't collide.
+
+## It's Not Magic, It's specific
+
+Under the hood, **hun** is a lightweight daemon that manages child processes.
+It's not a heavy container orchestrator like Kubernetes.
+It's not a generic terminal multiplexer like tmux.
+
+It is a tool built specifically for the local development lifecycle. It sits right between your terminal and your code, handling the boring stuff so you can stay in the zone.
+
+## Ready to stop fighting your terminal?
+
+Let's get you set up.
