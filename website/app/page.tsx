@@ -114,6 +114,13 @@ export default function Page() {
           <Reveal delay={d * 9}>
             <p className="text-muted-foreground/40 text-[12px]">
               <a
+                href="/docs"
+                className="underline underline-offset-2 hover:text-muted-foreground/60"
+              >
+                docs
+              </a>{" "}
+              &middot;{" "}
+              <a
                 href="https://github.com/sourabhrathourr/hun"
                 className="underline underline-offset-2 hover:text-muted-foreground/60"
               >
