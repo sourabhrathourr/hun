@@ -1,0 +1,10 @@
+name: hun
+services:
+    hun:
+        cmd: bun run dev
+        cwd: ./website
+        port: 3000
+        ready: listening on
+detect:
+    version: v2
+    profile: hybrid

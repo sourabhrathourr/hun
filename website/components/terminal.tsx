@@ -80,7 +80,7 @@ export function Terminal() {
           </button>
         ))}
       </div>
-      <div className="bg-[#12110f] border border-[#1f1d1a] rounded-sm px-4 py-3 font-mono text-[13px] leading-relaxed h-[220px]">
+      <div className="bg-[#12110f] border border-[#1f1d1a] rounded-sm px-4 py-3 pb-5 sm:pb-3 font-mono text-[13px] leading-relaxed h-auto sm:h-[220px]">
         <AnimatePresence mode="wait">
           <motion.div
             key={active}

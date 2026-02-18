@@ -46,7 +46,10 @@ export default function Page() {
               4000, a backend on 8000, and postgres on 5432. novara, a remote
               healthcare platform, needs a frontend on 3000, backend on 8000, a
               node worker, and docker compose running a database, redis, and
-              rabbitmq.
+              rabbitmq. now picture yourself ctrl+c-ing through six terminal
+              tabs, killing orphan processes on :3000, restarting docker, and
+              doing this every single time you switch. you lose context,
+              hun preserves it.
             </p>
           </Reveal>
 

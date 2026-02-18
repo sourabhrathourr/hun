@@ -61,7 +61,7 @@ const projects: Project[] = [
   {
     name: "novara",
     services: [
-      { name: "frontend", port: ":3000" },
+      { name: "frontend", port: ":3001" },
       { name: "backend", port: ":8000" },
       { name: "worker", port: "—" },
       { name: "compose", port: "—" },
@@ -204,19 +204,19 @@ export function MiniTui() {
                 <button
                   key={s.name}
                   onClick={() => setServiceIdx(i)}
-                  className={`flex items-center justify-between w-full px-1 py-0.5 rounded-sm cursor-pointer transition-colors ${
+                  className={`flex items-center justify-between w-full px-1 py-1 rounded-sm cursor-pointer transition-colors leading-none ${
                     i === serviceIdx
                       ? "text-foreground/80 bg-muted"
                       : "text-muted-foreground/50 hover:text-muted-foreground/70"
                   }`}
                 >
-                  <span className="flex items-center gap-1.5">
-                    <span className="text-green-500/70 text-[8px]">
+                  <span className="flex items-center gap-1.5 leading-none">
+                    <span className="text-green-500/70 text-[8px] leading-none">
                       &#9679;
                     </span>
-                    {s.name}
+                    <span className="leading-none">{s.name}</span>
                   </span>
-                  <span className="text-muted-foreground/25">{s.port}</span>
+                  <span className="text-muted-foreground/25 leading-none">{s.port}</span>
                 </button>
               ))}
             </motion.div>
