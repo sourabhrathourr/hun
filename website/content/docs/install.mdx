@@ -58,3 +58,27 @@ However, many users like to alias `h` to `hun` because they use it so much.
 # Optional: Add to basic shell config
 alias h=hun
 ```
+
+## Upgrade
+
+Keep your `hun` fresh.
+
+### Homebrew
+
+```bash
+brew upgrade hun
+```
+
+### Script
+
+Just run the install script again. It detects existing installations and updates the binary.
+
+```bash
+curl -fsSL https://hun.sh/install.sh | sh
+```
+
+### Go
+
+```bash
+go install github.com/sourabhrathourr/hun@latest
+```
