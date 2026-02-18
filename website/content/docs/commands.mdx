@@ -30,6 +30,13 @@ description: Every command, explained.
 
 ## System
 
+### `hun onboard [path]`
+**Effect**: Runs the first-time interactive onboarding wizard.
+-   Picks a project directory (current or custom path).
+-   Generates `.hun.yml` when missing.
+-   Registers the project and optionally opens the TUI.
+-   `--no-tui`: complete onboarding without launching TUI.
+
 ### `hun init`
 **Effect**: Scans the current directory and generates a `.hun.yml`.
 -   `--name`: Force a specific project name.

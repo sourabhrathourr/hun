@@ -156,6 +156,21 @@ class Hun < Formula
     bin.install "hun"
   end
 
+  def caveats
+    <<~EOS
+       _                     
+      | |__  _   _ _ __      
+      | '_ \\| | | | '_ \\     
+      | | | | |_| | | | |    
+      |_| |_|\\__,_|_| |_|    
+
+      Welcome to hun.
+      Run:
+        hun -v
+        hun onboard
+    EOS
+  end
+
   test do
     assert_match version.to_s, shell_output("#{bin}/hun --version")
   end

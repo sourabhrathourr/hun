@@ -35,12 +35,8 @@ curl -fsSL https://hun.sh/install.sh | sh
 ## Quick Start
 
 ```sh
-# Initialize a project (auto-detects services)
-cd ~/code/my-project
-hun init
-
-# Switch to it (starts all services)
-hun switch my-project
+# First-time setup (interactive, TUI-first)
+hun onboard
 
 # Open the TUI
 hun
@@ -120,6 +116,7 @@ hun restart <project>:<service> # Restart one service
 ### Project Management
 
 ```sh
+hun onboard [path]              # Interactive first-time setup
 hun init                        # Initialize current directory
 hun init --name <name>          # Initialize with explicit name
 hun list                        # List all known projects

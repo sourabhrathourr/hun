@@ -1,12 +1,9 @@
 package cli
 
 import (
-	"fmt"
-	"os"
+	"errors"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/sourabhrathourr/hun/internal/client"
-	"github.com/sourabhrathourr/hun/internal/tui"
+	"github.com/sourabhrathourr/hun/internal/state"
 	"github.com/spf13/cobra"
 )
 
@@ -17,19 +14,27 @@ var rootCmd = &cobra.Command{
 	Short: "Seamless project context switching for developers",
 	Long:  "hun.sh manages your development services, captures logs, and lets you switch between projects instantly.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// If no subcommand, launch TUI
-		c, err := client.New()
-		if err != nil {
-			return err
-		}
-		if err := c.EnsureDaemon(); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not start daemon: %v\n", err)
+		if st, err := state.Load(); err == nil && shouldPromptAutoOnboard(isInteractiveTerminal(), len(st.Registry)) {
+			ok, confirmErr := confirmPrompt("No projects registered. Start onboarding now? [Y/n] ")
+			if confirmErr != nil {
+				return confirmErr
+			}
+			if ok {
+				result, onboardErr := runOnboardingFlow(onboardingOptions{})
+				if onboardErr != nil {
+					if errors.Is(onboardErr, errOnboardingCanceled) {
+						return launchTUI(multiFlag)
+					}
+					return onboardErr
+				}
+				if result.Completed || result.LaunchedTUI {
+					return nil
+				}
+			}
 		}
 
-		m := tui.New(multiFlag)
-		p := tea.NewProgram(m, tea.WithAltScreen())
-		_, err = p.Run()
-		return err
+		// If no subcommand, launch TUI
+		return launchTUI(multiFlag)
 	},
 }
 

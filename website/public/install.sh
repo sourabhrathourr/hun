@@ -116,4 +116,14 @@ else
 fi
 
 echo "Installed hun ${tag:-latest}"
+echo
+cat <<'EOF'
+ _                     
+| |__  _   _ _ __      
+| '_ \| | | | '_ \     
+| | | | |_| | | | |    
+|_| |_|\__,_|_| |_|    
+EOF
+echo "Welcome to hun."
 echo "Run: hun -v"
+echo "Next: hun onboard"

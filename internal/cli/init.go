@@ -35,12 +35,6 @@ var initCmd = &cobra.Command{
 		applyOverrides, _ := cmd.Flags().GetBool("apply-port-overrides")
 		rawProfile, _ := cmd.Flags().GetString("profile")
 		requestedProfile := strings.TrimSpace(rawProfile)
-		if requestedProfile != "" {
-			requestedProfile = detect.NormalizeProfile(requestedProfile)
-			if requestedProfile == "" {
-				return fmt.Errorf("invalid --profile %q (expected local|compose|hybrid)", rawProfile)
-			}
-		}
 
 		var existing *config.Project
 		if config.ProjectExists(dir) {
@@ -80,66 +74,13 @@ var initCmd = &cobra.Command{
 			}
 		}
 
-		analysis := detect.Analyze(dir)
-		profile := requestedProfile
-		if profile == "" {
-			profile = detect.ProfileHybrid
-			if len(analysis.Conflicts) > 0 && isInteractiveTerminal() {
-				selected, err := promptProfileSelection(analysis.Conflicts)
-				if err != nil {
-					return err
-				}
-				profile = selected
-			}
+		proj, aborted, err := prepareProjectFromDetection(name, dir, requestedProfile, reconfigure)
+		if err != nil {
+			return err
 		}
-
-		result := detect.Resolve(analysis, profile)
-		var proj *config.Project
-
-		if len(result.Services) > 0 {
-			fmt.Println("Detected project structure:")
-			fmt.Println()
-			for _, svc := range result.Services {
-				port := ""
-				if svc.Port > 0 {
-					port = fmt.Sprintf(" (port %d)", svc.Port)
-				}
-				meta := ""
-				if svc.Strategy != "" {
-					meta = fmt.Sprintf(" [%s]", svc.Strategy)
-				}
-				fmt.Printf("  %s %s%s%s\n", checkmark(), svc.Name, port, meta)
-				fmt.Printf("    -> %s\n", svc.Cmd)
-				fmt.Println()
-			}
-
-			if len(result.Conflicts) > 0 {
-				fmt.Printf("Using profile: %s\n", result.Profile)
-				fmt.Printf("Resolved %d compose/local conflicts.\n\n", len(result.Conflicts))
-			}
-
-			question := "Create .hun.yml with these services? [Y/n] "
-			if reconfigure {
-				question = "Rewrite .hun.yml with these services? [Y/n] "
-			}
-			if ok, err := confirmPrompt(question); err != nil {
-				return err
-			} else if !ok {
-				fmt.Println("Aborted.")
-				return nil
-			}
-
-			proj = detectedToProject(name, result)
-		} else {
-			fmt.Println("No project structure detected.")
-			fmt.Println("Creating minimal .hun.yml...")
-			proj = &config.Project{
-				Name: name,
-				Services: map[string]*config.Service{
-					"app": {Cmd: "echo 'replace with your command'"},
-				},
-				Detect: config.DetectConfig{Version: "v2", Profile: result.Profile},
-			}
+		if aborted {
+			fmt.Println("Aborted.")
+			return nil
 		}
 
 		if applyOverrides {

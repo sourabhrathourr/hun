@@ -6,21 +6,22 @@ description: Your first 5 minutes with hun.
 import { Step, Steps } from 'fumadocs-ui/components/steps';
 
 Let's take `hun` for a spin.
-We will initialize a project, switch to it, and see how it feels to have your development environment managed for you.
+We will onboard a project, open the TUI, and run through the core workflow.
 
 <Steps>
 
 <Step>
-### Initialize a Project
+### Run Onboarding
 
-Go to one of your existing projects. It could be a simple Node.js app, a Go service, or a Docker Compose stack.
+Start from anywhere and run:
 
 ```bash
-cd ~/my-cool-project
-hun init
+hun onboard
 ```
 
-**hun** will scan your directory. It looks for `package.json`, `go.mod`, `docker-compose.yml`, and other common indicators. It will then generate a `.hun.yml` configuration file for you.
+Choose your project path in the wizard.
+If `.hun.yml` is missing, **hun** detects services and creates it.
+It then registers the project and can open the TUI directly.
 
 </Step>
 
