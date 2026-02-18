@@ -14,6 +14,7 @@ var (
 func SetVersionInfo(version, commit string) {
 	versionStr = version
 	commitStr = commit
+	rootCmd.Version = versionStr
 }
 
 func init() {
