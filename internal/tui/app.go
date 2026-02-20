@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -33,6 +34,8 @@ type Model struct {
 	latestStatus   statusUpdateMsg
 	allLogs        map[string][]daemon.LogLine // "project:service" → lines
 	logCutoff      map[string]time.Time        // "project:service" → show logs after this time
+	startedAt      map[string]time.Time        // "project:service" → daemon-reported service start time
+	activePane     string                      // "services" or "logs"
 
 	logCh            chan daemon.LogLine
 	subErrCh         chan error
@@ -47,6 +50,11 @@ type Model struct {
 	focusPromptVisible  bool
 	focusPromptProjects []string
 	focusPromptSelected int
+
+	pickerLastClicked string
+	pickerLastClickAt time.Time
+	mouseLogSelecting bool
+	projectStopGuard  time.Time
 
 	toast      string
 	toastTimer int
@@ -65,6 +73,12 @@ type logsFetchedMsg struct {
 	service string
 	lines   []daemon.LogLine
 }
+type stopServiceResultMsg struct{ err string }
+
+const (
+	paneServices = "services"
+	paneLogs     = "logs"
+)
 
 // New creates a new TUI model.
 func New(multi bool) Model {
@@ -88,10 +102,12 @@ func New(multi bool) Model {
 		focusedProject: focused,
 		allLogs:        make(map[string][]daemon.LogLine),
 		logCutoff:      make(map[string]time.Time),
+		startedAt:      make(map[string]time.Time),
+		activePane:     paneServices,
 		logCh:          make(chan daemon.LogLine, 2048),
 		subErrCh:       make(chan error, 32),
 		topBar:         topBarModel{mode: mode},
-		logs:           logsModel{autoScroll: true},
+		logs:           logsModel{autoScroll: true, wrap: false},
 	}
 	return m
 }
@@ -113,10 +129,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.updateLayout()
+		if m.picker.visible {
+			m.picker.width = m.pickerWidth()
+			m.picker.height = pickerHeightFor(m.picker.filtered, m.height)
+		}
 		return m, nil
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
 
 	case statusUpdateMsg:
 		cmds := m.applyStatus(msg)
@@ -141,7 +164,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if m.focusedProject == line.Project && len(m.services.items) > 0 {
 			sel := m.services.items[m.services.selected].name
 			if sel == line.Service {
-				m.logs.lines = m.allLogs[key]
+				m.logs.setLines(m.allLogs[key])
 			}
 		}
 		return m, m.waitForLogCmd()
@@ -155,10 +178,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if m.focusedProject == msg.project && len(m.services.items) > 0 {
 			svc := m.services.items[m.services.selected].name
 			if svc == msg.service {
-				m.logs.lines = lines
+				m.logs.setLines(lines)
 			}
 		}
 		return m, nil
+
+	case stopServiceResultMsg:
+		if msg.err == "" {
+			return m, nil
+		}
+		return m, tea.Batch(m.fetchStatusCmd(), m.showToast("Stop service failed: "+msg.err))
 
 	case subscriptionErrMsg:
 		m.err = msg.err
@@ -199,6 +228,10 @@ func (m Model) View() string {
 		view = m.viewWelcome()
 	} else {
 		topBar := m.topBar.View()
+		m.statusBar.mode = m.mode
+		m.statusBar.width = m.width
+		m.statusBar.activePane = m.activePane
+		m.statusBar.selectionMode = m.logs.selectionMode
 		statusBar := m.statusBar.View()
 
 		// top bar (1) + separators (2) + toast row (1) + status bar (2)
@@ -213,10 +246,12 @@ func (m Model) View() string {
 
 		m.services.width = sidebarWidth
 		m.services.height = middleHeight
+		m.services.active = m.activePane == paneServices
 
 		logsWidth := m.width - sidebarWidth - 3
 		m.logs.width = logsWidth
 		m.logs.height = middleHeight
+		m.logs.active = m.activePane == paneLogs
 
 		sidebar := m.services.View()
 		logView := m.logs.View()
@@ -326,23 +361,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cancelSubscription()
 		return m, tea.Quit
 
-	case key.Matches(msg, key.NewBinding(key.WithKeys("up", "k"))):
-		if m.services.selected > 0 {
-			m.services.selected--
-			cmd := m.refreshLogs()
-			if cmd != nil {
-				return m, cmd
-			}
-		}
+	case key.Matches(msg, key.NewBinding(key.WithKeys("left"))):
+		m.activePane = paneServices
+		return m, nil
 
-	case key.Matches(msg, key.NewBinding(key.WithKeys("down", "j"))):
-		if m.services.selected < len(m.services.items)-1 {
-			m.services.selected++
-			cmd := m.refreshLogs()
-			if cmd != nil {
-				return m, cmd
-			}
-		}
+	case key.Matches(msg, key.NewBinding(key.WithKeys("right"))):
+		m.activePane = paneLogs
+		return m, nil
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("tab"))):
 		if m.mode == "multitask" && len(m.topBar.projects) > 1 {
@@ -353,6 +378,148 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.refreshServices()...)
 			return m, tea.Batch(cmds...)
 		}
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("up", "k"))):
+		if m.activePane == paneServices {
+			n := len(m.services.items)
+			if n > 0 {
+				if m.services.selected < 0 || m.services.selected >= n {
+					m.services.selected = 0
+				}
+				prev := m.services.selected
+				m.services.selected = (m.services.selected - 1 + n) % n
+				if m.services.selected != prev {
+					cmd := m.refreshLogs()
+					if cmd != nil {
+						return m, cmd
+					}
+				}
+			}
+		} else {
+			m.logs.moveCursor(-1)
+		}
+		return m, nil
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("down", "j"))):
+		if m.activePane == paneServices {
+			n := len(m.services.items)
+			if n > 0 {
+				if m.services.selected < 0 || m.services.selected >= n {
+					m.services.selected = 0
+				}
+				prev := m.services.selected
+				m.services.selected = (m.services.selected + 1) % n
+				if m.services.selected != prev {
+					cmd := m.refreshLogs()
+					if cmd != nil {
+						return m, cmd
+					}
+				}
+			}
+		} else {
+			m.logs.moveCursor(1)
+		}
+		return m, nil
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("shift+up"))):
+		if m.activePane == paneLogs {
+			m.logs.page(-1)
+		}
+		return m, nil
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("shift+down"))):
+		if m.activePane == paneLogs {
+			m.logs.page(1)
+		}
+		return m, nil
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("u", "ctrl+u", "pgup"))):
+		if m.activePane == paneLogs {
+			m.logs.page(-2)
+		}
+		return m, nil
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("d", "ctrl+d", "pgdown"))):
+		if m.activePane == paneLogs {
+			m.logs.page(2)
+		}
+		return m, nil
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("home", "g"))):
+		if m.activePane == paneLogs {
+			m.logs.jumpTop()
+		}
+		return m, nil
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("end", "G"))):
+		if m.activePane == paneLogs {
+			m.logs.jumpBottom()
+		}
+		return m, nil
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("l", "L"))):
+		if m.activePane == paneLogs {
+			m.logs.toggleLive()
+		}
+		return m, nil
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("w"))):
+		if m.activePane == paneLogs {
+			m.logs.toggleWrap()
+		}
+		return m, nil
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("v", "V"))):
+		if m.activePane == paneLogs {
+			m.logs.startSelectionMode()
+		}
+		return m, nil
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("enter"))):
+		if m.activePane == paneLogs && m.logs.selectionMode {
+			payload, count := m.logs.copyPayload()
+			if count == 0 {
+				return m, m.showToast("Nothing to copy")
+			}
+			if err := copyToClipboard(payload); err != nil {
+				return m, m.showToast("Copy failed: " + err.Error())
+			}
+			m.logs.clearSelection()
+			return m, m.showToast("Copied " + pluralizeLines(count))
+		}
+		return m, nil
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("c"))):
+		if m.activePane != paneLogs {
+			return m, nil
+		}
+		payload, count := m.logs.copyPayload()
+		if count == 0 {
+			return m, m.showToast("Nothing to copy")
+		}
+		if err := copyToClipboard(payload); err != nil {
+			return m, m.showToast("Copy failed: " + err.Error())
+		}
+		if m.logs.selectionMode {
+			m.logs.clearSelection()
+		}
+		return m, m.showToast("Copied " + pluralizeLines(count))
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("y", "Y"))):
+		if m.activePane != paneLogs {
+			return m, nil
+		}
+		payload, count := m.logs.copyPayload()
+		if count == 0 {
+			return m, m.showToast("Nothing to copy")
+		}
+		if err := copyToClipboard(payload); err != nil {
+			return m, m.showToast("Copy failed: " + err.Error())
+		}
+		if m.logs.selectionMode {
+			m.logs.clearSelection()
+		}
+		return m, m.showToast("Yanked " + pluralizeLines(count))
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("r"))):
 		svcName := ""
@@ -397,21 +564,54 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(m.focusCmd(m.focusedProject), m.showToast("Switched to focus mode"))
 		}
 
+	case key.Matches(msg, key.NewBinding(key.WithKeys("x"))):
+		if len(m.services.items) == 0 || m.focusedProject == "" {
+			return m, nil
+		}
+		svc := &m.services.items[m.services.selected]
+		if !svc.running && !svc.crashed {
+			return m, m.showToast(svc.name + " already stopped")
+		}
+		svc.running = false
+		svc.ready = false
+		svc.crashed = false
+		svc.stopped = true
+		if m.logs.service == svc.name {
+			m.logs.serviceStatus = "stopped"
+			m.logs.clearSelection()
+		}
+		m.projectStopGuard = time.Now().Add(500 * time.Millisecond)
+		cmd := tea.Batch(m.stopServiceCmd(svc.name), m.showToast("Stopping "+svc.name+"..."))
+		return m, cmd
+
 	case key.Matches(msg, key.NewBinding(key.WithKeys("s"))):
+		if time.Now().Before(m.projectStopGuard) {
+			return m, nil
+		}
 		if m.focusedProject != "" {
 			cmd := tea.Batch(m.stopFocusedProjectCmd(), m.showToast("Stopping "+m.focusedProject+"..."))
 			return m, cmd
 		}
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("/"))):
+		m.activePane = paneLogs
 		m.searching = true
 		m.searchBuf = ""
 		m.logs.searching = true
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("a"))):
+		m.activePane = paneLogs
 		m.logs.service = "all"
+		m.logs.serviceStatus = ""
+		m.logs.clearSelection()
 		m.refreshAllLogs()
 		m.ensureSubscription()
+
+	case key.Matches(msg, key.NewBinding(key.WithKeys("esc"))):
+		if m.logs.selectionMode {
+			m.logs.clearSelection()
+			return m, m.showToast("Selection cleared")
+		}
 	}
 
 	return m, nil
@@ -472,44 +672,53 @@ func (m Model) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.picker.visible = false
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("enter"))):
-		if len(m.picker.filtered) > 0 && m.picker.selected < len(m.picker.filtered) {
-			item := m.picker.filtered[m.picker.selected]
-			m.picker.visible = false
-			m.focusedProject = item.name
-			for i, tab := range m.topBar.projects {
-				if tab.name == item.name {
-					m.topBar.focused = i
-					break
-				}
-			}
-			m.refreshServices()
-			cmds := []tea.Cmd{m.startProject(item.name), m.focusCmd(item.name), m.showToast("Starting " + item.name + "...")}
-			return m, tea.Batch(cmds...)
+		if item, ok := m.picker.selectedItem(); ok {
+			return m.activatePickerItem(item)
 		}
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("up"))):
-		if m.picker.selected > 0 {
-			m.picker.selected--
-		}
+		m.picker.move(-1)
 	case key.Matches(msg, key.NewBinding(key.WithKeys("down"))):
-		if m.picker.selected < len(m.picker.filtered)-1 {
-			m.picker.selected++
-		}
+		m.picker.move(1)
+	case key.Matches(msg, key.NewBinding(key.WithKeys("pgup"))):
+		m.picker.move(-6)
+	case key.Matches(msg, key.NewBinding(key.WithKeys("pgdown"))):
+		m.picker.move(6)
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("backspace"))):
 		if len(m.picker.input) > 0 {
 			m.picker.input = m.picker.input[:len(m.picker.input)-1]
 			m.picker.filter()
+			m.picker.height = pickerHeightFor(m.picker.filtered, m.height)
 		}
 
 	default:
 		if len(msg.Runes) > 0 {
 			m.picker.input += string(msg.Runes)
 			m.picker.filter()
+			m.picker.height = pickerHeightFor(m.picker.filtered, m.height)
 		}
 	}
 
 	return m, nil
+}
+
+func (m Model) activatePickerItem(item pickerItem) (tea.Model, tea.Cmd) {
+	m.picker.visible = false
+	m.focusedProject = item.name
+	for i, tab := range m.topBar.projects {
+		if tab.name == item.name {
+			m.topBar.focused = i
+			break
+		}
+	}
+	m.refreshServices()
+	cmds := []tea.Cmd{
+		m.startProject(item.name),
+		m.focusCmd(item.name),
+		m.showToast("Starting " + item.name + "..."),
+	}
+	return m, tea.Batch(cmds...)
 }
 
 func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -518,37 +727,291 @@ func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.searching = false
 		m.logs.searching = false
 		m.searchBuf = ""
-		m.logs.search = ""
+		m.logs.setSearch("")
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("enter"))):
 		m.searching = false
 		m.logs.searching = false
-		m.logs.search = m.searchBuf
+		m.logs.setSearch(m.searchBuf)
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("backspace"))):
 		if len(m.searchBuf) > 0 {
 			m.searchBuf = m.searchBuf[:len(m.searchBuf)-1]
-			m.logs.search = m.searchBuf
+			m.logs.setSearch(m.searchBuf)
 		}
 
 	default:
 		if len(msg.Runes) > 0 {
 			m.searchBuf += string(msg.Runes)
-			m.logs.search = m.searchBuf
+			m.logs.setSearch(m.searchBuf)
 		}
 	}
 
 	return m, nil
 }
 
+func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.focusPromptVisible {
+		return m, nil
+	}
+	if m.picker.visible {
+		return m.handlePickerMouse(msg)
+	}
+	if m.width == 0 || m.height == 0 {
+		return m, nil
+	}
+
+	isLeftPress := msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress
+	isLeftDrag := msg.Action == tea.MouseActionMotion && (msg.Button == tea.MouseButtonLeft || m.mouseLogSelecting)
+	isLeftRelease := msg.Action == tea.MouseActionRelease && (msg.Button == tea.MouseButtonLeft || msg.Button == tea.MouseButtonNone || m.mouseLogSelecting)
+	isWheelUp := msg.Button == tea.MouseButtonWheelUp
+	isWheelDown := msg.Button == tea.MouseButtonWheelDown
+	if !isLeftPress && !isLeftDrag && !isLeftRelease && !isWheelUp && !isWheelDown {
+		return m, nil
+	}
+	if isLeftRelease {
+		m.mouseLogSelecting = false
+	}
+
+	layout := m.layoutInfo()
+
+	// Top bar project tabs.
+	if isLeftPress && msg.Y == 0 {
+		m.mouseLogSelecting = false
+		if idx := m.topBar.projectIndexAtX(msg.X); idx >= 0 && idx < len(m.topBar.projects) {
+			project := m.topBar.projects[idx].name
+			if project != "" {
+				return m.focusProject(project)
+			}
+		}
+		return m, nil
+	}
+
+	if msg.Y < layout.middleY || msg.Y >= layout.middleY+layout.middleHeight {
+		return m, nil
+	}
+
+	// Services pane.
+	if msg.X >= 0 && msg.X < layout.sidebarWidth {
+		if isLeftPress {
+			m.mouseLogSelecting = false
+		}
+		m.activePane = paneServices
+		if len(m.services.items) == 0 {
+			return m, nil
+		}
+		switch {
+		case isWheelUp:
+			if m.services.selected > 0 {
+				m.services.selected--
+				if cmd := m.refreshLogs(); cmd != nil {
+					return m, cmd
+				}
+			}
+			return m, nil
+		case isWheelDown:
+			if m.services.selected < len(m.services.items)-1 {
+				m.services.selected++
+				if cmd := m.refreshLogs(); cmd != nil {
+					return m, cmd
+				}
+			}
+			return m, nil
+		case isLeftPress:
+			row := msg.Y - layout.middleY - 2 // title + spacer
+			if row >= 0 && row < len(m.services.items) {
+				m.services.selected = row
+				if cmd := m.refreshLogs(); cmd != nil {
+					return m, cmd
+				}
+			}
+			return m, nil
+		}
+	}
+
+	// Logs pane.
+	if msg.X >= layout.logsX && msg.X < layout.logsX+layout.logsWidth {
+		m.activePane = paneLogs
+		switch {
+		case isWheelUp:
+			m.logs.scrollRows(-2)
+			return m, nil
+		case isWheelDown:
+			m.logs.scrollRows(2)
+			return m, nil
+		case isLeftPress:
+			row := msg.Y - layout.middleY - 2 // header + spacer
+			if row >= 0 {
+				if msg.Shift {
+					m.logs.setCursorFromVisibleRow(row, true)
+				} else {
+					m.logs.startSelectionFromVisibleRow(row)
+				}
+				m.mouseLogSelecting = true
+			}
+			return m, nil
+		case isLeftDrag:
+			row := msg.Y - layout.middleY - 2 // header + spacer
+			if row >= 0 {
+				m.logs.setCursorFromVisibleRow(row, true)
+			}
+			return m, nil
+		case isLeftRelease:
+			return m, nil
+		}
+	}
+
+	return m, nil
+}
+
+func (m Model) handlePickerMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	isLeftPress := msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress
+	isWheelUp := msg.Button == tea.MouseButtonWheelUp
+	isWheelDown := msg.Button == tea.MouseButtonWheelDown
+	if !isLeftPress && !isWheelUp && !isWheelDown {
+		return m, nil
+	}
+
+	x, y, w, h := m.pickerBounds()
+	if msg.X < x || msg.X >= x+w || msg.Y < y || msg.Y >= y+h {
+		if isLeftPress {
+			m.picker.visible = false
+		}
+		return m, nil
+	}
+
+	switch {
+	case isWheelUp:
+		m.picker.move(-2)
+		return m, nil
+	case isWheelDown:
+		m.picker.move(2)
+		return m, nil
+	case isLeftPress:
+		// Border(1) + padding-top(1) + title/input block(4) => first visible item row starts at local y=6.
+		row := msg.Y - y - 6
+		idx := m.picker.indexAtVisibleRow(row)
+		if idx < 0 || idx >= len(m.picker.filtered) {
+			return m, nil
+		}
+		item := m.picker.filtered[idx]
+		m.picker.selected = idx
+		m.picker.clampOffset()
+
+		now := time.Now()
+		if m.pickerLastClicked == item.name && now.Sub(m.pickerLastClickAt) <= 400*time.Millisecond {
+			m.pickerLastClicked = ""
+			m.pickerLastClickAt = time.Time{}
+			return m.activatePickerItem(item)
+		}
+		m.pickerLastClicked = item.name
+		m.pickerLastClickAt = now
+		return m, nil
+	}
+
+	return m, nil
+}
+
+func (m Model) focusProject(project string) (tea.Model, tea.Cmd) {
+	if project == "" {
+		return m, nil
+	}
+	m.focusedProject = project
+	for i, tab := range m.topBar.projects {
+		if tab.name == project {
+			m.topBar.focused = i
+			break
+		}
+	}
+	cmds := []tea.Cmd{m.focusCmd(project)}
+	cmds = append(cmds, m.refreshServices()...)
+	return m, tea.Batch(cmds...)
+}
+
+type layoutInfo struct {
+	middleY      int
+	middleHeight int
+	sidebarWidth int
+	logsX        int
+	logsWidth    int
+}
+
+func (m Model) layoutInfo() layoutInfo {
+	middleHeight := m.height - 6 // top bar + separators + toast + statusbar
+	if middleHeight < 1 {
+		middleHeight = 1
+	}
+	sidebarWidth := 24
+	if m.width < 60 {
+		sidebarWidth = 16
+	}
+	logsWidth := m.width - sidebarWidth - 3
+	if logsWidth < 1 {
+		logsWidth = 1
+	}
+	return layoutInfo{
+		middleY:      2,
+		middleHeight: middleHeight,
+		sidebarWidth: sidebarWidth,
+		logsX:        sidebarWidth + 3,
+		logsWidth:    logsWidth,
+	}
+}
+
+func (m Model) pickerBounds() (x int, y int, w int, h int) {
+	w = m.picker.width
+	if w <= 0 {
+		w = m.pickerWidth()
+	}
+	h = m.picker.height
+	if h <= 0 {
+		h = pickerHeightFor(m.picker.filtered, m.height)
+	}
+	if w > m.width {
+		w = m.width
+	}
+	if h > m.height {
+		h = m.height
+	}
+	if w < 1 {
+		w = 1
+	}
+	if h < 1 {
+		h = 1
+	}
+	x = (m.width - w) / 2
+	y = (m.height - h) / 2
+	return x, y, w, h
+}
+
 func (m *Model) updateLayout() {
 	m.topBar.width = m.width
 	m.statusBar.width = m.width
 	m.statusBar.mode = m.mode
+	m.statusBar.activePane = m.activePane
+	m.statusBar.selectionMode = m.logs.selectionMode
+
+	middleHeight := m.height - 6
+	if middleHeight < 1 {
+		middleHeight = 1
+	}
+	sidebarWidth := 24
+	if m.width < 60 {
+		sidebarWidth = 16
+	}
+	logsWidth := m.width - sidebarWidth - 3
+	if logsWidth < 1 {
+		logsWidth = 1
+	}
+	m.services.width = sidebarWidth
+	m.services.height = middleHeight
+	m.logs.width = logsWidth
+	m.logs.height = middleHeight
 }
 
 func (m *Model) applyStatus(status statusUpdateMsg) []tea.Cmd {
 	m.latestStatus = status
+	m.applyServiceStartMarkers(status)
 
 	var tabs []projectTab
 	for name, svcs := range status {
@@ -569,7 +1032,8 @@ func (m *Model) applyStatus(status statusUpdateMsg) []tea.Cmd {
 		m.focusedProject = ""
 		m.topBar.focused = 0
 		m.services.items = nil
-		m.logs.lines = nil
+		m.logs.setLines(nil)
+		m.logs.serviceStatus = ""
 		m.cancelSubscription()
 		return cmds
 	}
@@ -592,6 +1056,29 @@ func (m *Model) applyStatus(status statusUpdateMsg) []tea.Cmd {
 	return cmds
 }
 
+func (m *Model) applyServiceStartMarkers(status statusUpdateMsg) {
+	seen := make(map[string]struct{})
+	for project, services := range status {
+		for service, info := range services {
+			key := projectServiceKey(project, service)
+			seen[key] = struct{}{}
+			if info.StartedAt.IsZero() {
+				continue
+			}
+			prev, ok := m.startedAt[key]
+			if !ok || !info.StartedAt.Equal(prev) {
+				m.startedAt[key] = info.StartedAt
+				m.markFreshLogsForService(project, service, info.StartedAt)
+			}
+		}
+	}
+	for key := range m.startedAt {
+		if _, ok := seen[key]; !ok {
+			delete(m.startedAt, key)
+		}
+	}
+}
+
 func (m *Model) refreshServices() []tea.Cmd {
 	status := m.latestStatus
 	if status == nil {
@@ -606,7 +1093,8 @@ func (m *Model) refreshServices() []tea.Cmd {
 			svcs = status[m.focusedProject]
 		} else {
 			m.services.items = nil
-			m.logs.lines = nil
+			m.logs.setLines(nil)
+			m.logs.serviceStatus = ""
 			m.cancelSubscription()
 			return nil
 		}
@@ -614,12 +1102,21 @@ func (m *Model) refreshServices() []tea.Cmd {
 
 	items := make([]serviceItem, 0, len(svcs))
 	for name, info := range svcs {
+		status := strings.TrimSpace(strings.ToLower(info.Status))
+		if status == "" {
+			if info.Running {
+				status = "running"
+			} else {
+				status = "stopped"
+			}
+		}
 		items = append(items, serviceItem{
 			name:    name,
 			port:    info.Port,
 			running: info.Running,
-			ready:   info.Ready,
-			crashed: !info.Running && info.PID > 0,
+			ready:   info.Ready && info.Running,
+			crashed: !info.Running && status == "crashed",
+			stopped: !info.Running && status != "crashed",
 		})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].name < items[j].name })
@@ -646,17 +1143,35 @@ func (m *Model) refreshServices() []tea.Cmd {
 
 func (m *Model) refreshLogs() tea.Cmd {
 	if len(m.services.items) == 0 {
-		m.logs.lines = nil
+		m.logs.setLines(nil)
 		m.logs.service = ""
+		m.logs.serviceStatus = ""
+		m.logs.clearSelection()
 		m.cancelSubscription()
 		return nil
 	}
 
 	svc := m.services.items[m.services.selected]
+	if m.logs.service != svc.name {
+		m.logs.clearSelection()
+	}
 	m.logs.service = svc.name
+	switch {
+	case svc.crashed:
+		m.logs.serviceStatus = "crashed"
+	case svc.running:
+		m.logs.serviceStatus = "running"
+	default:
+		m.logs.serviceStatus = "stopped"
+	}
+	if m.logs.serviceStatus == "stopped" {
+		m.logs.setLines(nil)
+		m.ensureSubscription()
+		return nil
+	}
 
 	key := projectServiceKey(m.focusedProject, svc.name)
-	m.logs.lines = m.allLogs[key]
+	m.logs.setLines(m.allLogs[key])
 	m.ensureSubscription()
 
 	if len(m.logs.lines) == 0 {
@@ -666,6 +1181,7 @@ func (m *Model) refreshLogs() tea.Cmd {
 }
 
 func (m *Model) refreshAllLogs() {
+	m.logs.serviceStatus = ""
 	all := make([]daemon.LogLine, 0)
 	prefix := m.focusedProject + ":"
 	for key, lines := range m.allLogs {
@@ -676,7 +1192,7 @@ func (m *Model) refreshAllLogs() {
 	sort.Slice(all, func(i, j int) bool {
 		return all[i].Timestamp.Before(all[j].Timestamp)
 	})
-	m.logs.lines = all
+	m.logs.setLines(all)
 }
 
 func (m *Model) ensureSubscription() {
@@ -781,8 +1297,17 @@ func (m *Model) openPicker() {
 		items:    items,
 		filtered: items,
 		width:    m.pickerWidth(),
-		height:   m.height - 4,
 	}
+	m.picker.filter()
+	m.picker.height = pickerHeightFor(m.picker.filtered, m.height)
+	for i, item := range m.picker.filtered {
+		if item.name == m.focusedProject {
+			m.picker.selected = i
+			break
+		}
+	}
+	m.picker.clampSelected()
+	m.picker.clampOffset()
 }
 
 func (m *Model) pickerWidth() int {
@@ -807,6 +1332,62 @@ func (m *Model) pickerWidth() int {
 		width = 76
 	}
 	return width
+}
+
+func pickerHeightFor(items []pickerItem, viewportHeight int) int {
+	rows := pickerContentRows(items)
+	if rows < 4 {
+		rows = 4
+	}
+
+	maxRows := 12
+	if viewportHeight > 0 {
+		byViewport := viewportHeight - 12
+		if byViewport < 4 {
+			byViewport = 4
+		}
+		if maxRows > byViewport {
+			maxRows = byViewport
+		}
+	}
+	if rows > maxRows {
+		rows = maxRows
+	}
+
+	height := rows + 8 // picker chrome + border/padding
+	if viewportHeight > 0 {
+		maxHeight := viewportHeight - 4
+		if maxHeight < 9 {
+			maxHeight = 9
+		}
+		if height > maxHeight {
+			height = maxHeight
+		}
+	}
+	if height < 9 {
+		height = 9
+	}
+	return height
+}
+
+func pickerContentRows(items []pickerItem) int {
+	if len(items) == 0 {
+		return 1
+	}
+	rows := len(items)
+	seenRunning := false
+	seenStopped := false
+	for _, item := range items {
+		if item.running {
+			seenRunning = true
+		} else {
+			seenStopped = true
+		}
+	}
+	if seenRunning && seenStopped {
+		rows++ // separator row between running and stopped groups
+	}
+	return rows
 }
 
 // Commands
@@ -907,6 +1488,33 @@ func (m Model) stopFocusedProjectCmd() tea.Cmd {
 	return m.stopProjectCmd(m.focusedProject)
 }
 
+func (m Model) stopServiceCmd(service string) tea.Cmd {
+	return func() tea.Msg {
+		if service == "" || m.focusedProject == "" || m.client == nil {
+			return nil
+		}
+		resp, err := m.client.Send(daemon.Request{
+			Action:  "stop_service",
+			Project: m.focusedProject,
+			Service: service,
+		})
+		if err != nil {
+			return stopServiceResultMsg{err: err.Error()}
+		}
+		if resp == nil || resp.OK {
+			return stopServiceResultMsg{}
+		}
+		msg := strings.TrimSpace(resp.Error)
+		if strings.Contains(msg, "unknown action: stop_service") {
+			msg = "daemon is stale; restart hun daemon and retry"
+		}
+		if msg == "" {
+			msg = "unknown daemon error"
+		}
+		return stopServiceResultMsg{err: msg}
+	}
+}
+
 func (m Model) stopProjectCmd(project string) tea.Cmd {
 	return func() tea.Msg {
 		if project == "" || m.client == nil {
@@ -975,7 +1583,7 @@ func (m *Model) markFreshLogsForService(project, service string, cutoff time.Tim
 	delete(m.allLogs, key)
 	if m.focusedProject == project {
 		if m.logs.service == service {
-			m.logs.lines = nil
+			m.logs.setLines(nil)
 		}
 		if m.logs.service == "all" {
 			m.refreshAllLogs()
@@ -1005,7 +1613,7 @@ func (m *Model) markFreshLogsForProject(project string, cutoff time.Time) {
 		if m.logs.service == "all" {
 			m.refreshAllLogs()
 		} else {
-			m.logs.lines = nil
+			m.logs.setLines(nil)
 		}
 	}
 }
@@ -1016,7 +1624,7 @@ func (m *Model) logPassesCutoff(line daemon.LogLine) bool {
 	if !ok {
 		return true
 	}
-	return line.Timestamp.After(cutoff)
+	return !line.Timestamp.Before(cutoff)
 }
 
 func (m *Model) filterLinesForKey(key string, lines []daemon.LogLine) []daemon.LogLine {
@@ -1026,7 +1634,7 @@ func (m *Model) filterLinesForKey(key string, lines []daemon.LogLine) []daemon.L
 	}
 	filtered := make([]daemon.LogLine, 0, len(lines))
 	for _, line := range lines {
-		if line.Timestamp.After(cutoff) {
+		if !line.Timestamp.Before(cutoff) {
 			filtered = append(filtered, line)
 		}
 	}
@@ -1048,6 +1656,13 @@ func truncateText(text string, maxWidth int) string {
 		return "…"
 	}
 	return string([]rune(text)[:maxWidth-1]) + "…"
+}
+
+func pluralizeLines(n int) string {
+	if n == 1 {
+		return "1 line"
+	}
+	return fmt.Sprintf("%d lines", n)
 }
 
 func repeat(s string, n int) string {

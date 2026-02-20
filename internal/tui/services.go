@@ -12,6 +12,7 @@ type serviceItem struct {
 	running bool
 	ready   bool
 	crashed bool
+	stopped bool
 }
 
 type servicesModel struct {
@@ -19,10 +20,17 @@ type servicesModel struct {
 	selected int
 	height   int
 	width    int
+	active   bool
 }
 
 func (m servicesModel) View() string {
-	title := serviceTitleStyle.Render("Services") + " " + serviceTitleCount.Render(fmt.Sprintf("(%d)", len(m.items)))
+	titleStyle := serviceNormal
+	focusArrow := paneFocusInactive.Render("▸")
+	if m.active {
+		focusArrow = paneFocusActive.Render("▸")
+		titleStyle = serviceTitleStyle
+	}
+	title := focusArrow + " " + titleStyle.Render("Services") + " " + serviceTitleCount.Render(fmt.Sprintf("(%d)", len(m.items)))
 	lines := []string{title, ""}
 
 	for i, item := range m.items {
@@ -31,12 +39,18 @@ func (m servicesModel) View() string {
 			dot = dotCrashed
 		} else if item.running {
 			dot = dotRunning
+		} else if item.stopped {
+			dot = dotStopped
 		}
 
 		cursor := "  "
 		style := serviceNormal
 		if i == m.selected {
-			cursor = serviceCursor.Render("\u25b8") + " "
+			cursorStyle := paneFocusInactive
+			if m.active {
+				cursorStyle = serviceCursor
+			}
+			cursor = cursorStyle.Render("\u25b8") + " "
 			style = serviceSelected
 		}
 

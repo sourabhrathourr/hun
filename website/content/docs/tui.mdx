@@ -25,21 +25,31 @@ If not, use the **Project Switcher** (`p`) to start one.
 
 | Key | Action |
 | :--- | :--- |
-| `↑` / `↓` | Select a service |
-| `Enter` | View logs for selected service |
-| `Esc` | Back to service list |
+| `←` / `→` | Switch active pane (Services / Logs) |
+| `↑` / `↓` (`j` / `k`) | Move inside active pane |
+| `Tab` | Cycle projects in Multitask mode |
 | `q` | Quit TUI (services **keep running**) |
 
 ## Actions
 
 | Key | Action |
 | :--- | :--- |
+| `l` (Logs pane) | Toggle Live mode |
+| `w` | Toggle log wrapping |
+| `v` | Start/reset line-range selection at cursor |
+| `c` | Copy current line or selected range |
+| `y` | Yank current line or selected range |
+| `u` / `d` | Fast log scroll (`PgUp` / `PgDn` also works) |
+| `Home` / `End` (`g` / `G`) | Jump to top/bottom logs |
 | `r` | Restart selected service |
 | `R` | Restart **all** services in project |
-| `s` | Stop selected service |
+| `x` | Stop selected service |
+| `s` | Stop focused project |
 | `/` | Filter logs (search mode) |
-| `c` | Copy mode (pause scrolling to select text) |
+| `a` | Show combined logs from all services |
 | `p` | Project Switcher (fuzzy find) |
+| `m` | Switch to Multitask mode |
+| `f` | Switch to Focus mode (in Multitask) |
 
 ## The Project Switcher (`p`)
 
@@ -50,6 +60,17 @@ Press `p` to open a fuzzy finder of all your registered projects.
 ## Viewing Logs
 
 When viewing logs:
--   `f` toggles "Follow" mode (auto-scroll).
--   `w` toggles wrapping lines.
+-   manual scrolling pauses live mode and shows unread count.
+-   `l` resumes/toggles live mode.
 -   `Shift + ↑/↓` scrolls faster.
+-   `v` starts selection at the current cursor and pauses live mode.
+-   selection can be done with keyboard (`v` + arrows) or mouse (click / Shift+click).
+-   when a selected service is stopped, logs pane shows a stopped-state view instead of stale log rows.
+
+## Mouse Support
+
+- Click a project tab to focus it.
+- Click a service to select it.
+- Click in logs to set cursor.
+- Shift+click in logs to extend selection range.
+- Mouse wheel scrolls logs, services, and the picker list.

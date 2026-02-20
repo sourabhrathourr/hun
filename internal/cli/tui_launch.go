@@ -19,7 +19,7 @@ func launchTUI(multi bool) error {
 	}
 
 	m := tui.New(multi)
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err = p.Run()
 	return err
 }

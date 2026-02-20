@@ -68,6 +68,14 @@ func (rb *RingBuffer) Lines(n int) []LogLine {
 	return result
 }
 
+// Reset clears all buffered lines.
+func (rb *RingBuffer) Reset() {
+	rb.mu.Lock()
+	defer rb.mu.Unlock()
+	rb.head = 0
+	rb.count = 0
+}
+
 type rotationConfig struct {
 	maxSizeMB    int
 	maxFiles     int
@@ -87,6 +95,21 @@ type serviceLogWriter struct {
 	closed  atomic.Bool
 	closeMu sync.Mutex
 	done    chan struct{}
+}
+
+func (w *serviceLogWriter) enqueue(line LogLine) {
+	defer func() {
+		// A writer can be reset/closed while producers still hold a stale pointer.
+		_ = recover()
+	}()
+	if w.closed.Load() {
+		return
+	}
+	select {
+	case w.ch <- line:
+	default:
+		// Drop disk write if queue is full; ring buffer still keeps recent logs.
+	}
 }
 
 func (w *serviceLogWriter) close() {
@@ -178,11 +201,7 @@ func (lm *LogManager) writeAsync(line LogLine) {
 	if writer == nil {
 		return
 	}
-	select {
-	case writer.ch <- line:
-	default:
-		// Drop disk write if queue is full; ring buffer still keeps recent logs.
-	}
+	writer.enqueue(line)
 }
 
 func (lm *LogManager) getOrCreateWriter(project, service string) *serviceLogWriter {
@@ -240,6 +259,28 @@ func (lm *LogManager) getOrCreateWriter(project, service string) *serviceLogWrit
 	lm.writers[key] = writer
 	lm.mu.Unlock()
 	return writer
+}
+
+// ResetService clears buffered logs for a single service and resets its async writer.
+func (lm *LogManager) ResetService(project, service string) {
+	key := lm.bufferKey(project, service)
+
+	lm.mu.Lock()
+	var writer *serviceLogWriter
+	if w, ok := lm.writers[key]; ok {
+		writer = w
+		delete(lm.writers, key)
+	}
+	if rb, ok := lm.buffers[key]; ok {
+		rb.Reset()
+	} else {
+		lm.buffers[key] = NewRingBuffer(10000)
+	}
+	lm.mu.Unlock()
+
+	if writer != nil {
+		writer.close()
+	}
 }
 
 // GetLines returns buffered log lines for a service.

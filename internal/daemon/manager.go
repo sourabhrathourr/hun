@@ -188,6 +188,9 @@ func (m *Manager) StartProject(projectName string, projConfig *config.Project, p
 			ReadyPattern: svcConfig.Ready,
 		}
 
+		// Every start boundary represents a fresh in-memory log session.
+		m.logs.ResetService(projectName, serviceName)
+
 		proc.onOutput = func(line string, isErr bool) {
 			logLine := LogLine{
 				Timestamp: time.Now(),
@@ -209,6 +212,7 @@ func (m *Manager) StartProject(projectName string, projConfig *config.Project, p
 			m.updateServiceState(projectName, serviceName, 0, actualPort, status)
 			if status == "crashed" && restartPolicy == "on_failure" {
 				time.Sleep(time.Second)
+				m.logs.ResetService(projectName, serviceName)
 				if restartErr := proc.Start(); restartErr == nil {
 					m.updateServiceState(projectName, serviceName, proc.PID(), actualPort, "running")
 				}
@@ -314,6 +318,31 @@ func (m *Manager) StopProject(projectName string) error {
 	return nil
 }
 
+// StopService stops a single service in a running project.
+func (m *Manager) StopService(projectName, serviceName string) error {
+	m.mu.RLock()
+	procs, exists := m.processes[projectName]
+	if !exists {
+		m.mu.RUnlock()
+		return fmt.Errorf("project %s not running", projectName)
+	}
+	proc, exists := procs[serviceName]
+	if !exists {
+		m.mu.RUnlock()
+		return fmt.Errorf("service %s not found in project %s", serviceName, projectName)
+	}
+	port := proc.Port
+	m.mu.RUnlock()
+
+	if err := proc.Stop(); err != nil {
+		return err
+	}
+
+	m.clearRuntimePortSignal(projectName, serviceName)
+	m.updateServiceState(projectName, serviceName, 0, port, "stopped")
+	return nil
+}
+
 // StopAll stops all running projects.
 func (m *Manager) StopAll() error {
 	m.mu.RLock()
@@ -348,6 +377,7 @@ func (m *Manager) RestartService(projectName, serviceName string) error {
 		return err
 	}
 	m.clearRuntimePortSignal(projectName, serviceName)
+	m.logs.ResetService(projectName, serviceName)
 	if err := proc.Start(); err != nil {
 		m.updateServiceState(projectName, serviceName, 0, proc.Port, "crashed")
 		return err
@@ -360,18 +390,54 @@ func (m *Manager) RestartService(projectName, serviceName string) error {
 func (m *Manager) Status() map[string]map[string]ServiceInfo {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	stateStatuses := m.serviceStatusSnapshot()
 
 	result := make(map[string]map[string]ServiceInfo)
 	for proj, procs := range m.processes {
 		result[proj] = make(map[string]ServiceInfo)
 		for name, proc := range procs {
+			running := proc.IsRunning()
+			status := stateStatuses[proj][name]
+			if status == "" {
+				if running {
+					status = "running"
+				} else {
+					status = "stopped"
+				}
+			}
+			if running {
+				status = "running"
+			}
 			result[proj][name] = ServiceInfo{
-				PID:     proc.PID(),
-				Port:    proc.Port,
-				Running: proc.IsRunning(),
-				Ready:   proc.IsReady(),
+				PID:       proc.PID(),
+				Port:      proc.Port,
+				Status:    status,
+				Running:   running,
+				Ready:     proc.IsReady(),
+				StartedAt: proc.StartedAt(),
 			}
 		}
+	}
+	return result
+}
+
+func (m *Manager) serviceStatusSnapshot() map[string]map[string]string {
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+
+	result := make(map[string]map[string]string)
+	if m.st == nil {
+		return result
+	}
+	for project, ps := range m.st.Projects {
+		if len(ps.Services) == 0 {
+			continue
+		}
+		services := make(map[string]string, len(ps.Services))
+		for service, ss := range ps.Services {
+			services[service] = ss.Status
+		}
+		result[project] = services
 	}
 	return result
 }
@@ -460,10 +526,12 @@ func (m *Manager) Shutdown() {
 
 // ServiceInfo holds info about a running service.
 type ServiceInfo struct {
-	PID     int  `json:"pid"`
-	Port    int  `json:"port"`
-	Running bool `json:"running"`
-	Ready   bool `json:"ready"`
+	PID       int       `json:"pid"`
+	Port      int       `json:"port"`
+	Status    string    `json:"status,omitempty"`
+	Running   bool      `json:"running"`
+	Ready     bool      `json:"ready"`
+	StartedAt time.Time `json:"started_at,omitempty"`
 }
 
 var runtimePortPatterns = []*regexp.Regexp{

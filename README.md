@@ -146,18 +146,31 @@ hun --multi                     # Open TUI in Multitask Mode
 
 | Key | Action |
 |-----|--------|
-| `↑↓` | Select service |
+| `←→` | Switch pane (Services / Logs) |
+| `↑↓` / `j` `k` | Move in active pane (service list or logs) |
 | `tab` | Cycle between projects (multitask) |
+| `u` / `d` | Fast log scroll (`pgup` / `pgdown` also works) |
+| `home` / `end` (`g` / `G`) | Jump to top/bottom logs |
+| `l` (Logs pane) | Toggle live log mode |
+| `w` | Toggle log wrapping |
+| `v` | Start/reset line-range selection at cursor |
+| `c` | Copy current line or selected range |
+| `y` | Yank current line or selected range |
 | `r` | Restart selected service |
 | `R` | Restart all services in project |
+| `x` | Stop selected service |
 | `p` | Open project picker (fuzzy search) |
 | `/` | Search / filter logs |
 | `a` | Show combined logs from all services |
 | `m` | Switch to Multitask Mode |
 | `f` | Switch to Focus Mode |
-| `s` | Stop focused project (multitask) |
-| `c` | Enter copy mode |
+| `s` | Stop focused project |
 | `q` | Quit TUI (services keep running) |
+
+Mouse support:
+- Click project tabs, services, and logs to focus/select.
+- Shift+click in logs extends range selection.
+- Scroll wheel works in services, picker, and logs.
 
 ## Auto-Detection
 

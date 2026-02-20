@@ -46,7 +46,36 @@ func (m topBarModel) View() string {
 	}
 
 	projList := strings.Join(tabs, "    ")
-
 	bar := left + "  " + badge + "  " + projList
 	return topBarStyle.Width(m.width).Render(bar)
+}
+
+func (m topBarModel) projectIndexAtX(x int) int {
+	contentX := x - 1 // top bar style has horizontal padding of 1
+	if contentX < 0 {
+		return -1
+	}
+
+	left := lipgloss.NewStyle().Bold(true).Foreground(colorFg).Render("hun")
+	badge := modeFocusBadge.Render("FOCUS")
+	if m.mode != "focus" {
+		badge = modeMultitaskBadge.Render("MULTI")
+	}
+	prefix := lipgloss.Width(left + "  " + badge + "  ")
+	if contentX < prefix {
+		return -1
+	}
+
+	cursor := prefix
+	for i, project := range m.projects {
+		tabWidth := len([]rune("● ")) + len([]rune(project.name))
+		if contentX >= cursor && contentX < cursor+tabWidth {
+			return i
+		}
+		cursor += tabWidth
+		if i < len(m.projects)-1 {
+			cursor += 4
+		}
+	}
+	return -1
 }

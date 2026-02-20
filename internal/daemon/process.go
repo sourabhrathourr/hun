@@ -23,14 +23,15 @@ type Process struct {
 	PortEnv      string
 	ReadyPattern string
 
-	cmd      *exec.Cmd
-	pid      int
-	running  bool
-	ready    bool
-	stopping bool
-	exited   chan struct{}
-	exitOnce sync.Once
-	mu       sync.Mutex
+	cmd       *exec.Cmd
+	pid       int
+	running   bool
+	ready     bool
+	stopping  bool
+	startedAt time.Time
+	exited    chan struct{}
+	exitOnce  sync.Once
+	mu        sync.Mutex
 
 	onOutput func(line string, isErr bool)
 	onExit   func(err error, intentional bool)
@@ -85,6 +86,7 @@ func (p *Process) Start() error {
 	p.running = true
 	p.ready = false
 	p.stopping = false
+	p.startedAt = time.Now().UTC()
 	p.exited = make(chan struct{})
 	p.exitOnce = sync.Once{}
 
@@ -151,6 +153,13 @@ func (p *Process) PID() int {
 	return p.pid
 }
 
+// StartedAt returns the timestamp when the process last started.
+func (p *Process) StartedAt() time.Time {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.startedAt
+}
+
 func (p *Process) scanOutput(r io.Reader, isErr bool) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64*1024), 64*1024)
@@ -176,6 +185,8 @@ func (p *Process) waitForExit(cmd *exec.Cmd) {
 	err := cmd.Wait()
 	p.mu.Lock()
 	p.running = false
+	p.ready = false
+	p.pid = 0
 	intentional := p.stopping
 	p.stopping = false
 	p.mu.Unlock()

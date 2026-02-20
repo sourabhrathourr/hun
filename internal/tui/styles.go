@@ -26,7 +26,7 @@ var (
 	// Dot indicators
 	dotRunning = lipgloss.NewStyle().Foreground(colorSuccess).Render("\u25cf")
 	dotCrashed = lipgloss.NewStyle().Foreground(colorDanger).Render("\u25cf")
-	dotStopped = lipgloss.NewStyle().Foreground(colorDim).Render("\u25cb")
+	dotStopped = lipgloss.NewStyle().Foreground(lipgloss.Color("#8A8178")).Render("\u25a0")
 
 	// Top bar
 	topBarStyle = lipgloss.NewStyle().
@@ -39,6 +39,12 @@ var (
 
 	topBarProjectInactive = lipgloss.NewStyle().
 				Foreground(colorMuted)
+
+	paneFocusActive = lipgloss.NewStyle().
+			Foreground(colorHighlight)
+
+	paneFocusInactive = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#A59E95"))
 
 	// Mode badges
 	modeFocusBadge = lipgloss.NewStyle().
@@ -98,6 +104,21 @@ var (
 
 	logError = lipgloss.NewStyle().
 			Foreground(colorLogError)
+
+	logFocusedLine = lipgloss.NewStyle().
+			Background(lipgloss.Color("#1A1A1A"))
+
+	logSelectedLine = lipgloss.NewStyle().
+			Background(lipgloss.Color("#173026"))
+
+	stoppedStateBoxStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("#2F3431")).
+				Padding(1, 2)
+
+	stoppedStateTitleStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#CFC7BD")).
+				Bold(true)
 
 	logEmptyStyle = lipgloss.NewStyle().
 			Foreground(colorDim)

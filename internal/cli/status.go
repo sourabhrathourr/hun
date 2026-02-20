@@ -59,9 +59,12 @@ var statusCmd = &cobra.Command{
 
 			for _, svc := range svcNames {
 				info := services[svc]
-				statusStr := "running"
-				if !info.Running {
-					statusStr = "stopped"
+				statusStr := info.Status
+				if statusStr == "" {
+					statusStr = "running"
+					if !info.Running {
+						statusStr = "stopped"
+					}
 				}
 				readyMark := " "
 				if info.Ready {

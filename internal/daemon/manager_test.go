@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"os/exec"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -304,9 +305,183 @@ func TestStopProjectStopsServicesConcurrently(t *testing.T) {
 	}
 }
 
+func TestStopServiceStopsOnlySelectedService(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer m.Shutdown()
+
+	projectPath := t.TempDir()
+	proj := &config.Project{
+		Name: "service-stop",
+		Services: map[string]*config.Service{
+			"a": {Cmd: "sleep 5"},
+			"b": {Cmd: "sleep 5"},
+		},
+	}
+
+	if err := m.StartProject("service-stop", proj, projectPath, false); err != nil {
+		t.Fatalf("start project: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		status := m.Status()
+		a, aok := status["service-stop"]["a"]
+		b, bok := status["service-stop"]["b"]
+		if aok && bok && a.Running && b.Running && a.PID > 0 && b.PID > 0 {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	if err := m.StopService("service-stop", "a"); err != nil {
+		t.Fatalf("stop service: %v", err)
+	}
+
+	status := m.Status()
+	a, aok := status["service-stop"]["a"]
+	b, bok := status["service-stop"]["b"]
+	if !aok || !bok {
+		t.Fatalf("expected both services in status, got: %+v", status["service-stop"])
+	}
+	if a.Running {
+		t.Fatalf("expected service a stopped, got %+v", a)
+	}
+	if a.Status != "stopped" {
+		t.Fatalf("expected service a status=stopped, got %q", a.Status)
+	}
+	if a.PID != 0 {
+		t.Fatalf("expected service a pid=0 after stop, got %d", a.PID)
+	}
+	if !b.Running {
+		t.Fatalf("expected service b still running, got %+v", b)
+	}
+}
+
 func pidAlive(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
 	return syscall.Kill(pid, 0) == nil
+}
+
+func TestRestartServiceResetsServiceLogsAndStartedAt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer m.Shutdown()
+
+	projectPath := t.TempDir()
+	proj := &config.Project{
+		Name: "fresh-restart",
+		Services: map[string]*config.Service{
+			"svc": {
+				Cmd: "echo started && sleep 5",
+			},
+		},
+	}
+
+	if err := m.StartProject("fresh-restart", proj, projectPath, true); err != nil {
+		t.Fatalf("start project: %v", err)
+	}
+
+	waitForLogLine(t, m, "fresh-restart", "svc", "started", 3*time.Second)
+
+	before := m.Status()["fresh-restart"]["svc"].StartedAt
+	if before.IsZero() {
+		t.Fatal("expected non-zero started_at before restart")
+	}
+
+	if err := m.RestartService("fresh-restart", "svc"); err != nil {
+		t.Fatalf("restart service: %v", err)
+	}
+
+	deadline := time.Now().Add(4 * time.Second)
+	updated := before
+	for time.Now().Before(deadline) {
+		updated = m.Status()["fresh-restart"]["svc"].StartedAt
+		if updated.After(before) {
+			break
+		}
+		time.Sleep(40 * time.Millisecond)
+	}
+	if !updated.After(before) {
+		t.Fatalf("expected started_at to advance after restart, before=%s after=%s", before, updated)
+	}
+
+	waitForLogLine(t, m, "fresh-restart", "svc", "started", 3*time.Second)
+	lines := m.GetLogs("fresh-restart", "svc", 200)
+	count := 0
+	for _, line := range lines {
+		if strings.Contains(line.Text, "started") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly 1 'started' line after reset, got %d (%v)", count, lines)
+	}
+}
+
+func TestOnFailureRestartKeepsOnlyFreshServiceLogs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer m.Shutdown()
+
+	projectPath := t.TempDir()
+	proj := &config.Project{
+		Name: "fresh-crash",
+		Services: map[string]*config.Service{
+			"svc": {
+				Cmd:     "echo crash-line && exit 1",
+				Restart: "on_failure",
+			},
+		},
+	}
+
+	if err := m.StartProject("fresh-crash", proj, projectPath, true); err != nil {
+		t.Fatalf("start project: %v", err)
+	}
+
+	waitForLogLine(t, m, "fresh-crash", "svc", "crash-line", 3*time.Second)
+	time.Sleep(1600 * time.Millisecond)
+
+	lines := m.GetLogs("fresh-crash", "svc", 200)
+	count := 0
+	for _, line := range lines {
+		if strings.Contains(line.Text, "crash-line") {
+			count++
+		}
+	}
+	if count > 1 {
+		t.Fatalf("expected at most one crash-line after reset-per-restart, got %d (%v)", count, lines)
+	}
+}
+
+func waitForLogLine(t *testing.T, m *Manager, project, service, contains string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		lines := m.GetLogs(project, service, 200)
+		for _, line := range lines {
+			if strings.Contains(line.Text, contains) {
+				return
+			}
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for log containing %q for %s:%s", contains, project, service)
 }

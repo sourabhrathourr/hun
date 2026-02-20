@@ -9,6 +9,9 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strconv"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/sourabhrathourr/hun/internal/daemon"
@@ -17,6 +20,11 @@ import (
 // Client communicates with the hun daemon over a Unix socket.
 type Client struct {
 	sockPath string
+}
+
+type daemonProbe struct {
+	ok       bool
+	protocol int
 }
 
 // New creates a new daemon client.
@@ -30,11 +38,27 @@ func New() (*Client, error) {
 
 // EnsureDaemon starts the daemon if not running.
 func (c *Client) EnsureDaemon() error {
-	if c.ping() {
+	probe := c.pingProbe()
+	if probe.ok && probe.protocol == daemon.CurrentProtocolVersion {
+		return nil
+	}
+	if probe.ok && probe.protocol != daemon.CurrentProtocolVersion {
+		if err := c.restartDaemon(); err != nil {
+			return fmt.Errorf("restarting stale daemon: %w", err)
+		}
 		return nil
 	}
 
-	// Start daemon in background
+	if err := c.startDaemonProcess(); err != nil {
+		return fmt.Errorf("starting daemon: %w", err)
+	}
+	if err := c.waitForDaemonProtocol(daemon.CurrentProtocolVersion, 5*time.Second); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Client) startDaemonProcess() error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("finding executable: %w", err)
@@ -44,20 +68,75 @@ func (c *Client) EnsureDaemon() error {
 	cmd.Stderr = nil
 	cmd.Stdin = nil
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("starting daemon: %w", err)
+		return err
 	}
 	// Detach
-	cmd.Process.Release()
+	_ = cmd.Process.Release()
+	return nil
+}
 
-	// Wait for daemon to become responsive with a hard deadline.
-	deadline := time.Now().Add(5 * time.Second)
+func (c *Client) waitForDaemonProtocol(protocol int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		time.Sleep(100 * time.Millisecond)
-		if c.ping() {
+		probe := c.pingProbe()
+		if probe.ok && probe.protocol == protocol {
 			return nil
 		}
 	}
-	return fmt.Errorf("daemon did not start within 5 seconds")
+	return fmt.Errorf("daemon did not become ready with protocol %d within %s", protocol, timeout)
+}
+
+func (c *Client) restartDaemon() error {
+	if err := c.stopDaemonProcess(); err != nil {
+		return err
+	}
+	if err := c.startDaemonProcess(); err != nil {
+		return fmt.Errorf("starting daemon: %w", err)
+	}
+	return c.waitForDaemonProtocol(daemon.CurrentProtocolVersion, 5*time.Second)
+}
+
+func (c *Client) stopDaemonProcess() error {
+	pidPath, err := daemon.PIDPath()
+	if err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(pidPath)
+	if err != nil {
+		return fmt.Errorf("reading daemon pid: %w", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || pid <= 0 {
+		return fmt.Errorf("invalid daemon pid file")
+	}
+
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return fmt.Errorf("finding daemon process: %w", err)
+	}
+	if err := proc.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("stopping daemon: %w", err)
+	}
+	if c.waitForDaemonDown(3 * time.Second) {
+		return nil
+	}
+	_ = proc.Signal(syscall.SIGKILL)
+	if c.waitForDaemonDown(2 * time.Second) {
+		return nil
+	}
+	return fmt.Errorf("daemon did not stop in time")
+}
+
+func (c *Client) waitForDaemonDown(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !c.pingProbe().ok {
+			return true
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return false
 }
 
 // Send sends a request to the daemon and returns the response.
@@ -154,9 +233,14 @@ func (c *Client) SubscribeWithContext(ctx context.Context, project, service stri
 }
 
 func (c *Client) ping() bool {
+	return c.pingProbe().ok
+}
+
+func (c *Client) pingProbe() daemonProbe {
+	probe := daemonProbe{ok: false, protocol: 0}
 	conn, err := net.DialTimeout("unix", c.sockPath, 250*time.Millisecond)
 	if err != nil {
-		return false
+		return probe
 	}
 	defer conn.Close()
 
@@ -167,12 +251,38 @@ func (c *Client) ping() bool {
 	conn.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
 	scanner := bufio.NewScanner(conn)
 	if !scanner.Scan() {
-		return false
+		return probe
 	}
 
 	var resp daemon.Response
 	if err := json.Unmarshal(scanner.Bytes(), &resp); err != nil {
-		return false
+		return probe
 	}
-	return resp.OK
+	if !resp.OK {
+		return probe
+	}
+	probe.ok = true
+	probe.protocol = parsePingProtocol(resp.Data)
+	return probe
+}
+
+func parsePingProtocol(data json.RawMessage) int {
+	type pingPayload struct {
+		Status   string `json:"status"`
+		Protocol int    `json:"protocol"`
+	}
+	var payload pingPayload
+	if err := json.Unmarshal(data, &payload); err == nil {
+		if payload.Protocol > 0 {
+			return payload.Protocol
+		}
+		if strings.EqualFold(payload.Status, "pong") {
+			return daemon.LegacyProtocolVersion
+		}
+	}
+	var pong string
+	if err := json.Unmarshal(data, &pong); err == nil && strings.EqualFold(pong, "pong") {
+		return daemon.LegacyProtocolVersion
+	}
+	return daemon.LegacyProtocolVersion
 }

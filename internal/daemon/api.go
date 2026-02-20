@@ -38,11 +38,16 @@ func errorResponse(msg string) Response {
 func (d *Daemon) HandleRequest(req Request) Response {
 	switch req.Action {
 	case "ping":
-		return successResponse("pong")
+		return successResponse(map[string]interface{}{
+			"status":   "pong",
+			"protocol": CurrentProtocolVersion,
+		})
 	case "start":
 		return d.handleStart(req)
 	case "stop":
 		return d.handleStop(req)
+	case "stop_service":
+		return d.handleStopService(req)
 	case "restart":
 		return d.handleRestart(req)
 	case "status":
@@ -112,6 +117,13 @@ func (d *Daemon) handleStop(req Request) Response {
 		return successResponse(map[string]string{"status": "all_stopped"})
 	}
 
+	if req.Service != "" {
+		if err := d.manager.StopService(req.Project, req.Service); err != nil {
+			return errorResponse(err.Error())
+		}
+		return successResponse(map[string]string{"status": "service_stopped"})
+	}
+
 	d.saveGitContext(req.Project)
 
 	if err := d.manager.StopProject(req.Project); err != nil {
@@ -119,6 +131,19 @@ func (d *Daemon) handleStop(req Request) Response {
 	}
 
 	return successResponse(map[string]string{"status": "stopped"})
+}
+
+func (d *Daemon) handleStopService(req Request) Response {
+	if req.Project == "" {
+		return errorResponse("project name required")
+	}
+	if req.Service == "" {
+		return errorResponse("service name required")
+	}
+	if err := d.manager.StopService(req.Project, req.Service); err != nil {
+		return errorResponse(err.Error())
+	}
+	return successResponse(map[string]string{"status": "service_stopped"})
 }
 
 func (d *Daemon) handleRestart(req Request) Response {

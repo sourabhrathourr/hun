@@ -198,3 +198,12 @@ func SocketPath() (string, error) {
 	}
 	return filepath.Join(dir, "daemon.sock"), nil
 }
+
+// PIDPath returns the daemon pid-file path.
+func PIDPath() (string, error) {
+	dir, err := config.HunDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "daemon.pid"), nil
+}
