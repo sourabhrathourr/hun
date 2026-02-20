@@ -1,8 +1,6 @@
 package tui
 
-import (
-	"strings"
-)
+import "github.com/charmbracelet/lipgloss"
 
 type statusBarModel struct {
 	mode          string
@@ -44,10 +42,38 @@ func (m statusBarModel) View() string {
 		keys = append(keys, keyBind("enter", "copy range"))
 	}
 
-	line1 := strings.Join(keys[:len(keys)/2], "  ")
-	line2 := strings.Join(keys[len(keys)/2:], "  ")
+	contentWidth := m.width - 2 // status bar has horizontal padding
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+	line1, used := fitStatusLine(keys, contentWidth)
+	line2, _ := fitStatusLine(keys[used:], contentWidth)
 
 	return statusBarStyle.Width(m.width).Render(line1 + "\n" + line2)
+}
+
+func fitStatusLine(keys []string, maxWidth int) (string, int) {
+	if len(keys) == 0 {
+		return "", 0
+	}
+	sep := "  "
+	line := ""
+	used := 0
+	for i, key := range keys {
+		candidate := key
+		if line != "" {
+			candidate = line + sep + key
+		}
+		if lipgloss.Width(candidate) > maxWidth {
+			break
+		}
+		line = candidate
+		used = i + 1
+	}
+	if used == 0 {
+		return keys[0], 1
+	}
+	return line, used
 }
 
 func keyBind(key, desc string) string {

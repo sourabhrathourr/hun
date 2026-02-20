@@ -186,6 +186,35 @@ func TestViewHeightStableWithAndWithoutToast(t *testing.T) {
 	}
 }
 
+func TestViewHeightStableInMultitaskSelectionMode(t *testing.T) {
+	m := New(false)
+	m.client = nil
+	m.width = 120
+	m.height = 30
+	m.mode = "multitask"
+	m.topBar.mode = "multitask"
+	m.focusedProject = "project-with-a-very-long-name-1"
+	m.topBar.projects = []projectTab{
+		{name: "project-with-a-very-long-name-1", running: true},
+		{name: "project-with-a-very-long-name-2", running: true},
+		{name: "project-with-a-very-long-name-3", running: true},
+	}
+	m.updateLayout()
+	m.latestStatus = statusUpdateMsg{
+		"project-with-a-very-long-name-1": {
+			"svc": daemon.ServiceInfo{Running: true, Ready: true, Port: 3000},
+		},
+	}
+	m.applyStatus(m.latestStatus)
+	m.activePane = paneLogs
+	m.logs.selectionMode = true
+
+	view := m.View()
+	if lipgloss.Height(view) != m.height {
+		t.Fatalf("view height in multitask+selection = %d, want %d", lipgloss.Height(view), m.height)
+	}
+}
+
 func TestRestartServiceClearsAndCutsOffOldLogs(t *testing.T) {
 	m := New(false)
 	m.client = nil
@@ -290,6 +319,47 @@ func TestLeftRightPaneSwitchKeepsTabProjectCycling(t *testing.T) {
 	m3 := updated2.(Model)
 	if m3.focusedProject != "proj2" {
 		t.Fatalf("focusedProject = %q, want proj2", m3.focusedProject)
+	}
+}
+
+func TestEnterInServicesPaneMovesFocusToLogsForSelectedService(t *testing.T) {
+	m := New(false)
+	m.client = nil
+	m.activePane = paneServices
+	m.focusedProject = "proj"
+	m.services.items = []serviceItem{
+		{name: "svc-a", running: true},
+		{name: "svc-b", running: true},
+	}
+	m.services.selected = 1
+	m.logs.service = "all"
+
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m2 := updated.(Model)
+
+	if m2.activePane != paneLogs {
+		t.Fatalf("activePane = %q, want %q", m2.activePane, paneLogs)
+	}
+	if m2.logs.service != "svc-b" {
+		t.Fatalf("logs.service = %q, want %q", m2.logs.service, "svc-b")
+	}
+}
+
+func TestPaneToggleEasterEggUsesUpperE(t *testing.T) {
+	m := New(false)
+	m.client = nil
+	m.activePane = paneServices
+
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("E")})
+	m2 := updated.(Model)
+	if m2.activePane != paneLogs {
+		t.Fatalf("activePane after first E = %q, want %q", m2.activePane, paneLogs)
+	}
+
+	updated2, _ := m2.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("E")})
+	m3 := updated2.(Model)
+	if m3.activePane != paneServices {
+		t.Fatalf("activePane after second E = %q, want %q", m3.activePane, paneServices)
 	}
 }
 

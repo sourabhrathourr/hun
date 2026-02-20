@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 	"github.com/sourabhrathourr/hun/internal/client"
 	"github.com/sourabhrathourr/hun/internal/config"
 	"github.com/sourabhrathourr/hun/internal/daemon"
@@ -369,6 +370,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.activePane = paneLogs
 		return m, nil
 
+	case isPaneToggleEasterEgg(msg):
+		if m.activePane == paneServices {
+			m.activePane = paneLogs
+		} else {
+			m.activePane = paneServices
+		}
+		return m, nil
+
 	case key.Matches(msg, key.NewBinding(key.WithKeys("tab"))):
 		if m.mode == "multitask" && len(m.topBar.projects) > 1 {
 			m.topBar.focused = (m.topBar.focused + 1) % len(m.topBar.projects)
@@ -476,6 +485,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("enter"))):
+		if m.activePane == paneServices {
+			if len(m.services.items) == 0 {
+				return m, nil
+			}
+			m.activePane = paneLogs
+			if cmd := m.refreshLogs(); cmd != nil {
+				return m, cmd
+			}
+			return m, nil
+		}
 		if m.activePane == paneLogs && m.logs.selectionMode {
 			payload, count := m.logs.copyPayload()
 			if count == 0 {
@@ -615,6 +634,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func isPaneToggleEasterEgg(msg tea.KeyMsg) bool {
+	// Terminals vary in modifier reporting for command/super shortcuts; accept
+	// several equivalent encodings while keeping this mapping undocumented.
+	switch msg.String() {
+	case "cmd+shift+e", "super+shift+e", "meta+shift+e", "alt+shift+e", "ctrl+shift+e", "shift+e", "E":
+		return true
+	default:
+		return false
+	}
 }
 
 func (m Model) handleFocusPromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1649,13 +1679,13 @@ func truncateText(text string, maxWidth int) string {
 	if maxWidth <= 0 {
 		return ""
 	}
-	if len([]rune(text)) <= maxWidth {
+	if runewidth.StringWidth(text) <= maxWidth {
 		return text
 	}
 	if maxWidth == 1 {
 		return "…"
 	}
-	return string([]rune(text)[:maxWidth-1]) + "…"
+	return runewidth.Truncate(text, maxWidth-1, "") + "…"
 }
 
 func pluralizeLines(n int) string {

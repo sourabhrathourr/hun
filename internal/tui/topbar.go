@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	reflowtruncate "github.com/muesli/reflow/truncate"
 )
 
 type topBarModel struct {
@@ -47,6 +48,11 @@ func (m topBarModel) View() string {
 
 	projList := strings.Join(tabs, "    ")
 	bar := left + "  " + badge + "  " + projList
+	contentWidth := m.width - 2 // topBarStyle applies horizontal padding 1+1
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+	bar = reflowtruncate.StringWithTail(bar, uint(contentWidth), "…")
 	return topBarStyle.Width(m.width).Render(bar)
 }
 

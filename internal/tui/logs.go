@@ -6,8 +6,10 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 	"github.com/sourabhrathourr/hun/internal/daemon"
 )
 
@@ -248,7 +250,7 @@ func (m logsModel) buildRenderedRows(filtered []daemon.LogLine) []renderedLogRow
 		if m.wrap {
 			wrapped = wrapLogText(text, maxTextWidth)
 		} else {
-			wrapped = []string{truncateText(text, maxTextWidth)}
+			wrapped = []string{truncateDisplayWidth(text, maxTextWidth)}
 		}
 		if len(wrapped) == 0 {
 			wrapped = []string{""}
@@ -823,9 +825,16 @@ func wrapLogText(text string, width int) []string {
 	}
 
 	for _, word := range words {
-		for len([]rune(word)) > width {
-			part := string([]rune(word)[:width])
-			word = string([]rune(word)[width:])
+		for runewidth.StringWidth(word) > width {
+			part := runewidth.Truncate(word, width, "")
+			if part == "" {
+				_, size := utf8.DecodeRuneInString(word)
+				if size <= 0 {
+					break
+				}
+				part = word[:size]
+			}
+			word = strings.TrimPrefix(word, part)
 			if current == "" {
 				lines = append(lines, part)
 			} else {
@@ -839,7 +848,7 @@ func wrapLogText(text string, width int) []string {
 			continue
 		}
 		candidate := current + " " + word
-		if len([]rune(candidate)) <= width {
+		if runewidth.StringWidth(candidate) <= width {
 			current = candidate
 			continue
 		}
@@ -852,6 +861,19 @@ func wrapLogText(text string, width int) []string {
 		return []string{""}
 	}
 	return lines
+}
+
+func truncateDisplayWidth(text string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if runewidth.StringWidth(text) <= width {
+		return text
+	}
+	if width == 1 {
+		return "…"
+	}
+	return runewidth.Truncate(text, width-1, "") + "…"
 }
 
 func maxInt(a, b int) int {

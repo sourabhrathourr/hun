@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 	"github.com/sourabhrathourr/hun/internal/daemon"
 )
 
@@ -140,6 +141,39 @@ func TestLogsWrapToggleBuildsMultipleRows(t *testing.T) {
 	rowsWithWrap := m.buildRenderedRows(m.filteredLines())
 	if len(rowsWithWrap) <= 1 {
 		t.Fatalf("expected wrapped rows > 1, got %d", len(rowsWithWrap))
+	}
+}
+
+func TestLogsRowsClampDisplayWidthForWideRunes(t *testing.T) {
+	m := logsModel{
+		service: "svc",
+		width:   44,
+		height:  12,
+		lines: []daemon.LogLine{{
+			Timestamp: time.Now(),
+			Text:      "emoji-heavy line 🦊🦊🦊 with very wide symbols ✅ and long tail that should never overflow",
+		}},
+	}
+
+	rows := m.buildRenderedRows(m.filteredLines())
+	tsWidth := len("[15:04:05]")
+	maxTextWidth := m.width - 2 - tsWidth - 1
+	if maxTextWidth < 1 {
+		maxTextWidth = 1
+	}
+
+	for _, row := range rows {
+		if runewidth.StringWidth(row.text) > maxTextWidth {
+			t.Fatalf("row width %d exceeds max text width %d: %q", runewidth.StringWidth(row.text), maxTextWidth, row.text)
+		}
+	}
+
+	m.toggleWrap()
+	rows = m.buildRenderedRows(m.filteredLines())
+	for _, row := range rows {
+		if runewidth.StringWidth(row.text) > maxTextWidth {
+			t.Fatalf("wrapped row width %d exceeds max text width %d: %q", runewidth.StringWidth(row.text), maxTextWidth, row.text)
+		}
 	}
 }
 
