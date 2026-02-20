@@ -3,6 +3,18 @@ title: Changelog
 description: What's new in hun.
 ---
 
+## v0.1.6
+
+*Released 2026-02-21*
+
+This release introduces the highly anticipated Log Viewer v2, featuring a dual-pane UX and significantly improved service management.
+
+-   **Log Viewer v2**: Dual-pane UX with dedicated pane-focused keyboard and mouse routing. Features include live mode, wrap toggle, deterministic scrolling, and range selection.
+-   **Clipboard Pipeline**: Enhanced copy/yank UX with a dedicated clipboard pipeline (OSC52 + native fallbacks) and clear toast feedback. Includes a new flash effect for log copying.
+-   **Strict Service State**: Enforced strict fresh in-memory logs via per-service resets. Improved UX for stopped/crashed services and separated explicit service stopping from project stopping.
+-   **Daemon Upgrades**: Added daemon protocol versioning and client auto-restart of stale daemons after an upgrade.
+-   **UI Fixes**: Fixed log UI cropping issues in multi-mode.
+
 ## v0.1.5
 
 *Released 2026-02-18*

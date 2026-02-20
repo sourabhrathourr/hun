@@ -33,13 +33,13 @@
   --chart-4: oklch(0.488 0.243 264.376);
   --chart-5: oklch(0.424 0.199 265.638);
   --radius: 0.625rem;
-  --sidebar: oklch(0.205 0 0);
+  --sidebar: oklch(0.145 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.488 0.243 264.376);
   --sidebar-primary-foreground: oklch(0.985 0 0);
   --sidebar-accent: oklch(0.269 0 0);
   --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-border: transparent;
   --sidebar-ring: oklch(0.556 0 0);
 }
 
@@ -90,28 +90,35 @@
   * {
     @apply border-border outline-ring/50;
   }
+
   body {
     @apply font-sans bg-background text-foreground;
   }
+
   ::selection {
     background: #fafafa;
     color: #0a0a0a;
   }
+
   html {
     @apply font-sans;
     scrollbar-width: thin;
     scrollbar-color: oklch(1 0 0 / 10%) transparent;
   }
+
   html::-webkit-scrollbar {
     width: 6px;
   }
+
   html::-webkit-scrollbar-track {
     background: transparent;
   }
+
   html::-webkit-scrollbar-thumb {
     background: oklch(1 0 0 / 10%);
     border-radius: 3px;
   }
+
   html::-webkit-scrollbar-thumb:hover {
     background: oklch(1 0 0 / 20%);
   }
@@ -127,7 +134,8 @@
   line-height: 1.75;
 }
 
-/* Sidebar: slightly lighter than primary page background */
+/* Sidebar: same as primary page background */
 .docs-root #nd-sidebar {
-  background-color: #101010;
+  background-color: var(--background);
+  border: none;
 }
