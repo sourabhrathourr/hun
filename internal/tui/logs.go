@@ -33,6 +33,12 @@ type logsModel struct {
 	selectionAnchor int // index in rendered rows
 	selectionEnd    int // index in rendered rows
 	selectionPrimed bool
+
+	copyFlashActive bool
+	copyFlashQueued bool
+	copyFlashStart  int // index in rendered rows
+	copyFlashEnd    int // index in rendered rows
+	copyFlashPhase  int // 2=strong, 1=soft
 }
 
 type renderedLogRow struct {
@@ -121,6 +127,10 @@ func (m logsModel) View() string {
 		row := rows[i]
 		isFocused := i == m.cursorRow
 		isSelected := hasSelection && i >= selStart && i <= selEnd
+		flashPhase := 0
+		if !isSelected && m.copyFlashActive && i >= m.copyFlashStart && i <= m.copyFlashEnd {
+			flashPhase = m.copyFlashPhase
+		}
 
 		markerGlyph := "  "
 		if isFocused {
@@ -131,13 +141,13 @@ func (m logsModel) View() string {
 			}
 		}
 
-		markerStyle := lineStyleWithState(lipgloss.NewStyle(), isSelected)
+		markerStyle := lineStyleWithState(lipgloss.NewStyle(), isSelected, flashPhase)
 		if isFocused {
 			cursorStyle := paneFocusInactive
 			if m.active {
 				cursorStyle = serviceCursor
 			}
-			markerStyle = lineStyleWithState(cursorStyle, isSelected)
+			markerStyle = lineStyleWithState(cursorStyle, isSelected, flashPhase)
 		}
 		marker := markerStyle.Render(markerGlyph)
 
@@ -145,14 +155,14 @@ func (m logsModel) View() string {
 		if row.continuation {
 			ts = strings.Repeat(" ", len([]rune(ts)))
 		}
-		tsStyle := lineStyleWithState(logTimestamp, isSelected)
-		sep := lineStyleWithState(lipgloss.NewStyle(), isSelected).Render(" ")
-		textStyle := lineStyleWithState(styleForSeverity(row.severity), isSelected)
+		tsStyle := lineStyleWithState(logTimestamp, isSelected, flashPhase)
+		sep := lineStyleWithState(lipgloss.NewStyle(), isSelected, flashPhase).Render(" ")
+		textStyle := lineStyleWithState(styleForSeverity(row.severity), isSelected, flashPhase)
 		rendered := marker + tsStyle.Render(ts) + sep + textStyle.Render(row.text)
 		if isSelected {
 			padWidth := m.width - lipgloss.Width(rendered)
 			if padWidth > 0 {
-				padStyle := lineStyleWithState(lipgloss.NewStyle(), isSelected)
+				padStyle := lineStyleWithState(lipgloss.NewStyle(), isSelected, flashPhase)
 				rendered += padStyle.Render(strings.Repeat(" ", padWidth))
 			}
 		}
@@ -773,14 +783,81 @@ func rowIndexForLine(rows []renderedLogRow, lineIdx int, preferLast bool) int {
 	return first
 }
 
-func lineStyleWithState(style lipgloss.Style, selected bool) lipgloss.Style {
+func lineStyleWithState(style lipgloss.Style, selected bool, flashPhase int) lipgloss.Style {
 	// Lip Gloss style setters mutate the underlying rules map. Always copy before
 	// applying per-row state so global palette styles don't get contaminated.
 	s := style.Copy()
 	if selected {
 		return s.Background(lipgloss.Color("#173026"))
 	}
+	switch flashPhase {
+	case 2:
+		return s.Background(lipgloss.Color("#153027"))
+	case 1:
+		return s.Background(lipgloss.Color("#11241d"))
+	}
 	return s
+}
+
+func (m *logsModel) queueCopyFlash() bool {
+	filtered := m.filteredLines()
+	rows := m.buildRenderedRows(filtered)
+	if len(rows) == 0 {
+		m.clearCopyFlash()
+		return false
+	}
+
+	if start, end, ok := m.selectionBounds(len(rows)); ok {
+		m.copyFlashStart = start
+		m.copyFlashEnd = end
+	} else {
+		rowIdx := m.cursorRow
+		if rowIdx < 0 || rowIdx >= len(rows) {
+			rowIdx = rowIndexForLine(rows, m.cursor, true)
+			if rowIdx < 0 {
+				rowIdx = len(rows) - 1
+			}
+		}
+		m.copyFlashStart = rowIdx
+		m.copyFlashEnd = rowIdx
+	}
+	if m.copyFlashStart > m.copyFlashEnd {
+		m.copyFlashStart, m.copyFlashEnd = m.copyFlashEnd, m.copyFlashStart
+	}
+	m.copyFlashActive = false
+	m.copyFlashQueued = true
+	m.copyFlashPhase = 0
+	return true
+}
+
+func (m *logsModel) startCopyFlash() bool {
+	if !m.copyFlashQueued {
+		return false
+	}
+	m.copyFlashQueued = false
+	m.copyFlashActive = true
+	m.copyFlashPhase = 2
+	return true
+}
+
+func (m *logsModel) advanceCopyFlash() bool {
+	if !m.copyFlashActive {
+		return false
+	}
+	if m.copyFlashPhase > 1 {
+		m.copyFlashPhase--
+		return true
+	}
+	m.clearCopyFlash()
+	return false
+}
+
+func (m *logsModel) clearCopyFlash() {
+	m.copyFlashActive = false
+	m.copyFlashQueued = false
+	m.copyFlashStart = 0
+	m.copyFlashEnd = 0
+	m.copyFlashPhase = 0
 }
 
 func rowBoundsForLine(rows []renderedLogRow, lineIdx int) (first int, last int, ok bool) {

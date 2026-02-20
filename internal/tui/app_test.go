@@ -760,6 +760,15 @@ func TestKeyYInLogsPaneYanksWithYankToast(t *testing.T) {
 	if m2.toast != "Yanked 1 line" {
 		t.Fatalf("toast = %q, want %q", m2.toast, "Yanked 1 line")
 	}
+	if m2.logs.copyFlashActive {
+		t.Fatal("expected flash to start after a short delay")
+	}
+	if !m2.logs.copyFlashQueued {
+		t.Fatal("expected yank to queue flash")
+	}
+	if m2.logs.copyFlashPhase != 0 {
+		t.Fatalf("copy flash phase = %d, want 0 before start", m2.logs.copyFlashPhase)
+	}
 }
 
 func TestKeyCClearsSelectionAfterCopy(t *testing.T) {
@@ -801,6 +810,15 @@ func TestKeyCClearsSelectionAfterCopy(t *testing.T) {
 	if m2.toast != "Copied 2 lines" {
 		t.Fatalf("toast = %q, want %q", m2.toast, "Copied 2 lines")
 	}
+	if m2.logs.copyFlashActive {
+		t.Fatal("expected flash to start after selection is cleared")
+	}
+	if !m2.logs.copyFlashQueued {
+		t.Fatal("expected copy to queue flash")
+	}
+	if m2.logs.copyFlashPhase != 0 {
+		t.Fatalf("copy flash phase = %d, want 0 before start", m2.logs.copyFlashPhase)
+	}
 }
 
 func TestKeyYClearsSelectionAfterYank(t *testing.T) {
@@ -841,6 +859,72 @@ func TestKeyYClearsSelectionAfterYank(t *testing.T) {
 	}
 	if m2.toast != "Yanked 2 lines" {
 		t.Fatalf("toast = %q, want %q", m2.toast, "Yanked 2 lines")
+	}
+	if m2.logs.copyFlashActive {
+		t.Fatal("expected flash to start after selection is cleared")
+	}
+	if !m2.logs.copyFlashQueued {
+		t.Fatal("expected yank to queue flash")
+	}
+	if m2.logs.copyFlashPhase != 0 {
+		t.Fatalf("copy flash phase = %d, want 0 before start", m2.logs.copyFlashPhase)
+	}
+}
+
+func TestCopyFlashFadesAndClears(t *testing.T) {
+	origOut := osc52Out
+	origCommands := clipboardCommands
+	origExec := clipboardExec
+	t.Cleanup(func() {
+		osc52Out = origOut
+		clipboardCommands = origCommands
+		clipboardExec = origExec
+	})
+
+	osc52Out = &bytes.Buffer{}
+	clipboardCommands = func() []clipboardCommand {
+		return []clipboardCommand{{name: "definitely-missing-binary"}}
+	}
+
+	m := New(false)
+	m.client = nil
+	m.activePane = paneLogs
+	m.logs.height = 12
+	m.logs.width = 100
+	m.logs.setLines([]daemon.LogLine{
+		{Project: "proj", Service: "svc", Text: "line-1", Timestamp: time.Now().Add(-time.Second)},
+		{Project: "proj", Service: "svc", Text: "line-2", Timestamp: time.Now()},
+	})
+
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	m2 := updated.(Model)
+	if m2.logs.copyFlashActive {
+		t.Fatalf("expected no immediate flash, got active=%v", m2.logs.copyFlashActive)
+	}
+	if !m2.logs.copyFlashQueued || m2.logs.copyFlashPhase != 0 {
+		t.Fatalf("expected queued flash before start, got queued=%v phase=%d", m2.logs.copyFlashQueued, m2.logs.copyFlashPhase)
+	}
+	flashID := m2.copyFlashTimer
+
+	updated2, _ := m2.Update(copyFlashStartMsg{id: flashID})
+	m3 := updated2.(Model)
+	if !m3.logs.copyFlashActive || m3.logs.copyFlashPhase != 2 {
+		t.Fatalf("expected flash phase 2 after delayed start, got active=%v phase=%d", m3.logs.copyFlashActive, m3.logs.copyFlashPhase)
+	}
+
+	updated3, _ := m3.Update(copyFlashStepMsg{id: flashID})
+	m4 := updated3.(Model)
+	if !m4.logs.copyFlashActive || m4.logs.copyFlashPhase != 1 {
+		t.Fatalf("expected flash phase 1 after first step, got active=%v phase=%d", m4.logs.copyFlashActive, m4.logs.copyFlashPhase)
+	}
+
+	updated4, _ := m4.Update(copyFlashStepMsg{id: flashID})
+	m5 := updated4.(Model)
+	if m5.logs.copyFlashActive {
+		t.Fatal("expected flash to clear after second step")
+	}
+	if m5.logs.copyFlashPhase != 0 {
+		t.Fatalf("expected flash phase 0 after clear, got %d", m5.logs.copyFlashPhase)
 	}
 }
 

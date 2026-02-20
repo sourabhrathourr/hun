@@ -582,7 +582,7 @@ func TestPrimedSelectionStaysSingleRowOnIncomingLogs(t *testing.T) {
 
 func TestLineStyleWithStateDoesNotMutateGlobalSeverityStyle(t *testing.T) {
 	originalBg := logInfo.GetBackground()
-	_ = lineStyleWithState(logInfo, true)
+	_ = lineStyleWithState(logInfo, true, 0)
 	afterBg := logInfo.GetBackground()
 
 	if originalBg != afterBg {

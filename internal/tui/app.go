@@ -57,8 +57,9 @@ type Model struct {
 	mouseLogSelecting bool
 	projectStopGuard  time.Time
 
-	toast      string
-	toastTimer int
+	toast          string
+	toastTimer     int
+	copyFlashTimer int
 
 	err error
 }
@@ -67,6 +68,8 @@ type tickMsg time.Time
 type statusUpdateMsg map[string]map[string]daemon.ServiceInfo
 type logMsg daemon.LogLine
 type toastExpireMsg struct{ id int }
+type copyFlashStartMsg struct{ id int }
+type copyFlashStepMsg struct{ id int }
 type subscriptionErrMsg struct{ err error }
 type retrySubscribeMsg struct{}
 type logsFetchedMsg struct {
@@ -209,6 +212,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case copyFlashStartMsg:
+		if msg.id != m.copyFlashTimer {
+			return m, nil
+		}
+		if !m.logs.startCopyFlash() {
+			return m, nil
+		}
+		return m, m.copyFlashStepCmd(msg.id)
+
+	case copyFlashStepMsg:
+		if msg.id != m.copyFlashTimer {
+			return m, nil
+		}
+		if m.logs.advanceCopyFlash() {
+			return m, m.copyFlashStepCmd(msg.id)
+		}
+		return m, nil
+
 	case error:
 		m.err = msg
 		return m, nil
@@ -343,6 +364,23 @@ func (m *Model) showToast(text string) tea.Cmd {
 	id := m.toastTimer
 	return tea.Tick(2500*time.Millisecond, func(t time.Time) tea.Msg {
 		return toastExpireMsg{id: id}
+	})
+}
+
+func (m *Model) scheduleCopyFlashCmd() tea.Cmd {
+	if !m.logs.queueCopyFlash() {
+		return nil
+	}
+	m.copyFlashTimer++
+	id := m.copyFlashTimer
+	return tea.Tick(35*time.Millisecond, func(t time.Time) tea.Msg {
+		return copyFlashStartMsg{id: id}
+	})
+}
+
+func (m Model) copyFlashStepCmd(id int) tea.Cmd {
+	return tea.Tick(30*time.Millisecond, func(t time.Time) tea.Msg {
+		return copyFlashStepMsg{id: id}
 	})
 }
 
@@ -503,8 +541,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err := copyToClipboard(payload); err != nil {
 				return m, m.showToast("Copy failed: " + err.Error())
 			}
+			flashCmd := m.scheduleCopyFlashCmd()
 			m.logs.clearSelection()
-			return m, m.showToast("Copied " + pluralizeLines(count))
+			return m, tea.Batch(flashCmd, m.showToast("Copied "+pluralizeLines(count)))
 		}
 		return m, nil
 
@@ -519,10 +558,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if err := copyToClipboard(payload); err != nil {
 			return m, m.showToast("Copy failed: " + err.Error())
 		}
+		flashCmd := m.scheduleCopyFlashCmd()
 		if m.logs.selectionMode {
 			m.logs.clearSelection()
 		}
-		return m, m.showToast("Copied " + pluralizeLines(count))
+		return m, tea.Batch(flashCmd, m.showToast("Copied "+pluralizeLines(count)))
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("y", "Y"))):
 		if m.activePane != paneLogs {
@@ -535,10 +575,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if err := copyToClipboard(payload); err != nil {
 			return m, m.showToast("Copy failed: " + err.Error())
 		}
+		flashCmd := m.scheduleCopyFlashCmd()
 		if m.logs.selectionMode {
 			m.logs.clearSelection()
 		}
-		return m, m.showToast("Yanked " + pluralizeLines(count))
+		return m, tea.Batch(flashCmd, m.showToast("Yanked "+pluralizeLines(count)))
 
 	case key.Matches(msg, key.NewBinding(key.WithKeys("r"))):
 		svcName := ""
