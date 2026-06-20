@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var sidebarRevealShowTask: Task<Void, Never>?
     @State private var sidebarRevealHideTask: Task<Void, Never>?
     @State private var collapsedSections: Set<String> = []
+    @FocusState private var sidebarSearchFocused: Bool
     private let sidebarWidth: CGFloat = 250
 
     private var model: HunDashboardModel { store.model }
@@ -76,6 +77,13 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .background(AppTheme.appBackground)
         .background(WindowChromeConfigurator())
+        .background(
+            WindowInteractionMonitor(
+                onToggleSidebar: toggleSidebar,
+                onFocusProjectSearch: focusProjectSearch,
+                onClearProjectSearchFocus: clearProjectSearchFocus
+            )
+        )
         .ignoresSafeArea(.container, edges: .top)
         .animation(.spring(response: 0.34, dampingFraction: 0.86), value: sidebarDocked)
         .animation(.spring(response: 0.32, dampingFraction: 0.88), value: sidebarRevealed)
@@ -142,6 +150,7 @@ struct ContentView: View {
         SidebarColumnView(
             docked: docked,
             searchText: $sidebarSearch,
+            searchFocused: $sidebarSearchFocused,
             workspaceGroups: workspaceGroups,
             activeID: store.selectedProjectID ?? "",
             collapsedSections: $collapsedSections,
@@ -234,8 +243,30 @@ struct ContentView: View {
 
     private func collapseSidebar() {
         cancelSidebarRevealTasks()
+        sidebarSearchFocused = false
         sidebarDocked = false
         sidebarRevealed = false
+    }
+
+    private func toggleSidebar() {
+        if sidebarDocked {
+            collapseSidebar()
+        } else {
+            dockSidebar()
+        }
+    }
+
+    private func focusProjectSearch() {
+        cancelSidebarRevealTasks()
+        sidebarRevealed = false
+        sidebarDocked = true
+        DispatchQueue.main.async {
+            sidebarSearchFocused = true
+        }
+    }
+
+    private func clearProjectSearchFocus() {
+        sidebarSearchFocused = false
     }
 
     private func humanize(_ s: String) -> String {
@@ -250,6 +281,7 @@ struct ContentView: View {
 private struct SidebarColumnView: View {
     let docked: Bool
     @Binding var searchText: String
+    let searchFocused: FocusState<Bool>.Binding
     let workspaceGroups: [(name: String, projects: [HunProject])]
     let activeID: String
     @Binding var collapsedSections: Set<String>
@@ -266,6 +298,7 @@ private struct SidebarColumnView: View {
 
             SidebarView(
                 searchText: $searchText,
+                searchFocused: searchFocused,
                 workspaceGroups: workspaceGroups,
                 activeID: activeID,
                 collapsedSections: $collapsedSections,
@@ -295,6 +328,7 @@ private struct SidebarTitlebarChrome: View {
 
 private struct SidebarView: View {
     @Binding var searchText: String
+    let searchFocused: FocusState<Bool>.Binding
     let workspaceGroups: [(name: String, projects: [HunProject])]
     let activeID: String
     @Binding var collapsedSections: Set<String>
@@ -310,7 +344,7 @@ private struct SidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            SidebarSearchField(text: $searchText)
+            SidebarSearchField(text: $searchText, isFocused: searchFocused)
                 .padding(.horizontal, 10)
                 .padding(.top, 10)
                 .padding(.bottom, 8)
@@ -402,6 +436,7 @@ private struct SidebarFooter: View {
 
 private struct SidebarSearchField: View {
     @Binding var text: String
+    let isFocused: FocusState<Bool>.Binding
 
     var body: some View {
         HStack(spacing: 7) {
@@ -412,13 +447,7 @@ private struct SidebarSearchField: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .foregroundStyle(AppTheme.textPrimary)
-            if text.isEmpty {
-                HStack(spacing: 1) {
-                    Text("⌘").font(.system(size: 10, weight: .medium))
-                    Text("P").font(.system(size: 10, weight: .medium))
-                }
-                .foregroundStyle(AppTheme.textTertiary)
-            }
+                .focused(isFocused)
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 6)
@@ -663,6 +692,111 @@ private struct WindowChromeConfigurator: NSViewRepresentable {
     }
 }
 
+private struct WindowInteractionMonitor: NSViewRepresentable {
+    let onToggleSidebar: () -> Void
+    let onFocusProjectSearch: () -> Void
+    let onClearProjectSearchFocus: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(
+            onToggleSidebar: onToggleSidebar,
+            onFocusProjectSearch: onFocusProjectSearch,
+            onClearProjectSearchFocus: onClearProjectSearchFocus
+        )
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        context.coordinator.attach(to: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.onToggleSidebar = onToggleSidebar
+        context.coordinator.onFocusProjectSearch = onFocusProjectSearch
+        context.coordinator.onClearProjectSearchFocus = onClearProjectSearchFocus
+        context.coordinator.attach(to: nsView)
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.invalidate()
+    }
+
+    final class Coordinator {
+        var onToggleSidebar: () -> Void
+        var onFocusProjectSearch: () -> Void
+        var onClearProjectSearchFocus: () -> Void
+
+        private weak var view: NSView?
+        private var monitor: Any?
+
+        init(
+            onToggleSidebar: @escaping () -> Void,
+            onFocusProjectSearch: @escaping () -> Void,
+            onClearProjectSearchFocus: @escaping () -> Void
+        ) {
+            self.onToggleSidebar = onToggleSidebar
+            self.onFocusProjectSearch = onFocusProjectSearch
+            self.onClearProjectSearchFocus = onClearProjectSearchFocus
+        }
+
+        deinit {
+            invalidate()
+        }
+
+        func attach(to view: NSView) {
+            self.view = view
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]
+            ) { [weak self] event in
+                self?.handle(event) ?? event
+            }
+        }
+
+        func invalidate() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
+
+        private func handle(_ event: NSEvent) -> NSEvent? {
+            guard let view, event.window === view.window else { return event }
+
+            switch event.type {
+            case .keyDown:
+                return handleKeyDown(event)
+            case .leftMouseDown, .rightMouseDown, .otherMouseDown:
+                onClearProjectSearchFocus()
+                return event
+            default:
+                return event
+            }
+        }
+
+        private func handleKeyDown(_ event: NSEvent) -> NSEvent? {
+            let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            guard modifiers == .command,
+                  let key = event.charactersIgnoringModifiers?.lowercased()
+            else {
+                return event
+            }
+
+            switch key {
+            case "b":
+                onToggleSidebar()
+                return nil
+            case "p":
+                onFocusProjectSearch()
+                return nil
+            default:
+                return event
+            }
+        }
+    }
+}
+
 private struct ProjectTabView: View {
     let project: HunProject
     let active: Bool
@@ -819,6 +953,46 @@ private struct ProjectHeaderView: View {
     let onClearLogo: () -> Void
     let onCopyAgentPrompt: () -> Void
 
+    private var primaryAction: ProjectHeaderAction {
+        if pendingAction == .startProject {
+            return ProjectHeaderAction(
+                title: mode.primaryActionTitle,
+                systemImage: mode.primaryActionIcon,
+                style: .primary,
+                isLoading: true,
+                action: mode == .focus ? onFocus : onRun
+            )
+        }
+
+        if pendingAction == .stopProject {
+            return ProjectHeaderAction(
+                title: "Stop",
+                systemImage: "stop.fill",
+                style: .danger,
+                isLoading: true,
+                action: onStop
+            )
+        }
+
+        if project.status == .running || project.status == .starting {
+            return ProjectHeaderAction(
+                title: "Stop",
+                systemImage: "stop.fill",
+                style: .danger,
+                isLoading: pendingAction == .stopProject,
+                action: onStop
+            )
+        }
+
+        return ProjectHeaderAction(
+            title: mode.primaryActionTitle,
+            systemImage: mode.primaryActionIcon,
+            style: .primary,
+            isLoading: pendingAction == .startProject,
+            action: mode == .focus ? onFocus : onRun
+        )
+    }
+
     var body: some View {
         HStack(alignment: .center, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
@@ -844,12 +1018,12 @@ private struct ProjectHeaderView: View {
 
             HStack(spacing: 6) {
                 ActionButton(
-                    title: mode.primaryActionTitle,
-                    systemImage: mode.primaryActionIcon,
-                    style: .primary,
-                    isLoading: pendingAction == .startProject,
+                    title: primaryAction.title,
+                    systemImage: primaryAction.systemImage,
+                    style: primaryAction.style,
+                    isLoading: primaryAction.isLoading,
                     isDisabled: pendingAction != nil,
-                    action: mode == .focus ? onFocus : onRun
+                    action: primaryAction.action
                 )
                 ActionButton(
                     title: "Restart",
@@ -858,14 +1032,6 @@ private struct ProjectHeaderView: View {
                     isLoading: pendingAction == .restartProject,
                     isDisabled: pendingAction != nil,
                     action: onRestart
-                )
-                ActionButton(
-                    title: "Stop",
-                    systemImage: "stop.fill",
-                    style: .danger,
-                    isLoading: pendingAction == .stopProject,
-                    isDisabled: pendingAction != nil,
-                    action: onStop
                 )
                 ActionButton(title: "Config", systemImage: "square.and.pencil", style: .secondary, action: onOpenConfig)
                 LogoMenuButton(
@@ -887,6 +1053,14 @@ private struct ProjectHeaderView: View {
         }
         return path
     }
+}
+
+private struct ProjectHeaderAction {
+    let title: String
+    let systemImage: String
+    let style: ActionStyle
+    let isLoading: Bool
+    let action: () -> Void
 }
 
 private struct StatusMetaItem: View {
@@ -1278,7 +1452,7 @@ private struct LogSearchField: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(AppTheme.textTertiary)
-            TextField("Filter", text: $text)
+            TextField("Search", text: $text)
                 .textFieldStyle(.plain)
                 .font(.system(size: 11))
                 .foregroundStyle(AppTheme.textPrimary)
@@ -1292,12 +1466,16 @@ private struct LogSearchField: View {
             }
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .frame(height: LogsToolbarMetrics.controlHeight)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(AppTheme.searchField)
         )
     }
+}
+
+private enum LogsToolbarMetrics {
+    static let controlHeight: CGFloat = 24
 }
 
 private struct ScopeSegmented: View {
@@ -1309,6 +1487,7 @@ private struct ScopeSegmented: View {
             scopeButton("All", .combined)
         }
         .padding(2)
+        .frame(height: LogsToolbarMetrics.controlHeight)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(AppTheme.searchField)
@@ -1371,7 +1550,7 @@ private struct CopyLogsButton: View {
             }
             .foregroundStyle(showingConfirm ? AppTheme.success : (hovering ? AppTheme.textPrimary : AppTheme.textSecondary))
             .padding(.horizontal, 9)
-            .padding(.vertical, 4)
+            .frame(height: LogsToolbarMetrics.controlHeight)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(hovering ? AppTheme.hover : AppTheme.searchField)

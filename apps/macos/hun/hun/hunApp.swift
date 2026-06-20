@@ -20,7 +20,6 @@ struct hunApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .commands {
-            SidebarCommands()
             CommandGroup(replacing: .newItem) {
                 Button("Open Dashboard") {
                     Self.openDashboard()
