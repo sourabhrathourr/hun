@@ -187,7 +187,7 @@ nonisolated struct HunDaemonLogLine: Decodable, Equatable {
 }
 
 nonisolated final class HunDaemonClient: HunDaemonClientProtocol {
-    private static let requiredProtocol = 9
+    private static let requiredProtocol = 10
     private let socketPath: String
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()

@@ -328,7 +328,7 @@ func (m *Manager) startConfiguredService(projectName, serviceName string, svcCon
 	// Every start boundary represents a fresh in-memory log session.
 	m.logs.ResetService(projectName, serviceName)
 
-	proc.onOutput = func(line string, isErr bool) {
+	emitServiceLine := func(line string, isErr bool) {
 		logLine := LogLine{
 			Timestamp: time.Now(),
 			Service:   serviceName,
@@ -340,6 +340,14 @@ func (m *Manager) startConfiguredService(projectName, serviceName string, svcCon
 		m.subscribers.Broadcast(logLine)
 		m.observeRuntimePort(projectName, serviceName, line)
 	}
+
+	if err := ensureDockerReadyForCommand(svcConfig.Cmd, func(line string) {
+		emitServiceLine(line, false)
+	}); err != nil {
+		return nil, err
+	}
+
+	proc.onOutput = emitServiceLine
 
 	proc.onExit = func(err error, intentional bool) {
 		status := "stopped"
