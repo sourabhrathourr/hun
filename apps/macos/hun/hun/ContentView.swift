@@ -5,10 +5,12 @@ struct ContentView: View {
     @Environment(HunStore.self) private var store
     @State private var sidebarSearch = ""
     @State private var logSearch = ""
-    @State private var sidebarVisible = true
+    @State private var sidebarDocked = true
+    @State private var sidebarRevealed = false
+    @State private var sidebarRevealShowTask: Task<Void, Never>?
+    @State private var sidebarRevealHideTask: Task<Void, Never>?
     @State private var collapsedSections: Set<String> = []
     private let sidebarWidth: CGFloat = 250
-    private let collapsedSidebarWidth: CGFloat = 110
 
     private var model: HunDashboardModel { store.model }
 
@@ -49,83 +51,168 @@ struct ContentView: View {
     }
 
     var body: some View {
-        @Bindable var store = store
-        HStack(spacing: 0) {
-            SidebarColumnView(
-                expanded: sidebarVisible,
-                searchText: $sidebarSearch,
-                workspaceGroups: workspaceGroups,
-                activeID: store.selectedProjectID ?? "",
-                collapsedSections: $collapsedSections,
-                onSelectProject: openProject,
-                onToggleSidebar: toggleSidebar
-            )
-            .frame(width: sidebarVisible ? sidebarWidth : collapsedSidebarWidth)
-            .background(AppTheme.sidebar)
-            .overlay(alignment: .trailing) {
-                Rectangle().fill(AppTheme.divider).frame(width: 1)
-            }
-            .clipped()
-            .zIndex(1)
-
-            VStack(spacing: 0) {
-                TopBarView(
-                    openProjects: openProjects,
-                    activeID: $store.selectedProjectID,
-                    mode: $store.globalMode,
-                    onSelect: selectProjectTab,
-                    onClose: closeTab,
-                    onRefresh: { store.refreshNow() }
-                )
-                .background(AppTheme.appBackground)
-
-                Rectangle().fill(AppTheme.divider).frame(height: 1)
-
-                if let lastError = store.lastError {
-                    ErrorBanner(message: lastError, onDismiss: { store.clearLastError() })
-                    Rectangle().fill(AppTheme.divider).frame(height: 1)
+        ZStack(alignment: .topLeading) {
+            HStack(spacing: 0) {
+                if sidebarDocked {
+                    sidebar(docked: true)
+                        .frame(width: sidebarWidth)
+                        .background(AppTheme.sidebar)
+                        .overlay(alignment: .trailing) {
+                            Rectangle().fill(AppTheme.divider).frame(width: 1)
+                        }
+                        .clipped()
+                        .zIndex(1)
+                        .transition(.move(edge: .leading).combined(with: .opacity))
                 }
 
-                Group {
-                    if let project = activeProject {
-                        ProjectDetailView(
-                            project: project,
-                            mode: store.globalMode,
-                            pendingAction: store.projectAction(for: project),
-                            logSearch: $logSearch,
-                            selectedServiceID: $store.selectedServiceID,
-                            selectedLogScope: $store.selectedLogScope,
-                            visibleLogs: visibleLogs,
-                            onFocus: { store.focus(project) },
-                            onRun: { store.run(project) },
-                            onRestart: { store.restart(project) },
-                            onStop: { store.stop(project) },
-                            onOpenConfig: { store.openConfig(for: project) },
-                            onChooseLogo: { store.chooseLogo(for: project) },
-                            onClearLogo: { store.clearLogo(for: project) },
-                            onCopyAgentPrompt: { store.copyAgentPrompt(for: project) },
-                            onRunService: { service in store.run(service, in: project) },
-                            onRestartService: { service in store.restart(service, in: project) },
-                            onStopService: { service in store.stop(service, in: project) },
-                            onRemoveService: { service in store.remove(service, from: project) }
-                        )
-                    } else {
-                        EmptyStateView(projectCount: model.projects.count, onRefresh: { store.refreshNow() })
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(AppTheme.appBackground)
+                mainContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if !sidebarDocked {
+                sidebarRevealLayer
+            }
         }
         .preferredColorScheme(.dark)
         .background(AppTheme.appBackground)
         .background(WindowChromeConfigurator())
         .ignoresSafeArea(.container, edges: .top)
-        .animation(.easeInOut(duration: 0.2), value: sidebarVisible)
+        .animation(.spring(response: 0.34, dampingFraction: 0.86), value: sidebarDocked)
+        .animation(.spring(response: 0.32, dampingFraction: 0.88), value: sidebarRevealed)
         .task {
             await store.refresh(force: true)
         }
+    }
+
+    private var mainContent: some View {
+        @Bindable var store = store
+        return VStack(spacing: 0) {
+            TopBarView(
+                openProjects: openProjects,
+                activeID: $store.selectedProjectID,
+                mode: $store.globalMode,
+                showSidebarControl: !sidebarDocked,
+                onSelect: selectProjectTab,
+                onClose: closeTab,
+                onRefresh: { store.refreshNow() },
+                onToggleSidebar: dockSidebar
+            )
+            .background(AppTheme.appBackground)
+
+            Rectangle().fill(AppTheme.divider).frame(height: 1)
+
+            if let lastError = store.lastError {
+                ErrorBanner(message: lastError, onDismiss: { store.clearLastError() })
+                Rectangle().fill(AppTheme.divider).frame(height: 1)
+            }
+
+            Group {
+                if let project = activeProject {
+                    ProjectDetailView(
+                        project: project,
+                        mode: store.globalMode,
+                        pendingAction: store.projectAction(for: project),
+                        logSearch: $logSearch,
+                        selectedServiceID: $store.selectedServiceID,
+                        selectedLogScope: $store.selectedLogScope,
+                        visibleLogs: visibleLogs,
+                        onFocus: { store.focus(project) },
+                        onRun: { store.run(project) },
+                        onRestart: { store.restart(project) },
+                        onStop: { store.stop(project) },
+                        onOpenConfig: { store.openConfig(for: project) },
+                        onChooseLogo: { store.chooseLogo(for: project) },
+                        onClearLogo: { store.clearLogo(for: project) },
+                        onCopyAgentPrompt: { store.copyAgentPrompt(for: project) },
+                        onRunService: { service in store.run(service, in: project) },
+                        onRestartService: { service in store.restart(service, in: project) },
+                        onStopService: { service in store.stop(service, in: project) },
+                        onRemoveService: { service in store.remove(service, from: project) }
+                    )
+                } else {
+                    EmptyStateView(projectCount: model.projects.count, onRefresh: { store.refreshNow() })
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(AppTheme.appBackground)
+        }
+        .padding(.leading, sidebarDocked ? 0 : 8)
+    }
+
+    private func sidebar(docked: Bool) -> some View {
+        SidebarColumnView(
+            docked: docked,
+            searchText: $sidebarSearch,
+            workspaceGroups: workspaceGroups,
+            activeID: store.selectedProjectID ?? "",
+            collapsedSections: $collapsedSections,
+            onSelectProject: openProject,
+            onToggleSidebar: { if docked { collapseSidebar() } else { dockSidebar() } }
+        )
+    }
+
+    private var sidebarRevealLayer: some View {
+        ZStack(alignment: .topLeading) {
+            if sidebarRevealed {
+                sidebar(docked: false)
+                    .frame(width: sidebarWidth)
+                    .frame(maxHeight: .infinity)
+                    .background(AppTheme.appBackground)
+                    .overlay(alignment: .trailing) {
+                        Rectangle().fill(AppTheme.divider).frame(width: 1)
+                    }
+                    .onHover { setSidebarReveal($0) }
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+                    .zIndex(1)
+            }
+
+            // Edge trigger stays on top so the panel never covers it. That keeps
+            // hover tracking stable while the panel slides in/out and prevents the
+            // reveal state from oscillating.
+            Color.clear
+                .frame(width: 12)
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .onHover { setSidebarReveal($0) }
+                .zIndex(2)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func setSidebarReveal(_ hovering: Bool) {
+        if hovering {
+            // Cancel any pending hide; the cursor is back over the edge/panel.
+            sidebarRevealHideTask?.cancel()
+            sidebarRevealHideTask = nil
+            guard !sidebarRevealed, sidebarRevealShowTask == nil else { return }
+            // Require a brief dwell before revealing so a quick pass across the
+            // edge (or moving the cursor in/out of the window) doesn't flicker.
+            sidebarRevealShowTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(120))
+                guard !Task.isCancelled else { return }
+                sidebarRevealShowTask = nil
+                sidebarRevealed = true
+            }
+        } else {
+            // A pending reveal that never matured is cancelled outright.
+            sidebarRevealShowTask?.cancel()
+            sidebarRevealShowTask = nil
+            guard sidebarRevealed else { return }
+            sidebarRevealHideTask?.cancel()
+            sidebarRevealHideTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(140))
+                guard !Task.isCancelled else { return }
+                sidebarRevealHideTask = nil
+                sidebarRevealed = false
+            }
+        }
+    }
+
+    private func cancelSidebarRevealTasks() {
+        sidebarRevealShowTask?.cancel()
+        sidebarRevealShowTask = nil
+        sidebarRevealHideTask?.cancel()
+        sidebarRevealHideTask = nil
     }
 
     private func openProject(_ id: String) {
@@ -140,10 +227,16 @@ struct ContentView: View {
         store.closeTab(id)
     }
 
-    private func toggleSidebar() {
-        withAnimation(.easeInOut(duration: 0.2)) {
-            sidebarVisible.toggle()
-        }
+    private func dockSidebar() {
+        cancelSidebarRevealTasks()
+        sidebarRevealed = false
+        sidebarDocked = true
+    }
+
+    private func collapseSidebar() {
+        cancelSidebarRevealTasks()
+        sidebarDocked = false
+        sidebarRevealed = false
     }
 
     private func humanize(_ s: String) -> String {
@@ -156,7 +249,7 @@ struct ContentView: View {
 // MARK: - Sidebar
 
 private struct SidebarColumnView: View {
-    let expanded: Bool
+    let docked: Bool
     @Binding var searchText: String
     let workspaceGroups: [(name: String, projects: [HunProject])]
     let activeID: String
@@ -167,37 +260,36 @@ private struct SidebarColumnView: View {
     var body: some View {
         VStack(spacing: 0) {
             SidebarTitlebarChrome(
-                expanded: expanded,
+                docked: docked,
                 onToggleSidebar: onToggleSidebar
             )
             .frame(height: 44)
 
-            if expanded {
-                SidebarView(
-                    searchText: $searchText,
-                    workspaceGroups: workspaceGroups,
-                    activeID: activeID,
-                    collapsedSections: $collapsedSections,
-                    onSelectProject: onSelectProject
-                )
-                .transition(.opacity.combined(with: .move(edge: .leading)))
-            } else {
-                Spacer(minLength: 0)
-            }
+            SidebarView(
+                searchText: $searchText,
+                workspaceGroups: workspaceGroups,
+                activeID: activeID,
+                collapsedSections: $collapsedSections,
+                onSelectProject: onSelectProject
+            )
         }
     }
 }
 
 private struct SidebarTitlebarChrome: View {
-    let expanded: Bool
+    let docked: Bool
     let onToggleSidebar: () -> Void
 
     var body: some View {
         HStack(spacing: 0) {
             Spacer().frame(width: 72) // traffic light reservation
             Spacer(minLength: 0)
-            ToolbarIconButton(systemImage: "sidebar.left", action: onToggleSidebar)
-                .padding(.trailing, expanded ? 6 : 4)
+            ToolbarIconButton(
+                systemImage: "sidebar.left",
+                helpText: docked ? "Hide sidebar" : "Dock sidebar",
+                action: onToggleSidebar
+            )
+            .padding(.trailing, 6)
         }
     }
 }
@@ -463,12 +555,26 @@ private struct TopBarView: View {
     let openProjects: [HunProject]
     @Binding var activeID: String?
     @Binding var mode: HunMode
+    let showSidebarControl: Bool
     let onSelect: (String) -> Void
     let onClose: (String) -> Void
     let onRefresh: () -> Void
+    let onToggleSidebar: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
+            if showSidebarControl {
+                HStack(spacing: 2) {
+                    Spacer().frame(width: 72) // traffic light reservation
+                    ToolbarIconButton(
+                        systemImage: "sidebar.left",
+                        helpText: "Show sidebar",
+                        action: onToggleSidebar
+                    )
+                }
+                .transition(.opacity)
+            }
+
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 2) {
                     ForEach(openProjects) { project in
@@ -484,7 +590,7 @@ private struct TopBarView: View {
                 }
                 .padding(.horizontal, 4)
             }
-            .padding(.leading, 20)
+            .padding(.leading, showSidebarControl ? 4 : 20)
 
             Spacer(minLength: 0)
 

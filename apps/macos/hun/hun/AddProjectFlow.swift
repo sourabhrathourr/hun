@@ -3,6 +3,13 @@ import AppKit
 import UniformTypeIdentifiers
 
 struct AddProjectButton: View {
+    enum Style {
+        case full
+        case compact
+    }
+
+    var style: Style = .full
+
     @Environment(HunStore.self) private var store
     @State private var showImporter = false
     @State private var hovering = false
@@ -14,40 +21,15 @@ struct AddProjectButton: View {
                 showImporter = true
             }
         } label: {
-            HStack(spacing: 8) {
-                if store.isAddingProject {
-                    ProgressView()
-                        .controlSize(.mini)
-                        .frame(width: 14)
-                } else {
-                    Image(systemName: "plus")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(AppTheme.textTertiary)
-                        .frame(width: 14)
-                }
-                Text(title)
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(hovering ? AppTheme.textPrimary : AppTheme.textSecondary)
-                Spacer(minLength: 4)
-                Text("⌘N")
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                    .foregroundStyle(AppTheme.textTertiary)
-                    .opacity(hovering && !store.isAddingProject ? 1 : 0)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(hovering ? AppTheme.hover : Color.clear)
-            )
-            .contentShape(Rectangle())
+            label
         }
         .buttonStyle(.plain)
         .disabled(store.isAddingProject)
         .opacity(store.isAddingProject ? 0.75 : 1)
         .onHover { hovering = $0 }
-        .help("Run hun init in a project folder")
+        .help(helpText)
         .keyboardShortcut("n", modifiers: .command)
+        .animation(.easeOut(duration: 0.12), value: hovering)
         .fileImporter(
             isPresented: $showImporter,
             allowedContentTypes: [.folder],
@@ -68,6 +50,65 @@ struct AddProjectButton: View {
         }
     }
 
+    @ViewBuilder
+    private var label: some View {
+        switch style {
+        case .full:
+            fullLabel
+        case .compact:
+            compactLabel
+        }
+    }
+
+    private var fullLabel: some View {
+        HStack(spacing: 8) {
+            if store.isAddingProject {
+                ProgressView()
+                    .controlSize(.mini)
+                    .frame(width: 14)
+            } else {
+                Image(systemName: "plus")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(AppTheme.textTertiary)
+                    .frame(width: 14)
+            }
+            Text(title)
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(hovering ? AppTheme.textPrimary : AppTheme.textSecondary)
+            Spacer(minLength: 4)
+            Text("⌘N")
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .foregroundStyle(AppTheme.textTertiary)
+                .opacity(hovering && !store.isAddingProject ? 1 : 0)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(hovering ? AppTheme.hover : Color.clear)
+        )
+        .contentShape(Rectangle())
+    }
+
+    private var compactLabel: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(hovering ? AppTheme.hover : Color.clear)
+                .frame(width: 40, height: 40)
+            if store.isAddingProject {
+                ProgressView()
+                    .controlSize(.mini)
+            } else {
+                Image(systemName: "plus")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(hovering ? AppTheme.textPrimary : AppTheme.textSecondary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 44)
+        .contentShape(Rectangle())
+    }
+
     private var title: String {
         if store.isAddingProject {
             return "Scanning project"
@@ -76,6 +117,13 @@ struct AddProjectButton: View {
             return "Review project"
         }
         return "Add project"
+    }
+
+    private var helpText: String {
+        if style == .compact {
+            return "Add project (⌘N)"
+        }
+        return "Run hun init in a project folder"
     }
 }
 
