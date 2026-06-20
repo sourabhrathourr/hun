@@ -94,7 +94,6 @@ struct ContentView: View {
                 showSidebarControl: !sidebarDocked,
                 onSelect: selectProjectTab,
                 onClose: closeTab,
-                onRefresh: { store.refreshNow() },
                 onToggleSidebar: dockSidebar
             )
             .background(AppTheme.appBackground)
@@ -558,7 +557,6 @@ private struct TopBarView: View {
     let showSidebarControl: Bool
     let onSelect: (String) -> Void
     let onClose: (String) -> Void
-    let onRefresh: () -> Void
     let onToggleSidebar: () -> Void
 
     var body: some View {
@@ -586,7 +584,6 @@ private struct TopBarView: View {
                             onClose: { onClose(project.id) }
                         )
                     }
-                    ToolbarIconButton(systemImage: "arrow.clockwise", action: onRefresh)
                 }
                 .padding(.horizontal, 4)
             }
@@ -1213,6 +1210,12 @@ private struct LogsPanelView: View {
         scope == .combined ? "All logs" : (selectedService?.name ?? "Logs")
     }
 
+    /// Identity for the tail view so it resets (and re-tails) when the user
+    /// switches scope or service, instead of carrying over a stale paused state.
+    private var tailIdentity: String {
+        scope == .combined ? "combined" : "service|\(selectedService?.id ?? "")"
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
@@ -1243,7 +1246,12 @@ private struct LogsPanelView: View {
             if logs.isEmpty {
                 LogsEmptyState()
             } else {
-                LogsTailContainer(logs: logs, showService: scope == .combined)
+                LogsTailContainer(
+                    logs: logs,
+                    showService: scope == .combined,
+                    highlight: searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+                .id(tailIdentity)
             }
         }
         .background(AppTheme.appBackground)
@@ -1408,6 +1416,7 @@ private struct LogsEmptyState: View {
 private struct LogsTailContainer: View {
     let logs: [HunLogLine]
     let showService: Bool
+    let highlight: String
 
     @State private var isTailing = true
     @State private var newSincePause = 0
@@ -1420,6 +1429,7 @@ private struct LogsTailContainer: View {
             LogsTextView(
                 logs: logs,
                 showService: showService,
+                highlight: highlight,
                 hovering: hovering,
                 isTailing: $isTailing,
                 scrollTrigger: scrollTrigger
@@ -1503,6 +1513,7 @@ private struct LiveTailButton: View {
 private struct LogsTextView: NSViewRepresentable {
     let logs: [HunLogLine]
     let showService: Bool
+    let highlight: String
     let hovering: Bool
     @Binding var isTailing: Bool
     let scrollTrigger: Int
@@ -1530,7 +1541,7 @@ private struct LogsTextView: NSViewRepresentable {
 
     private var signature: String {
         let lastID = logs.last.map { String(describing: $0.id) } ?? ""
-        return "\(logs.count)|\(lastID)|\(showService)"
+        return "\(logs.count)|\(lastID)|\(showService)|\(highlight)"
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -1660,6 +1671,9 @@ private struct LogsTextView: NSViewRepresentable {
     private static let bodyFont: NSFont = .monospacedSystemFont(ofSize: 12, weight: .regular)
     private static let serviceFont: NSFont = .monospacedSystemFont(ofSize: 11, weight: .medium)
 
+    private static let highlightBackground = NSColor(red: 0.99, green: 0.80, blue: 0.30, alpha: 0.32)
+    private static let highlightForeground = NSColor(white: 0.99, alpha: 1)
+
     private func buildAttributedString() -> (NSAttributedString, [NSRange]) {
         let result = NSMutableAttributedString()
 
@@ -1667,6 +1681,8 @@ private struct LogsTextView: NSViewRepresentable {
         paragraph.lineSpacing = 1.5
         paragraph.headIndent = serviceColumnWidth + timeColumnWidth + 4
         paragraph.firstLineHeadIndent = 0
+
+        let query = highlight.trimmingCharacters(in: .whitespacesAndNewlines)
 
         var ranges: [NSRange] = []
         ranges.reserveCapacity(logs.count)
@@ -1679,33 +1695,58 @@ private struct LogsTextView: NSViewRepresentable {
             let timeText = (line.time as NSString).padding(toLength: 13, withPad: " ", startingAt: 0)
             result.append(NSAttributedString(string: timeText + "  ", attributes: [
                 .font: Self.timeFont,
-                .foregroundColor: NSColor(AppTheme.textTertiary),
+                .foregroundColor: NSColor(AppTheme.logTimestamp),
                 .paragraphStyle: paragraph
             ]))
 
             // Service (combined view)
             if showService {
+                let serviceStart = result.length
                 let svc = (line.service as NSString).padding(toLength: 10, withPad: " ", startingAt: 0)
                 result.append(NSAttributedString(string: svc + "  ", attributes: [
                     .font: Self.serviceFont,
                     .foregroundColor: serviceAccent(for: line.service),
                     .paragraphStyle: paragraph
                 ]))
+                highlightMatches(in: result, plain: line.service, startLocation: serviceStart, query: query)
             }
 
             // Message
+            let messageStart = result.length
             let trailing = isLast ? "" : "\n"
             result.append(NSAttributedString(string: line.message + trailing, attributes: [
                 .font: Self.bodyFont,
                 .foregroundColor: messageColor(for: line.level),
                 .paragraphStyle: paragraph
             ]))
+            highlightMatches(in: result, plain: line.message, startLocation: messageStart, query: query)
 
             let lineEnd = result.length - (trailing.isEmpty ? 0 : 1)
             ranges.append(NSRange(location: lineStart, length: lineEnd - lineStart))
         }
 
         return (result, ranges)
+    }
+
+    /// Applies a search highlight to every case-insensitive occurrence of
+    /// `query` within `plain`, offset to its position in `result`.
+    private func highlightMatches(in result: NSMutableAttributedString, plain: String, startLocation: Int, query: String) {
+        guard !query.isEmpty else { return }
+        let haystack = plain as NSString
+        var searchStart = 0
+        while searchStart < haystack.length {
+            let scope = NSRange(location: searchStart, length: haystack.length - searchStart)
+            let found = haystack.range(of: query, options: [.caseInsensitive], range: scope)
+            if found.location == NSNotFound { break }
+            result.addAttributes(
+                [
+                    .backgroundColor: Self.highlightBackground,
+                    .foregroundColor: Self.highlightForeground
+                ],
+                range: NSRange(location: startLocation + found.location, length: found.length)
+            )
+            searchStart = found.location + max(found.length, 1)
+        }
     }
 
     private var timeColumnWidth: CGFloat { 110 }
@@ -1715,7 +1756,7 @@ private struct LogsTextView: NSViewRepresentable {
         switch level {
         case .error: return NSColor(AppTheme.danger)
         case .warning: return NSColor(AppTheme.warning)
-        case .info: return NSColor(AppTheme.textPrimary.opacity(0.92))
+        case .info: return NSColor(AppTheme.logText)
         }
     }
 

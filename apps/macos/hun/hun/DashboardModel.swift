@@ -875,6 +875,11 @@ enum AppTheme {
     static let textSecondary = Color.white.opacity(0.55)
     static let textTertiary = Color.white.opacity(0.36)
 
+    /// Neutral used for log body text — readable but softer than pure white.
+    static let logText = Color.white.opacity(0.66)
+    /// Dimmer still, for log timestamps.
+    static let logTimestamp = Color.white.opacity(0.26)
+
     static let accent = Color(red: 0.369, green: 0.416, blue: 0.824)
     static let success = Color(red: 0.34, green: 0.78, blue: 0.45)
     static let warning = Color(red: 0.95, green: 0.66, blue: 0.34)

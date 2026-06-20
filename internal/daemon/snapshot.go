@@ -2,7 +2,10 @@ package daemon
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/sourabhrathourr/hun/internal/config"
@@ -192,6 +195,13 @@ func (m *Manager) lastScanAt() time.Time {
 
 func (m *Manager) snapshotProject(name, path string, st *state.State, live map[string]ServiceInfo) SnapshotProject {
 	projectState := st.Projects[name]
+	// Read the branch live so it reflects local checkouts without needing a
+	// restart; fall back to the last persisted value if the working tree
+	// can't be read.
+	branch := currentGitBranch(path)
+	if branch == "" {
+		branch = projectState.GitBranch
+	}
 	project := SnapshotProject{
 		ID:         name,
 		Name:       name,
@@ -200,7 +210,7 @@ func (m *Manager) snapshotProject(name, path string, st *state.State, live map[s
 		IconCustom: projectState.IconPath != "",
 		Status:     "stopped",
 		IsActive:   st.ActiveProject == name,
-		Branch:     projectState.GitBranch,
+		Branch:     branch,
 		LastNote:   projectState.LastNote,
 		StartedAt:  projectState.StartedAt,
 	}
@@ -287,6 +297,51 @@ func normalizeServiceStatus(info ServiceInfo) string {
 		return "running"
 	}
 	return "stopped"
+}
+
+// currentGitBranch resolves the current branch by reading .git/HEAD directly.
+// This avoids spawning git on every snapshot and handles linked worktrees
+// (where .git is a file pointing at the real git dir). Returns "" if the
+// branch can't be determined (e.g. not a repo) so the caller can fall back.
+func currentGitBranch(path string) string {
+	gitPath := filepath.Join(path, ".git")
+	info, err := os.Stat(gitPath)
+	if err != nil {
+		return ""
+	}
+
+	headPath := filepath.Join(gitPath, "HEAD")
+	if !info.IsDir() {
+		data, err := os.ReadFile(gitPath)
+		if err != nil {
+			return ""
+		}
+		const prefix = "gitdir:"
+		line := strings.TrimSpace(string(data))
+		if !strings.HasPrefix(line, prefix) {
+			return ""
+		}
+		gitDir := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		if !filepath.IsAbs(gitDir) {
+			gitDir = filepath.Join(path, gitDir)
+		}
+		headPath = filepath.Join(gitDir, "HEAD")
+	}
+
+	data, err := os.ReadFile(headPath)
+	if err != nil {
+		return ""
+	}
+	head := strings.TrimSpace(string(data))
+	const refPrefix = "ref: refs/heads/"
+	if strings.HasPrefix(head, refPrefix) {
+		return strings.TrimPrefix(head, refPrefix)
+	}
+	// Detached HEAD: show a short commit hash.
+	if len(head) >= 7 && !strings.Contains(head, " ") {
+		return head[:7]
+	}
+	return ""
 }
 
 func cloneRegistry(registry map[string]string) map[string]string {
