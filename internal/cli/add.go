@@ -10,6 +10,7 @@ import (
 )
 
 func init() {
+	addCmd.Flags().BoolP("yes", "y", false, "Register without prompting")
 	rootCmd.AddCommand(addCmd)
 }
 
@@ -44,6 +45,21 @@ var addCmd = &cobra.Command{
 				return nil
 			}
 			return fmt.Errorf("project name %q already taken by %s", proj.Name, existingPath)
+		}
+
+		autoApprove, _ := cmd.Flags().GetBool("yes")
+		if !autoApprove && isInteractiveTerminal() {
+			fmt.Printf("Project: %s\n", proj.Name)
+			fmt.Printf("Path:    %s\n", dir)
+			fmt.Printf("Services: %d\n", len(proj.Services))
+			ok, confirmErr := confirmPrompt("Register this project with hun? [Y/n] ")
+			if confirmErr != nil {
+				return confirmErr
+			}
+			if !ok {
+				fmt.Println("Aborted.")
+				return nil
+			}
 		}
 
 		st.Register(proj.Name, dir)

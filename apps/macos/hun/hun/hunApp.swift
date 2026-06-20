@@ -6,12 +6,47 @@
 //
 
 import SwiftUI
+import AppKit
 
 @main
 struct hunApp: App {
+    @State private var store = HunStore()
+
     var body: some Scene {
-        WindowGroup {
+        WindowGroup("hun", id: "dashboard") {
             ContentView()
+                .environment(store)
+                .frame(minWidth: 560, minHeight: 420)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .commands {
+            SidebarCommands()
+            CommandGroup(replacing: .newItem) {
+                Button("Open Dashboard") {
+                    Self.openDashboard()
+                }
+                .keyboardShortcut("d", modifiers: .command)
+            }
+        }
+
+        MenuBarExtra {
+            MenuBarView()
+                .environment(store)
+        } label: {
+            Image(systemName: "terminal")
+        }
+        .menuBarExtraStyle(.window)
+    }
+
+    static func openDashboard() {
+        NSApp.activate(ignoringOtherApps: true)
+        for window in NSApp.windows where window.canBecomeKey && window.isRestorable {
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
+        for window in NSApp.windows where window.canBecomeKey {
+            window.makeKeyAndOrderFront(nil)
+            return
         }
     }
 }

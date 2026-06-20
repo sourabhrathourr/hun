@@ -119,8 +119,11 @@ hun restart <project>:<service> # Restart one service
 hun onboard [path]              # Interactive first-time setup
 hun init                        # Initialize current directory
 hun init --name <name>          # Initialize with explicit name
+hun init --yes                  # Accept detected config without prompting
+hun init --no-register          # Write .hun.yml without adding it to state
+hun validate [path]             # Validate a .hun.yml config
 hun list                        # List all known projects
-hun add <path>                  # Register an existing project
+hun add <path>                  # Register an existing project (prompts in a terminal)
 hun remove <project>            # Unregister (doesn't delete files)
 ```
 
@@ -181,6 +184,8 @@ Mouse support:
 - **Python** — `manage.py`, `app.py`, `main.py` with `requirements.txt` or `pyproject.toml`
 - **Docker Compose** — services from `docker-compose.yml` / `compose.yml`
 - **Monorepos** — scans `frontend/`, `backend/`, `server/`, `client/` subdirectories
+
+In an interactive terminal, `hun init` shows the detected services and asks before writing `.hun.yml`. Non-interactive callers must pass `--yes` to accept the generated config.
 
 ## File Locations
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/sourabhrathourr/hun/internal/discovery"
 	"github.com/sourabhrathourr/hun/internal/state"
 	"github.com/spf13/cobra"
 )
@@ -19,6 +20,13 @@ var listCmd = &cobra.Command{
 		st, err := state.Load()
 		if err != nil {
 			return err
+		}
+		if _, dirty, err := discovery.ReconcileState(st); err != nil {
+			return err
+		} else if dirty {
+			if err := st.Save(); err != nil {
+				return err
+			}
 		}
 
 		if len(st.Registry) == 0 {

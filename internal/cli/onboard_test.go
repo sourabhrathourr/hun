@@ -247,21 +247,13 @@ func containsPath(paths []string, target string) bool {
 	return false
 }
 
-func TestOnboardProjectDirCreatesMinimalConfigWhenUndetected(t *testing.T) {
+func TestOnboardProjectDirRequiresApprovalWhenUndetected(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
 	projectDir := t.TempDir()
-	name, err := onboardProjectDir(projectDir)
-	if err != nil {
-		t.Fatalf("onboardProjectDir: %v", err)
-	}
-	if name != filepath.Base(projectDir) {
-		t.Fatalf("name = %q, want %q", name, filepath.Base(projectDir))
-	}
-
-	if _, err := os.Stat(filepath.Join(projectDir, ".hun.yml")); err != nil {
-		t.Fatalf("expected .hun.yml to be created: %v", err)
+	if _, err := onboardProjectDir(projectDir); err == nil {
+		t.Fatalf("expected onboardProjectDir to require approval")
 	}
 }
 

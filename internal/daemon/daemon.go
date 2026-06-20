@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/sourabhrathourr/hun/internal/config"
 )
@@ -22,6 +23,8 @@ type Daemon struct {
 	listener net.Listener
 	sockPath string
 	pidPath  string
+	lockPath string
+	lockFile *os.File
 }
 
 // New creates a new daemon instance.
@@ -40,16 +43,23 @@ func New() (*Daemon, error) {
 		manager:  mgr,
 		sockPath: filepath.Join(dir, "daemon.sock"),
 		pidPath:  filepath.Join(dir, "daemon.pid"),
+		lockPath: filepath.Join(dir, "daemon.lock"),
 	}, nil
 }
 
 // Run starts the daemon and listens for connections.
 func (d *Daemon) Run() error {
-	// Clean up stale socket
-	os.Remove(d.sockPath)
+	if err := d.acquireLock(); err != nil {
+		return err
+	}
+	if err := d.prepareSocket(); err != nil {
+		d.releaseLock()
+		return err
+	}
 
 	listener, err := net.Listen("unix", d.sockPath)
 	if err != nil {
+		d.releaseLock()
 		return fmt.Errorf("listening on socket: %w", err)
 	}
 	d.listener = listener
@@ -79,6 +89,47 @@ func (d *Daemon) Run() error {
 		}
 		go d.handleConnection(conn)
 	}
+}
+
+func (d *Daemon) acquireLock() error {
+	if d.lockPath == "" {
+		d.lockPath = d.sockPath + ".lock"
+	}
+	lockFile, err := os.OpenFile(d.lockPath, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return fmt.Errorf("opening daemon lock: %w", err)
+	}
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = lockFile.Close()
+		return fmt.Errorf("daemon already starting or running")
+	}
+	d.lockFile = lockFile
+	return nil
+}
+
+func (d *Daemon) releaseLock() {
+	if d.lockFile == nil {
+		return
+	}
+	_ = syscall.Flock(int(d.lockFile.Fd()), syscall.LOCK_UN)
+	_ = d.lockFile.Close()
+	d.lockFile = nil
+}
+
+func (d *Daemon) prepareSocket() error {
+	if _, err := os.Stat(d.sockPath); err == nil {
+		conn, dialErr := net.DialTimeout("unix", d.sockPath, 200*time.Millisecond)
+		if dialErr == nil {
+			_ = conn.Close()
+			return fmt.Errorf("daemon already running at %s", d.sockPath)
+		}
+		if err := os.Remove(d.sockPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("removing stale socket: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("checking daemon socket: %w", err)
+	}
+	return nil
 }
 
 func (d *Daemon) handleConnection(conn net.Conn) {
@@ -137,6 +188,7 @@ func (d *Daemon) shutdown() {
 	}
 	os.Remove(d.sockPath)
 	os.Remove(d.pidPath)
+	d.releaseLock()
 }
 
 func (d *Daemon) saveGitContext(project string) {

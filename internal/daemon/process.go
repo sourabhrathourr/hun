@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -24,6 +26,7 @@ type Process struct {
 	ReadyPattern string
 
 	cmd       *exec.Cmd
+	stdin     io.Closer
 	pid       int
 	running   bool
 	ready     bool
@@ -58,13 +61,7 @@ func (p *Process) Start() error {
 	}
 
 	// Build environment
-	p.cmd.Env = os.Environ()
-	for k, v := range p.Env {
-		p.cmd.Env = append(p.cmd.Env, k+"="+v)
-	}
-	if p.PortEnv != "" && p.Port > 0 {
-		p.cmd.Env = append(p.cmd.Env, fmt.Sprintf("%s=%d", p.PortEnv, p.Port))
-	}
+	p.cmd.Env = buildServiceEnvironment(p.Env, p.PortEnv, p.Port)
 
 	// Start in own process group for clean kill
 	p.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -77,11 +74,17 @@ func (p *Process) Start() error {
 	if err != nil {
 		return fmt.Errorf("stderr pipe: %w", err)
 	}
+	stdin, err := p.cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("stdin pipe: %w", err)
+	}
 
 	if err := p.cmd.Start(); err != nil {
+		_ = stdin.Close()
 		return fmt.Errorf("starting %s: %w", p.Name, err)
 	}
 
+	p.stdin = stdin
 	p.pid = p.cmd.Process.Pid
 	p.running = true
 	p.ready = false
@@ -99,6 +102,159 @@ func (p *Process) Start() error {
 	}
 
 	return nil
+}
+
+func buildServiceEnvironment(overrides map[string]string, portEnv string, port int) []string {
+	env := withDeveloperEnvironment(os.Environ())
+	for k, v := range overrides {
+		env = setEnv(env, k, v)
+	}
+	if portEnv != "" && port > 0 {
+		env = setEnv(env, portEnv, fmt.Sprintf("%d", port))
+	}
+	return env
+}
+
+func withDeveloperEnvironment(env []string) []string {
+	home := envValue(env, "HOME")
+	if home == "" {
+		if detectedHome, err := os.UserHomeDir(); err == nil {
+			home = detectedHome
+			env = setEnv(env, "HOME", home)
+		}
+	}
+
+	path := envValue(env, "PATH")
+	path = mergePath(path, developerPathCandidates(home), shouldPrependDeveloperPaths(path, home))
+	env = setEnv(env, "PATH", path)
+
+	if home != "" {
+		pnpmHome := filepath.Join(home, "Library", "pnpm")
+		if envValue(env, "PNPM_HOME") == "" && dirExists(pnpmHome) {
+			env = setEnv(env, "PNPM_HOME", pnpmHome)
+		}
+		bunInstall := filepath.Join(home, ".bun")
+		if envValue(env, "BUN_INSTALL") == "" && dirExists(bunInstall) {
+			env = setEnv(env, "BUN_INSTALL", bunInstall)
+		}
+	}
+
+	return env
+}
+
+func developerPathCandidates(home string) []string {
+	candidates := []string{
+		"/opt/homebrew/bin",
+		"/opt/homebrew/sbin",
+		"/usr/local/bin",
+		"/usr/local/sbin",
+		"/Applications/Docker.app/Contents/Resources/bin",
+		"/usr/bin",
+		"/bin",
+		"/usr/sbin",
+		"/sbin",
+	}
+	if home != "" {
+		homeCandidates := []string{
+			filepath.Join(home, "Library", "pnpm"),
+			filepath.Join(home, ".bun", "bin"),
+			filepath.Join(home, ".deno", "bin"),
+			filepath.Join(home, ".volta", "bin"),
+			filepath.Join(home, ".local", "share", "mise", "shims"),
+			filepath.Join(home, ".mise", "shims"),
+			filepath.Join(home, ".asdf", "shims"),
+			filepath.Join(home, ".asdf", "bin"),
+			filepath.Join(home, ".cargo", "bin"),
+			filepath.Join(home, "go", "bin"),
+			filepath.Join(home, ".local", "bin"),
+			filepath.Join(home, ".rbenv", "shims"),
+			filepath.Join(home, ".pyenv", "shims"),
+		}
+		candidates = append(homeCandidates, candidates...)
+
+		nvmBins, _ := filepath.Glob(filepath.Join(home, ".nvm", "versions", "node", "*", "bin"))
+		sort.Sort(sort.Reverse(sort.StringSlice(nvmBins)))
+		candidates = append(nvmBins, candidates...)
+	}
+
+	existing := candidates[:0]
+	for _, candidate := range candidates {
+		if dirExists(candidate) {
+			existing = append(existing, candidate)
+		}
+	}
+	return existing
+}
+
+func shouldPrependDeveloperPaths(path, home string) bool {
+	if strings.TrimSpace(path) == "" {
+		return true
+	}
+	if strings.Contains(path, "/opt/homebrew/bin") || strings.Contains(path, "/usr/local/bin") {
+		return false
+	}
+	return home != "" && !strings.Contains(path, home)
+}
+
+func mergePath(path string, candidates []string, prepend bool) string {
+	parts := splitPath(path)
+	if prepend {
+		return strings.Join(appendUnique(candidates, parts...), string(os.PathListSeparator))
+	}
+	return strings.Join(appendUnique(parts, candidates...), string(os.PathListSeparator))
+}
+
+func splitPath(path string) []string {
+	if path == "" {
+		return nil
+	}
+	raw := strings.Split(path, string(os.PathListSeparator))
+	parts := make([]string, 0, len(raw))
+	for _, part := range raw {
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	return parts
+}
+
+func appendUnique(primary []string, secondary ...string) []string {
+	seen := make(map[string]bool, len(primary)+len(secondary))
+	out := make([]string, 0, len(primary)+len(secondary))
+	for _, part := range append(primary, secondary...) {
+		if part == "" || seen[part] {
+			continue
+		}
+		seen[part] = true
+		out = append(out, part)
+	}
+	return out
+}
+
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for _, pair := range env {
+		if strings.HasPrefix(pair, prefix) {
+			return strings.TrimPrefix(pair, prefix)
+		}
+	}
+	return ""
+}
+
+func setEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	for i, pair := range env {
+		if strings.HasPrefix(pair, prefix) {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // Stop sends SIGTERM to the process group, then SIGKILL after timeout.
@@ -187,9 +343,14 @@ func (p *Process) waitForExit(cmd *exec.Cmd) {
 	p.running = false
 	p.ready = false
 	p.pid = 0
+	stdin := p.stdin
+	p.stdin = nil
 	intentional := p.stopping
 	p.stopping = false
 	p.mu.Unlock()
+	if stdin != nil {
+		_ = stdin.Close()
+	}
 	p.signalExited()
 	if p.onExit != nil {
 		p.onExit(err, intentional)

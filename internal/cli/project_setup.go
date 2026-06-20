@@ -9,7 +9,7 @@ import (
 
 // prepareProjectFromDetection runs service detection and returns a generated project config.
 // If the user declines generation, aborted is true and err is nil.
-func prepareProjectFromDetection(name, dir, requestedProfile string, reconfigure bool) (proj *config.Project, aborted bool, err error) {
+func prepareProjectFromDetection(name, dir, requestedProfile string, reconfigure bool, autoApprove bool) (proj *config.Project, aborted bool, err error) {
 	if requestedProfile != "" {
 		normalized := detect.NormalizeProfile(requestedProfile)
 		if normalized == "" {
@@ -35,6 +35,18 @@ func prepareProjectFromDetection(name, dir, requestedProfile string, reconfigure
 	if len(result.Services) == 0 {
 		fmt.Println("No project structure detected.")
 		fmt.Println("Creating minimal .hun.yml...")
+		if !autoApprove {
+			if !isInteractiveTerminal() {
+				return nil, false, fmt.Errorf("no project structure detected and cannot prompt in non-interactive mode; rerun in a terminal or pass --yes")
+			}
+			ok, confirmErr := confirmPrompt("Create minimal .hun.yml? [Y/n] ")
+			if confirmErr != nil {
+				return nil, false, confirmErr
+			}
+			if !ok {
+				return nil, true, nil
+			}
+		}
 		return &config.Project{
 			Name: name,
 			Services: map[string]*config.Service{
@@ -50,12 +62,17 @@ func prepareProjectFromDetection(name, dir, requestedProfile string, reconfigure
 	if reconfigure {
 		question = "Rewrite .hun.yml with these services? [Y/n] "
 	}
-	ok, confirmErr := confirmPrompt(question)
-	if confirmErr != nil {
-		return nil, false, confirmErr
-	}
-	if !ok {
-		return nil, true, nil
+	if !autoApprove {
+		if !isInteractiveTerminal() {
+			return nil, false, fmt.Errorf("detected services but cannot prompt in non-interactive mode; rerun in a terminal or pass --yes")
+		}
+		ok, confirmErr := confirmPrompt(question)
+		if confirmErr != nil {
+			return nil, false, confirmErr
+		}
+		if !ok {
+			return nil, true, nil
+		}
 	}
 
 	return detectedToProject(name, result), false, nil

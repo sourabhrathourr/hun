@@ -17,6 +17,8 @@ import (
 func init() {
 	initCmd.Flags().String("name", "", "Project name (defaults to directory name)")
 	initCmd.Flags().String("profile", "", "Detection profile: local|compose|hybrid")
+	initCmd.Flags().BoolP("yes", "y", false, "Accept detected configuration without prompting")
+	initCmd.Flags().Bool("no-register", false, "Create or update .hun.yml without registering the project")
 	initCmd.Flags().Bool("reconfigure", false, "Regenerate .hun.yml even if one already exists (creates .hun.yml.bak.<timestamp>)")
 	initCmd.Flags().Bool("apply-port-overrides", false, "Apply runtime-detected port overrides from state to generated .hun.yml")
 	rootCmd.AddCommand(initCmd)
@@ -33,6 +35,8 @@ var initCmd = &cobra.Command{
 
 		reconfigure, _ := cmd.Flags().GetBool("reconfigure")
 		applyOverrides, _ := cmd.Flags().GetBool("apply-port-overrides")
+		autoApprove, _ := cmd.Flags().GetBool("yes")
+		noRegister, _ := cmd.Flags().GetBool("no-register")
 		rawProfile, _ := cmd.Flags().GetString("profile")
 		requestedProfile := strings.TrimSpace(rawProfile)
 
@@ -52,12 +56,18 @@ var initCmd = &cobra.Command{
 					}
 					if !override {
 						fmt.Println("Keeping existing .hun.yml")
+						if noRegister {
+							return nil
+						}
 						return registerProject(proj.Name, dir)
 					}
 					reconfigure = true
 					fmt.Printf("Reconfiguring .hun.yml (project: %s)\n", proj.Name)
 				} else {
 					fmt.Printf(".hun.yml already exists (project: %s)\n", proj.Name)
+					if noRegister {
+						return nil
+					}
 					return registerProject(proj.Name, dir)
 				}
 			} else {
@@ -74,7 +84,7 @@ var initCmd = &cobra.Command{
 			}
 		}
 
-		proj, aborted, err := prepareProjectFromDetection(name, dir, requestedProfile, reconfigure)
+		proj, aborted, err := prepareProjectFromDetection(name, dir, requestedProfile, reconfigure, autoApprove)
 		if err != nil {
 			return err
 		}
@@ -103,6 +113,9 @@ var initCmd = &cobra.Command{
 			return err
 		}
 		fmt.Printf("%s Created .hun.yml\n", checkmark())
+		if noRegister {
+			return nil
+		}
 
 		return registerProject(proj.Name, dir)
 	},

@@ -48,6 +48,70 @@ func WriteProject(dir string, proj *Project) error {
 	return nil
 }
 
+// ProjectWithoutService returns a validated copy of proj with service removed.
+func ProjectWithoutService(proj *Project, service string) (*Project, error) {
+	if proj == nil {
+		return nil, fmt.Errorf("project config is required")
+	}
+	if service == "" {
+		return nil, fmt.Errorf("service name is required")
+	}
+	if _, ok := proj.Services[service]; !ok {
+		return nil, fmt.Errorf("service %q not found", service)
+	}
+	if len(proj.Services) <= 1 {
+		return nil, fmt.Errorf("cannot remove the last service from %q", proj.Name)
+	}
+
+	updated := cloneProject(proj)
+	delete(updated.Services, service)
+	for _, svc := range updated.Services {
+		svc.DependsOn = withoutString(svc.DependsOn, service)
+	}
+	if err := validateProject(updated); err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+func cloneProject(proj *Project) *Project {
+	updated := *proj
+	updated.Services = make(map[string]*Service, len(proj.Services))
+	for name, svc := range proj.Services {
+		if svc == nil {
+			continue
+		}
+		clone := *svc
+		if svc.Env != nil {
+			clone.Env = make(map[string]string, len(svc.Env))
+			for k, v := range svc.Env {
+				clone.Env[k] = v
+			}
+		}
+		if svc.DependsOn != nil {
+			clone.DependsOn = append([]string(nil), svc.DependsOn...)
+		}
+		updated.Services[name] = &clone
+	}
+	return &updated
+}
+
+func withoutString(values []string, remove string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	filtered := values[:0]
+	for _, value := range values {
+		if value != remove {
+			filtered = append(filtered, value)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return filtered
+}
+
 func validateProject(proj *Project) error {
 	if proj.Name == "" {
 		return fmt.Errorf("project name is required")

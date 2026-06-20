@@ -1,0 +1,6 @@
+interface:
+  display_name: "Hun Config"
+  short_description: "Create and improve .hun.yml configs"
+  default_prompt: "Use $hun to inspect this repo and create or improve .hun.yml."
+policy:
+  allow_implicit_invocation: true

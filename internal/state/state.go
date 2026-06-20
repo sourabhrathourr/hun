@@ -34,6 +34,7 @@ type ProjectState struct {
 	GitBranch     string                  `json:"git_branch"`
 	LastNote      string                  `json:"last_note"`
 	StartedAt     string                  `json:"started_at"`
+	IconPath      string                  `json:"icon_path,omitempty"`
 }
 
 // ServiceState holds runtime state for a single service.

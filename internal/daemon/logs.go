@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -285,8 +286,36 @@ func (lm *LogManager) ResetService(project, service string) {
 
 // GetLines returns buffered log lines for a service.
 func (lm *LogManager) GetLines(project, service string, n int) []LogLine {
+	if service == "" {
+		return lm.getProjectLines(project, n)
+	}
 	rb := lm.GetBuffer(project, service)
 	return rb.Lines(n)
+}
+
+func (lm *LogManager) getProjectLines(project string, n int) []LogLine {
+	prefix := project + ":"
+
+	lm.mu.RLock()
+	buffers := make([]*RingBuffer, 0)
+	for key, rb := range lm.buffers {
+		if strings.HasPrefix(key, prefix) {
+			buffers = append(buffers, rb)
+		}
+	}
+	lm.mu.RUnlock()
+
+	lines := make([]LogLine, 0)
+	for _, rb := range buffers {
+		lines = append(lines, rb.Lines(n)...)
+	}
+	sort.SliceStable(lines, func(i, j int) bool {
+		return lines[i].Timestamp.Before(lines[j].Timestamp)
+	})
+	if n > 0 && len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return lines
 }
 
 // Close closes all asynchronous log writers.

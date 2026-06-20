@@ -13,6 +13,7 @@ type Request struct {
 	Action  string `json:"action"`
 	Project string `json:"project,omitempty"`
 	Service string `json:"service,omitempty"`
+	Path    string `json:"path,omitempty"`
 	Mode    string `json:"mode,omitempty"` // "exclusive" or "parallel"
 	Lines   int    `json:"lines,omitempty"`
 	Note    string `json:"note,omitempty"`
@@ -44,14 +45,28 @@ func (d *Daemon) HandleRequest(req Request) Response {
 		})
 	case "start":
 		return d.handleStart(req)
+	case "start_service":
+		return d.handleStartService(req)
 	case "stop":
 		return d.handleStop(req)
 	case "stop_service":
 		return d.handleStopService(req)
+	case "remove_service":
+		return d.handleRemoveService(req)
+	case "set_project_icon":
+		return d.handleSetProjectIcon(req)
+	case "clear_project_icon":
+		return d.handleClearProjectIcon(req)
 	case "restart":
 		return d.handleRestart(req)
 	case "status":
 		return d.handleStatus()
+	case "snapshot":
+		return d.handleSnapshot(false)
+	case "refresh":
+		return d.handleSnapshot(true)
+	case "register_project", "add_project":
+		return d.handleRegisterProject(req)
 	case "logs":
 		return d.handleLogs(req)
 	case "ports":
@@ -71,7 +86,9 @@ func (d *Daemon) handleStart(req Request) Response {
 		return errorResponse("project name required")
 	}
 
-	d.manager.RefreshRegistry()
+	if _, err := d.manager.ReconcileDiscovery(true); err != nil {
+		return errorResponse(fmt.Sprintf("refreshing project registry: %v", err))
+	}
 	path, ok := d.manager.ProjectPath(req.Project)
 	if !ok {
 		return errorResponse(fmt.Sprintf("project %q not in registry", req.Project))
@@ -97,6 +114,13 @@ func (d *Daemon) handleStart(req Request) Response {
 	}
 
 	if d.manager.IsRunning(req.Project) {
+		mode := "multitask"
+		if exclusive {
+			mode = "focus"
+		}
+		if err := d.manager.SetFocus(req.Project, mode); err != nil {
+			return errorResponse(err.Error())
+		}
 		return successResponse(map[string]string{"status": "already_running"})
 	}
 
@@ -108,6 +132,43 @@ func (d *Daemon) handleStart(req Request) Response {
 		"status": "started",
 		"offset": d.manager.ports.GetOffset(req.Project),
 	})
+}
+
+func (d *Daemon) handleStartService(req Request) Response {
+	if req.Project == "" {
+		return errorResponse("project name required")
+	}
+	if req.Service == "" {
+		return errorResponse("service name required")
+	}
+
+	if _, err := d.manager.ReconcileDiscovery(true); err != nil {
+		return errorResponse(fmt.Sprintf("refreshing project registry: %v", err))
+	}
+	path, ok := d.manager.ProjectPath(req.Project)
+	if !ok {
+		return errorResponse(fmt.Sprintf("project %q not in registry", req.Project))
+	}
+	proj, err := config.LoadProject(path)
+	if err != nil {
+		return errorResponse(fmt.Sprintf("loading project config: %v", err))
+	}
+
+	exclusive := req.Mode != "parallel"
+	if exclusive {
+		status := d.manager.Status()
+		for name := range status {
+			if name != req.Project {
+				d.saveGitContext(name)
+				d.manager.StopProject(name)
+			}
+		}
+	}
+
+	if err := d.manager.StartService(req.Project, req.Service, proj, path, exclusive); err != nil {
+		return errorResponse(err.Error())
+	}
+	return successResponse(map[string]string{"status": "service_started"})
 }
 
 func (d *Daemon) handleStop(req Request) Response {
@@ -146,6 +207,72 @@ func (d *Daemon) handleStopService(req Request) Response {
 	return successResponse(map[string]string{"status": "service_stopped"})
 }
 
+func (d *Daemon) handleRemoveService(req Request) Response {
+	if req.Project == "" {
+		return errorResponse("project name required")
+	}
+	if req.Service == "" {
+		return errorResponse("service name required")
+	}
+
+	if _, err := d.manager.ReconcileDiscovery(true); err != nil {
+		return errorResponse(fmt.Sprintf("refreshing project registry: %v", err))
+	}
+	path, ok := d.manager.ProjectPath(req.Project)
+	if !ok {
+		return errorResponse(fmt.Sprintf("project %q not in registry", req.Project))
+	}
+	proj, err := config.LoadProject(path)
+	if err != nil {
+		return errorResponse(fmt.Sprintf("loading project config: %v", err))
+	}
+	updated, err := config.ProjectWithoutService(proj, req.Service)
+	if err != nil {
+		return errorResponse(err.Error())
+	}
+
+	if d.manager.IsServiceRunning(req.Project, req.Service) {
+		if err := d.manager.StopService(req.Project, req.Service); err != nil {
+			return errorResponse(err.Error())
+		}
+	}
+	if err := config.WriteProject(path, updated); err != nil {
+		return errorResponse(err.Error())
+	}
+	d.manager.ForgetService(req.Project, req.Service, updated)
+	return successResponse(map[string]string{"status": "service_removed"})
+}
+
+func (d *Daemon) handleSetProjectIcon(req Request) Response {
+	if req.Project == "" {
+		return errorResponse("project name required")
+	}
+	if req.Path == "" {
+		return errorResponse("icon path required")
+	}
+	if _, err := d.manager.ReconcileDiscovery(true); err != nil {
+		return errorResponse(fmt.Sprintf("refreshing project registry: %v", err))
+	}
+	path, err := d.manager.SetProjectIcon(req.Project, req.Path)
+	if err != nil {
+		return errorResponse(err.Error())
+	}
+	return successResponse(map[string]string{"status": "project_icon_set", "icon_path": path})
+}
+
+func (d *Daemon) handleClearProjectIcon(req Request) Response {
+	if req.Project == "" {
+		return errorResponse("project name required")
+	}
+	if _, err := d.manager.ReconcileDiscovery(true); err != nil {
+		return errorResponse(fmt.Sprintf("refreshing project registry: %v", err))
+	}
+	if err := d.manager.ClearProjectIcon(req.Project); err != nil {
+		return errorResponse(err.Error())
+	}
+	return successResponse(map[string]string{"status": "project_icon_cleared"})
+}
+
 func (d *Daemon) handleRestart(req Request) Response {
 	if req.Project == "" {
 		return errorResponse("project name required")
@@ -161,7 +288,7 @@ func (d *Daemon) handleRestart(req Request) Response {
 			return errorResponse(err.Error())
 		}
 
-		wasExclusive := d.manager.ports.GetOffset(req.Project) == 0
+		wasExclusive := d.manager.currentMode() == "focus"
 		d.manager.StopProject(req.Project)
 		time.Sleep(500 * time.Millisecond)
 		if err := d.manager.StartProject(req.Project, proj, path, wasExclusive); err != nil {
@@ -178,6 +305,29 @@ func (d *Daemon) handleRestart(req Request) Response {
 
 func (d *Daemon) handleStatus() Response {
 	return successResponse(d.manager.Status())
+}
+
+func (d *Daemon) handleSnapshot(force bool) Response {
+	snapshot, err := d.manager.Snapshot(force)
+	if err != nil {
+		return errorResponse(err.Error())
+	}
+	return successResponse(snapshot)
+}
+
+func (d *Daemon) handleRegisterProject(req Request) Response {
+	if req.Path == "" {
+		return errorResponse("project path required")
+	}
+	proj, path, err := d.manager.RegisterProjectPath(req.Path)
+	if err != nil {
+		return errorResponse(err.Error())
+	}
+	return successResponse(map[string]string{
+		"status":  "registered",
+		"project": proj.Name,
+		"path":    path,
+	})
 }
 
 func (d *Daemon) handleLogs(req Request) Response {

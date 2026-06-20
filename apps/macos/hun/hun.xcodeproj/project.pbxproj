@@ -101,6 +101,7 @@
 			buildPhases = (
 				5A31B66A2FA5344E00D3B44F /* Sources */,
 				5A31B66B2FA5344E00D3B44F /* Frameworks */,
+				5A31B6982FA6120000D3B44F /* Build hun CLI */,
 				5A31B66C2FA5344E00D3B44F /* Resources */,
 			);
 			buildRules = (
@@ -231,6 +232,30 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		5A31B6982FA6120000D3B44F /* Build hun CLI */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build hun CLI";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/hun",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/hun-skill/SKILL.md",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -euo pipefail\nROOT=\"${SRCROOT}/../../..\"\nRESOURCE_DIR=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\nmkdir -p \"${RESOURCE_DIR}\"\nGO_BIN=\"${GO_BIN:-}\"\nif [ -z \"${GO_BIN}\" ]; then\n  for candidate in /opt/homebrew/bin/go /usr/local/go/bin/go /usr/local/bin/go \"$(command -v go || true)\"; do\n    if [ -n \"${candidate}\" ] && [ -x \"${candidate}\" ]; then\n      GO_BIN=\"${candidate}\"\n      break\n    fi\n  done\nfi\nif [ -z \"${GO_BIN}\" ]; then\n  echo \"error: Go toolchain not found. Install Go or set GO_BIN in the Xcode scheme environment.\"\n  exit 1\nfi\n\"${GO_BIN}\" build -ldflags \"-s -w\" -o \"${RESOURCE_DIR}/hun\" \"${ROOT}/cmd/hun\"\nrm -rf \"${RESOURCE_DIR}/hun-skill\"\nditto \"${ROOT}/skills/hun\" \"${RESOURCE_DIR}/hun-skill\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		5A31B66A2FA5344E00D3B44F /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -307,7 +332,7 @@
 				DEVELOPMENT_TEAM = 85L83GK488;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -371,7 +396,7 @@
 				DEVELOPMENT_TEAM = 85L83GK488;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -398,8 +423,8 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 85L83GK488;
-				ENABLE_APP_SANDBOX = YES;
-				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = NO;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -430,7 +455,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 85L83GK488;
-				ENABLE_APP_SANDBOX = YES;
+				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;

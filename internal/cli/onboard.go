@@ -154,7 +154,7 @@ func onboardProjectDir(dir string) (string, error) {
 	}
 
 	name := filepath.Base(dir)
-	proj, aborted, err := prepareProjectFromDetection(name, dir, "", false)
+	proj, aborted, err := prepareProjectFromDetection(name, dir, "", false, false)
 	if err != nil {
 		return "", err
 	}

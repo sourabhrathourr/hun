@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 
+	"github.com/sourabhrathourr/hun/internal/discovery"
 	"github.com/sourabhrathourr/hun/internal/state"
 	"github.com/spf13/cobra"
 )
@@ -14,21 +15,26 @@ var rootCmd = &cobra.Command{
 	Short: "Seamless project context switching for developers",
 	Long:  "hun.sh manages your development services, captures logs, and lets you switch between projects instantly.",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if st, err := state.Load(); err == nil && shouldPromptAutoOnboard(isInteractiveTerminal(), len(st.Registry)) {
-			ok, confirmErr := confirmPrompt("No projects registered. Start onboarding now? [Y/n] ")
-			if confirmErr != nil {
-				return confirmErr
+		if st, err := state.Load(); err == nil {
+			if _, dirty, reconcileErr := discovery.ReconcileState(st); reconcileErr == nil && dirty {
+				_ = st.Save()
 			}
-			if ok {
-				result, onboardErr := runOnboardingFlow(onboardingOptions{})
-				if onboardErr != nil {
-					if errors.Is(onboardErr, errOnboardingCanceled) {
-						return launchTUI(multiFlag)
-					}
-					return onboardErr
+			if shouldPromptAutoOnboard(isInteractiveTerminal(), len(st.Registry)) {
+				ok, confirmErr := confirmPrompt("No projects registered. Start onboarding now? [Y/n] ")
+				if confirmErr != nil {
+					return confirmErr
 				}
-				if result.Completed || result.LaunchedTUI {
-					return nil
+				if ok {
+					result, onboardErr := runOnboardingFlow(onboardingOptions{})
+					if onboardErr != nil {
+						if errors.Is(onboardErr, errOnboardingCanceled) {
+							return launchTUI(multiFlag)
+						}
+						return onboardErr
+					}
+					if result.Completed || result.LaunchedTUI {
+						return nil
+					}
 				}
 			}
 		}

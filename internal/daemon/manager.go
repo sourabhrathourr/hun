@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -17,15 +18,20 @@ import (
 
 // Manager orchestrates processes for all running projects.
 type Manager struct {
-	processes   map[string]map[string]*Process // project → service → process
-	projectCfgs map[string]*config.Project
-	logs        *LogManager
-	subscribers *SubscriberManager
-	ports       *PortManager
-	portSignals map[string]runtimePortSignal
+	processes         map[string]map[string]*Process // project → service → process
+	projectCfgs       map[string]*config.Project
+	logs              *LogManager
+	subscribers       *SubscriberManager
+	ports             *PortManager
+	portSignals       map[string]runtimePortSignal
+	lastDiscoveryScan time.Time
+	discoveryScanDirs []string
+	discoveryWarnings []string
+	iconCache         map[string]projectIconCacheEntry
 
 	mu      sync.RWMutex
 	stateMu sync.Mutex
+	iconMu  sync.Mutex
 	st      *state.State
 }
 
@@ -53,6 +59,7 @@ func NewManager() (*Manager, error) {
 		subscribers: NewSubscriberManager(),
 		ports:       NewPortManager(),
 		portSignals: make(map[string]runtimePortSignal),
+		iconCache:   make(map[string]projectIconCacheEntry),
 		st:          st,
 	}, nil
 }
@@ -76,6 +83,52 @@ func (m *Manager) ProjectPath(name string) (string, bool) {
 	defer m.stateMu.Unlock()
 	path, ok := m.st.Registry[name]
 	return path, ok
+}
+
+func (m *Manager) RegisterProjectPath(path string) (*config.Project, string, error) {
+	abs, err := filepath.Abs(strings.TrimSpace(path))
+	if err != nil {
+		return nil, "", err
+	}
+	clean := filepath.Clean(abs)
+	if !config.ProjectExists(clean) {
+		return nil, "", fmt.Errorf("no .hun.yml found in %s", clean)
+	}
+	proj, err := config.LoadProject(clean)
+	if err != nil {
+		return nil, "", err
+	}
+
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+	if m.st == nil {
+		st, err := state.Load()
+		if err != nil {
+			return nil, "", err
+		}
+		m.st = st
+	}
+	if m.st.Registry == nil {
+		m.st.Registry = make(map[string]string)
+	}
+	if m.st.Projects == nil {
+		m.st.Projects = make(map[string]state.ProjectState)
+	}
+	if existing, ok := m.st.Registry[proj.Name]; ok && filepath.Clean(existing) != clean {
+		return nil, "", fmt.Errorf("project %q already registered at %s", proj.Name, existing)
+	}
+
+	m.st.Registry[proj.Name] = clean
+	ps := m.st.Projects[proj.Name]
+	if ps.Path == "" {
+		ps.Path = clean
+	}
+	m.st.Projects[proj.Name] = ps
+	m.lastDiscoveryScan = time.Time{}
+	if err := m.st.Save(); err != nil {
+		return nil, "", err
+	}
+	return proj, clean, nil
 }
 
 func (m *Manager) StateSnapshot() *state.State {
@@ -170,84 +223,162 @@ func (m *Manager) StartProject(projectName string, projConfig *config.Project, p
 		svcConfig := projConfig.Services[svcName]
 		basePort := m.resolveBasePort(projectName, svcName, svcConfig.Port)
 		actualPort := basePort + offset
-
-		dir := projectPath
-		if svcConfig.Cwd != "" {
-			dir = filepath.Join(projectPath, svcConfig.Cwd)
+		proc, err := m.startConfiguredService(projectName, svcName, svcConfig, projectPath, actualPort, dependentCount[svcName] > 0)
+		if err != nil {
+			return rollback(fmt.Errorf("starting service %s: %w", svcName, err))
 		}
-
-		serviceName := svcName
-		restartPolicy := svcConfig.Restart
-		proc := &Process{
-			Name:         serviceName,
-			Cmd:          svcConfig.Cmd,
-			Dir:          dir,
-			Env:          svcConfig.Env,
-			Port:         actualPort,
-			PortEnv:      svcConfig.PortEnv,
-			ReadyPattern: svcConfig.Ready,
-		}
-
-		// Every start boundary represents a fresh in-memory log session.
-		m.logs.ResetService(projectName, serviceName)
-
-		proc.onOutput = func(line string, isErr bool) {
-			logLine := LogLine{
-				Timestamp: time.Now(),
-				Service:   serviceName,
-				Project:   projectName,
-				Text:      line,
-				IsErr:     isErr,
-			}
-			m.logs.WriteLog(logLine)
-			m.subscribers.Broadcast(logLine)
-			m.observeRuntimePort(projectName, serviceName, line)
-		}
-
-		proc.onExit = func(err error, intentional bool) {
-			status := "stopped"
-			if !intentional && err != nil {
-				status = "crashed"
-			}
-			m.updateServiceState(projectName, serviceName, 0, actualPort, status)
-			if status == "crashed" && restartPolicy == "on_failure" {
-				time.Sleep(time.Second)
-				m.logs.ResetService(projectName, serviceName)
-				if restartErr := proc.Start(); restartErr == nil {
-					m.updateServiceState(projectName, serviceName, proc.PID(), actualPort, "running")
-				}
-			}
-		}
-
-		readyCh := make(chan struct{}, 1)
-		proc.onReady = func() {
-			select {
-			case readyCh <- struct{}{}:
-			default:
-			}
-		}
-
-		if err := proc.Start(); err != nil {
-			return rollback(fmt.Errorf("starting service %s: %w", serviceName, err))
-		}
-		started[serviceName] = proc
-		m.mu.Lock()
-		m.processes[projectName][serviceName] = proc
-		m.mu.Unlock()
-		m.updateServiceState(projectName, serviceName, proc.PID(), actualPort, "running")
-
-		// Only block startup on readiness when other services depend on this one.
-		// This avoids adding startup latency for leaf services.
-		if svcConfig.Ready != "" && dependentCount[serviceName] > 0 {
-			select {
-			case <-readyCh:
-			case <-time.After(30 * time.Second):
-			}
-		}
+		started[svcName] = proc
 	}
 
 	m.setProjectRunning(projectName, projectPath, offset, exclusive)
 	return nil
+}
+
+// StartService starts one service and any services it depends on.
+func (m *Manager) StartService(projectName, serviceName string, projConfig *config.Project, projectPath string, exclusive bool) error {
+	if projConfig.Services[serviceName] == nil {
+		return fmt.Errorf("service %s not found in project %s", serviceName, projectName)
+	}
+
+	order, err := serviceStartOrder(projConfig, serviceName)
+	if err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	newProject := false
+	if _, exists := m.processes[projectName]; !exists {
+		m.processes[projectName] = make(map[string]*Process)
+		newProject = true
+	}
+	m.projectCfgs[projectName] = projConfig
+	m.mu.Unlock()
+
+	if newProject && projConfig.Hooks.PreStart != "" {
+		if err := runHook(projConfig.Hooks.PreStart, projectPath); err != nil {
+			m.mu.Lock()
+			delete(m.processes, projectName)
+			delete(m.projectCfgs, projectName)
+			m.mu.Unlock()
+			return fmt.Errorf("pre_start hook failed: %w", err)
+		}
+	}
+
+	m.logs.SetProjectConfig(projectName, projConfig.Logs)
+	offset := m.ports.AssignOffset(projectName, exclusive)
+	started := make(map[string]*Process)
+	rollback := func(startErr error) error {
+		for _, proc := range started {
+			_ = proc.Stop()
+		}
+		m.mu.Lock()
+		if newProject {
+			delete(m.processes, projectName)
+			delete(m.projectCfgs, projectName)
+		} else if procs := m.processes[projectName]; procs != nil {
+			for name := range started {
+				delete(procs, name)
+			}
+		}
+		m.mu.Unlock()
+		if newProject {
+			m.ports.ReleaseOffset(projectName)
+			m.setProjectStopped(projectName)
+		}
+		return startErr
+	}
+
+	for idx, svcName := range order {
+		if m.IsServiceRunning(projectName, svcName) {
+			continue
+		}
+		m.forgetProcess(projectName, svcName)
+
+		svcConfig := projConfig.Services[svcName]
+		basePort := m.resolveBasePort(projectName, svcName, svcConfig.Port)
+		actualPort := basePort + offset
+		proc, err := m.startConfiguredService(projectName, svcName, svcConfig, projectPath, actualPort, idx < len(order)-1)
+		if err != nil {
+			return rollback(fmt.Errorf("starting service %s: %w", svcName, err))
+		}
+		started[svcName] = proc
+	}
+
+	m.setProjectRunning(projectName, projectPath, offset, exclusive)
+	return nil
+}
+
+func (m *Manager) startConfiguredService(projectName, serviceName string, svcConfig *config.Service, projectPath string, actualPort int, waitForReady bool) (*Process, error) {
+	dir := projectPath
+	if svcConfig.Cwd != "" {
+		dir = filepath.Join(projectPath, svcConfig.Cwd)
+	}
+
+	restartPolicy := svcConfig.Restart
+	proc := &Process{
+		Name:         serviceName,
+		Cmd:          svcConfig.Cmd,
+		Dir:          dir,
+		Env:          svcConfig.Env,
+		Port:         actualPort,
+		PortEnv:      svcConfig.PortEnv,
+		ReadyPattern: svcConfig.Ready,
+	}
+
+	// Every start boundary represents a fresh in-memory log session.
+	m.logs.ResetService(projectName, serviceName)
+
+	proc.onOutput = func(line string, isErr bool) {
+		logLine := LogLine{
+			Timestamp: time.Now(),
+			Service:   serviceName,
+			Project:   projectName,
+			Text:      line,
+			IsErr:     isErr,
+		}
+		m.logs.WriteLog(logLine)
+		m.subscribers.Broadcast(logLine)
+		m.observeRuntimePort(projectName, serviceName, line)
+	}
+
+	proc.onExit = func(err error, intentional bool) {
+		status := "stopped"
+		if !intentional && err != nil {
+			status = "crashed"
+		}
+		m.updateServiceState(projectName, serviceName, 0, actualPort, status)
+		if status == "crashed" && restartPolicy == "on_failure" {
+			time.Sleep(time.Second)
+			m.logs.ResetService(projectName, serviceName)
+			if restartErr := proc.Start(); restartErr == nil {
+				m.updateServiceState(projectName, serviceName, proc.PID(), actualPort, "running")
+			}
+		}
+	}
+
+	readyCh := make(chan struct{}, 1)
+	proc.onReady = func() {
+		select {
+		case readyCh <- struct{}{}:
+		default:
+		}
+	}
+
+	if err := proc.Start(); err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	m.processes[projectName][serviceName] = proc
+	m.mu.Unlock()
+	m.updateServiceState(projectName, serviceName, proc.PID(), actualPort, "running")
+
+	if waitForReady && svcConfig.Ready != "" {
+		select {
+		case <-readyCh:
+		case <-time.After(30 * time.Second):
+		}
+	}
+	return proc, nil
 }
 
 // StopProject stops all services for a project.
@@ -482,6 +613,48 @@ func (m *Manager) IsRunning(project string) bool {
 	return exists
 }
 
+// IsServiceRunning checks if one service is currently running.
+func (m *Manager) IsServiceRunning(project, service string) bool {
+	m.mu.RLock()
+	proc := m.processes[project][service]
+	m.mu.RUnlock()
+	return proc != nil && proc.IsRunning()
+}
+
+// ForgetService removes one service from in-memory process and persisted state.
+func (m *Manager) ForgetService(project, service string, projConfig *config.Project) {
+	m.clearRuntimePortSignal(project, service)
+
+	releaseOffset := false
+	m.mu.Lock()
+	if procs := m.processes[project]; procs != nil {
+		delete(procs, service)
+		if len(procs) == 0 {
+			delete(m.processes, project)
+			delete(m.projectCfgs, project)
+			releaseOffset = true
+		} else if projConfig != nil {
+			m.projectCfgs[project] = projConfig
+		}
+	}
+	m.mu.Unlock()
+
+	if releaseOffset {
+		m.ports.ReleaseOffset(project)
+		m.setProjectStopped(project)
+		return
+	}
+	m.deleteServiceState(project, service)
+}
+
+func (m *Manager) forgetProcess(project, service string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if procs := m.processes[project]; procs != nil {
+		delete(procs, service)
+	}
+}
+
 // RunningProjects returns sorted running project names.
 func (m *Manager) RunningProjects() []string {
 	m.mu.RLock()
@@ -550,6 +723,19 @@ func (m *Manager) updateServiceState(project, service string, pid, port int, sta
 			PID:    pid,
 			Port:   port,
 			Status: status,
+		}
+		st.Projects[project] = ps
+	})
+}
+
+func (m *Manager) deleteServiceState(project, service string) {
+	_ = m.mutateState(func(st *state.State) {
+		ps := st.Projects[project]
+		if ps.Services != nil {
+			delete(ps.Services, service)
+			if len(ps.Services) == 0 {
+				ps.Services = nil
+			}
 		}
 		st.Projects[project] = ps
 	})
@@ -788,12 +974,56 @@ func topoSort(proj *config.Project) ([]string, error) {
 	return order, nil
 }
 
-func runHook(cmd, dir string) error {
-	parts := strings.Fields(cmd)
-	if len(parts) == 0 {
+func serviceStartOrder(proj *config.Project, target string) ([]string, error) {
+	needed := make(map[string]bool)
+	var collect func(name string) error
+	collect = func(name string) error {
+		if needed[name] {
+			return nil
+		}
+		svc := proj.Services[name]
+		if svc == nil {
+			return fmt.Errorf("service %s not found", name)
+		}
+		needed[name] = true
+		for _, dep := range svc.DependsOn {
+			if err := collect(dep); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
-	c := exec.Command(parts[0], parts[1:]...)
+	if err := collect(target); err != nil {
+		return nil, err
+	}
+
+	all, err := topoSort(proj)
+	if err != nil {
+		return nil, err
+	}
+	order := make([]string, 0, len(needed))
+	for _, name := range all {
+		if needed[name] {
+			order = append(order, name)
+		}
+	}
+	return order, nil
+}
+
+func runHook(cmd, dir string) error {
+	if strings.TrimSpace(cmd) == "" {
+		return nil
+	}
+	shell := getenvDefault("SHELL", "/bin/sh")
+	c := exec.Command(shell, "-c", cmd)
 	c.Dir = dir
+	c.Env = buildServiceEnvironment(nil, "", 0)
 	return c.Run()
+}
+
+func getenvDefault(key, fallback string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	return fallback
 }
