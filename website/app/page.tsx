@@ -2,6 +2,7 @@ import { Reveal } from "@/components/reveal";
 import { InstallButton } from "@/components/install-button";
 import { Terminal } from "@/components/terminal";
 import { MiniTui } from "@/components/mini-tui";
+import Link from "next/link";
 
 export default function Page() {
   const d = 0.1;
@@ -112,13 +113,46 @@ export default function Page() {
           </Reveal>
 
           <Reveal delay={d * 9}>
+            <div className="border border-border rounded-sm bg-muted/20 p-4 space-y-3">
+              <div>
+                <p className="text-foreground/80 text-[13px] font-medium">
+                  <Link href="/macos" className="hover:text-foreground">
+                    macOS app beta
+                  </Link>
+                </p>
+                <p className="text-muted-foreground/55 text-[13px] mt-1">
+                  early testing build for the menu bar app. installs hun.app
+                  with the bundled cli inside the app.
+                </p>
+              </div>
+              <div className="text-foreground/80 bg-muted px-2 py-1.5 rounded-sm flex items-start gap-2 text-[12px] leading-relaxed font-mono">
+                <code className="min-w-0 flex-1 whitespace-pre-wrap break-all sm:break-normal">
+                  curl -fsSL https://hun.sh/install-macos-beta.sh | sh
+                </code>
+                <InstallButton
+                  copyText={
+                    "curl -fsSL https://hun.sh/install-macos-beta.sh | sh"
+                  }
+                />
+              </div>
+            </div>
+          </Reveal>
+
+          <Reveal delay={d * 10}>
             <p className="text-muted-foreground/40 text-[12px]">
-              <a
+              <Link
                 href="/docs"
                 className="underline underline-offset-2 hover:text-muted-foreground/60"
               >
                 docs
-              </a>{" "}
+              </Link>{" "}
+              &middot;{" "}
+              <Link
+                href="/macos"
+                className="underline underline-offset-2 hover:text-muted-foreground/60"
+              >
+                macOS app beta
+              </Link>{" "}
               &middot;{" "}
               <a
                 href="https://github.com/sourabhrathourr/hun"
