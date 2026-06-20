@@ -1,4 +1,5 @@
 /hun
+build/
 dist/
 .DS_Store
 *.log
