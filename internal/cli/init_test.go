@@ -127,7 +127,7 @@ func TestInitNoRegisterWritesConfigWithoutStateRegistration(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	dir := t.TempDir()
-	t.Chdir(dir)
+	chdir(t, dir)
 	if err := writeFile(t, filepath.Join(dir, "package.json"), `{"scripts":{"dev":"vite --host 0.0.0.0"}}`); err != nil {
 		t.Fatalf("write package: %v", err)
 	}
@@ -157,4 +157,21 @@ func TestInitNoRegisterWritesConfigWithoutStateRegistration(t *testing.T) {
 func writeFile(t *testing.T, path string, contents string) error {
 	t.Helper()
 	return os.WriteFile(path, []byte(contents), 0o644)
+}
+
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get cwd: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir %q: %v", dir, err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(previous); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
 }
