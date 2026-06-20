@@ -846,9 +846,19 @@ nonisolated enum HunMode: String, CaseIterable, Hashable {
     }
 }
 
+extension Color {
+    /// Exact sRGB color from a 24-bit hex value, e.g. `0x030303`.
+    init(hex: UInt32) {
+        let r = Double((hex >> 16) & 0xFF) / 255.0
+        let g = Double((hex >> 8) & 0xFF) / 255.0
+        let b = Double(hex & 0xFF) / 255.0
+        self = Color(.sRGB, red: r, green: g, blue: b, opacity: 1)
+    }
+}
+
 enum AppTheme {
-    static let appBackground = Color(red: 0.063, green: 0.063, blue: 0.067)
-    static let sidebar = Color(red: 0.078, green: 0.078, blue: 0.082)
+    static let appBackground = Color(hex: 0x030303)
+    static let sidebar = Color(hex: 0x060606)
     static let elevated = Color(red: 0.105, green: 0.105, blue: 0.110)
 
     static let divider = Color.white.opacity(0.06)
