@@ -12,6 +12,7 @@ APP="$DERIVED_DATA/Build/Products/$CONFIGURATION/hun.app"
 CLI="$APP/Contents/Resources/hun"
 CLI_VERSION="${HUN_CLI_VERSION:-v0.2.0}"
 CLI_COMMIT="${HUN_CLI_COMMIT:-$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo none)}"
+EXPECTED_MIN_MACOS_VERSION="${HUN_MACOS_MIN_VERSION:-15.0}"
 ZIP="$DIST_DIR/hun-macos-beta.zip"
 SHA_FILE="$ZIP.sha256"
 INSTALLER="$DIST_DIR/install-macos-beta.sh"
@@ -30,6 +31,7 @@ Environment:
   HUN_MACOS_BETA_URL        Same as --url.
   HUN_CLI_VERSION           Version embedded in the bundled CLI. Defaults to v0.2.0.
   HUN_CLI_COMMIT            Commit embedded in the bundled CLI. Defaults to git short SHA.
+  HUN_MACOS_MIN_VERSION     Expected LSMinimumSystemVersion. Defaults to 15.0.
 EOF
 }
 
@@ -77,6 +79,14 @@ fi
 
 if [ ! -x "$CLI" ]; then
   echo "Expected bundled hun CLI was not found or executable: $CLI" >&2
+  exit 1
+fi
+
+MIN_SYSTEM_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP/Contents/Info.plist" 2>/dev/null || true)"
+if [ "$MIN_SYSTEM_VERSION" != "$EXPECTED_MIN_MACOS_VERSION" ]; then
+  echo "App minimum macOS version mismatch." >&2
+  echo "Expected: $EXPECTED_MIN_MACOS_VERSION" >&2
+  echo "Actual:   ${MIN_SYSTEM_VERSION:-missing}" >&2
   exit 1
 fi
 
