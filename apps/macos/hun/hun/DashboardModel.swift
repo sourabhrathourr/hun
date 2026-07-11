@@ -673,6 +673,15 @@ nonisolated struct HunService: Identifiable, Hashable {
     var portText: String {
         port > 0 ? ":\(port)" : "none"
     }
+
+    var browserURL: URL? {
+        guard status == .running, pid > 0, port > 0 else { return nil }
+        var components = URLComponents()
+        components.scheme = "http"
+        components.host = "localhost"
+        components.port = port
+        return components.url
+    }
 }
 
 nonisolated struct HunLogLine: Identifiable, Hashable {

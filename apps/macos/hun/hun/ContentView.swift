@@ -1374,46 +1374,60 @@ private struct ServiceRowView: View {
     @State private var hovering = false
 
     var body: some View {
-        Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Circle().fill(service.status.color).frame(width: 6, height: 6)
-                    Text(service.name)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(AppTheme.textPrimary)
-                    Spacer()
-                    Text(service.status.title.lowercased())
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(AppTheme.textTertiary)
+        ZStack(alignment: .bottomTrailing) {
+            Button(action: onTap) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Circle().fill(service.status.color).frame(width: 6, height: 6)
+                        Text(service.name)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(AppTheme.textPrimary)
+                        Spacer()
+                        Text(service.status.title.lowercased())
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(AppTheme.textTertiary)
+                    }
+                    Text(service.command)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(AppTheme.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    HStack(spacing: 12) {
+                        MetaItem(icon: "number", text: service.pidText)
+                        MetaItem(icon: "network", text: service.portText)
+                        MetaItem(
+                            icon: service.ready ? "checkmark.circle" : "circle.dashed",
+                            text: service.ready ? "ready" : "waiting"
+                        )
+                    }
                 }
-                Text(service.command)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(AppTheme.textSecondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                HStack(spacing: 12) {
-                    MetaItem(icon: "number", text: service.pidText)
-                    MetaItem(icon: "network", text: service.portText)
-                    MetaItem(
-                        icon: service.ready ? "checkmark.circle" : "circle.dashed",
-                        text: service.ready ? "ready" : "waiting"
-                    )
-                }
+                .padding(10)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(selected ? AppTheme.selection : (hovering ? AppTheme.hover : Color.clear))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(selected ? AppTheme.divider : Color.clear, lineWidth: 1)
+                )
+                .contentShape(Rectangle())
             }
-            .padding(10)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(selected ? AppTheme.selection : (hovering ? AppTheme.hover : Color.clear))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(selected ? AppTheme.divider : Color.clear, lineWidth: 1)
-            )
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+
+            if let url = service.browserURL {
+                ServiceBrowserButton(url: url, isVisible: hovering)
+                    .padding(.bottom, 4)
+                    .padding(.trailing, 4)
+            }
         }
-        .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .contextMenu {
+            if let url = service.browserURL {
+                Button("Open \(url.absoluteString)") {
+                    NSWorkspace.shared.open(url)
+                }
+                Divider()
+            }
             Button("Run", action: onRun)
             Button("Restart", action: onRestart)
             Button("Stop", action: onStop)
@@ -1421,6 +1435,46 @@ private struct ServiceRowView: View {
             Button("Edit .hun.yml", action: onOpenConfig)
             Button("Remove from Hun", role: .destructive, action: onRemove)
         }
+    }
+}
+
+private struct ServiceBrowserButton: View {
+    let url: URL
+    let isVisible: Bool
+    @Environment(\.openURL) private var openURL
+    @State private var hovering = false
+    @FocusState private var keyboardFocused: Bool
+    @AccessibilityFocusState private var accessibilityFocused: Bool
+
+    private var revealed: Bool {
+        isVisible || keyboardFocused || accessibilityFocused
+    }
+
+    var body: some View {
+        Button {
+            openURL(url)
+        } label: {
+            Image(systemName: "arrow.up.right")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(hovering ? AppTheme.textPrimary : AppTheme.textTertiary)
+                .frame(width: 22, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(hovering ? AppTheme.hover : Color.clear)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable()
+        .focused($keyboardFocused)
+        .accessibilityFocused($accessibilityFocused)
+        .onHover { hovering = $0 }
+        .opacity(revealed ? 1 : 0)
+        .allowsHitTesting(revealed)
+        .accessibilityHidden(false)
+        .animation(.easeOut(duration: 0.12), value: revealed)
+        .help("Open \(url.absoluteString) in the default browser")
+        .accessibilityLabel("Open \(url.absoluteString) in browser")
     }
 }
 

@@ -46,6 +46,33 @@ struct hunTests {
         #expect(snapshot.projects.map(\.id) == ["app"])
     }
 
+    @Test func runningServiceBuildsLocalBrowserURLWithoutChangingPortMetadata() throws {
+        let running = HunService(snapshot: HunDaemonService(
+            id: "web",
+            name: "web",
+            cmd: "bun run dev",
+            pid: 4242,
+            port: 5173,
+            status: "running",
+            running: true,
+            ready: true
+        ))
+        let stopped = HunService(snapshot: HunDaemonService(
+            id: "api",
+            name: "api",
+            cmd: "go run .",
+            pid: 0,
+            port: 4000,
+            status: "stopped",
+            running: false,
+            ready: false
+        ))
+
+        #expect(running.portText == ":5173")
+        #expect(running.browserURL?.absoluteString == "http://localhost:5173")
+        #expect(stopped.browserURL == nil)
+    }
+
     @Test func daemonSettingsLoadsHealthAndRestartsDaemon() async throws {
         let client = MockDaemonClient()
         client.nextDaemonInfo = HunDaemonInfo(
