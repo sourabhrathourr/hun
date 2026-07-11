@@ -99,10 +99,8 @@ type serviceLogWriter struct {
 }
 
 func (w *serviceLogWriter) enqueue(line LogLine) {
-	defer func() {
-		// A writer can be reset/closed while producers still hold a stale pointer.
-		_ = recover()
-	}()
+	w.closeMu.Lock()
+	defer w.closeMu.Unlock()
 	if w.closed.Load() {
 		return
 	}

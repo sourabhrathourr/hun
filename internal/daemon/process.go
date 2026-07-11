@@ -21,9 +21,10 @@ type Process struct {
 	Cmd          string
 	Dir          string
 	Env          map[string]string
-	Port         int
 	PortEnv      string
 	ReadyPattern string
+	observedPort int // currently reported to status and UI
+	launchPort   int // configured port plus any intentional multitask offset
 
 	cmd       *exec.Cmd
 	stdin     io.Closer
@@ -33,7 +34,7 @@ type Process struct {
 	stopping  bool
 	startedAt time.Time
 	exited    chan struct{}
-	exitOnce  sync.Once
+	portLease *portLease
 	mu        sync.Mutex
 
 	onOutput func(line string, isErr bool)
@@ -61,7 +62,11 @@ func (p *Process) Start() error {
 	}
 
 	// Build environment
-	p.cmd.Env = buildServiceEnvironment(p.Env, p.PortEnv, p.Port)
+	launchPort := p.launchPort
+	if launchPort <= 0 {
+		launchPort = p.observedPort
+	}
+	p.cmd.Env = buildServiceEnvironment(p.Env, p.PortEnv, launchPort)
 
 	// Start in own process group for clean kill
 	p.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -91,11 +96,10 @@ func (p *Process) Start() error {
 	p.stopping = false
 	p.startedAt = time.Now().UTC()
 	p.exited = make(chan struct{})
-	p.exitOnce = sync.Once{}
 
 	go p.scanOutput(stdout, false)
 	go p.scanOutput(stderr, true)
-	go p.waitForExit(p.cmd)
+	go p.waitForExit(p.cmd, p.exited)
 
 	if p.ReadyPattern == "" {
 		go p.markReadyAfterGracePeriod()
@@ -316,6 +320,49 @@ func (p *Process) StartedAt() time.Time {
 	return p.startedAt
 }
 
+// ObservedPort returns the port currently reported to status consumers.
+func (p *Process) ObservedPort() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.observedPort
+}
+
+// LaunchPort returns the authoritative port injected at process launch.
+func (p *Process) LaunchPort() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.launchPort
+}
+
+// SetObservedPort updates live status without changing future launches.
+func (p *Process) SetObservedPort(port int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.observedPort = port
+}
+
+// ResetObservedPort restores live status to the authoritative launch port.
+func (p *Process) ResetObservedPort() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.observedPort = p.launchPort
+	return p.observedPort
+}
+
+func (p *Process) SetPortLease(lease *portLease) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.portLease = lease
+}
+
+func (p *Process) ReleasePortLease() {
+	p.mu.Lock()
+	lease := p.portLease
+	p.portLease = nil
+	p.mu.Unlock()
+	lease.release()
+}
+
 func (p *Process) scanOutput(r io.Reader, isErr bool) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64*1024), 64*1024)
@@ -337,7 +384,7 @@ func (p *Process) scanOutput(r io.Reader, isErr bool) {
 	}
 }
 
-func (p *Process) waitForExit(cmd *exec.Cmd) {
+func (p *Process) waitForExit(cmd *exec.Cmd, exited chan struct{}) {
 	err := cmd.Wait()
 	p.mu.Lock()
 	p.running = false
@@ -351,10 +398,10 @@ func (p *Process) waitForExit(cmd *exec.Cmd) {
 	if stdin != nil {
 		_ = stdin.Close()
 	}
-	p.signalExited()
 	if p.onExit != nil {
 		p.onExit(err, intentional)
 	}
+	signalExited(exited)
 }
 
 func (p *Process) markReadyAfterGracePeriod() {
@@ -371,10 +418,8 @@ func (p *Process) markReadyAfterGracePeriod() {
 	}
 }
 
-func (p *Process) signalExited() {
-	p.exitOnce.Do(func() {
-		close(p.exited)
-	})
+func signalExited(exited chan struct{}) {
+	close(exited)
 }
 
 func waitForProcessExit(exited <-chan struct{}, timeout time.Duration) bool {

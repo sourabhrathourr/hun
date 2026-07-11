@@ -37,6 +37,7 @@ cwd: ./backend
 ### `port` (Optional)
 The port this service listens on. **hun** needs to know this to manage port collisions in Multitask Mode.
 If omitted, **hun** assumes the service doesn't bind a port (like a worker).
+This value is authoritative for every launch. **hun** rejects the launch if the configured TCP port is already occupied, and a per-port lease prevents concurrent hun services or instances from selecting the same port while an application is still starting. Runtime detection verifies listening sockets against the launched process group before updating the live port shown in the UI, and it never rewrites or overrides the configured port on a later start. If a service binds a different verified port, **hun** stops it and reports the mismatch instead of silently accepting the fallback.
 
 ```yaml
 port: 8080
@@ -44,7 +45,7 @@ port: 8080
 
 ### `port_env` (Optional)
 If your app reads the port from an environment variable, tell **hun** which one. 
-**hun** will inject the correct port (including offsets) into this variable.
+**hun** will inject the configured `port` (including an intentional Multitask offset) into this variable. The configured value takes priority over inherited environment variables and values under the service's `env` section.
 
 ```yaml
 port_env: PORT  # hun will set PORT=3000 (or 3001, etc.)

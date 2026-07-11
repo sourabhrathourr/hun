@@ -20,7 +20,6 @@ func init() {
 	initCmd.Flags().BoolP("yes", "y", false, "Accept detected configuration without prompting")
 	initCmd.Flags().Bool("no-register", false, "Create or update .hun.yml without registering the project")
 	initCmd.Flags().Bool("reconfigure", false, "Regenerate .hun.yml even if one already exists (creates .hun.yml.bak.<timestamp>)")
-	initCmd.Flags().Bool("apply-port-overrides", false, "Apply runtime-detected port overrides from state to generated .hun.yml")
 	rootCmd.AddCommand(initCmd)
 }
 
@@ -34,7 +33,6 @@ var initCmd = &cobra.Command{
 		}
 
 		reconfigure, _ := cmd.Flags().GetBool("reconfigure")
-		applyOverrides, _ := cmd.Flags().GetBool("apply-port-overrides")
 		autoApprove, _ := cmd.Flags().GetBool("yes")
 		noRegister, _ := cmd.Flags().GetBool("no-register")
 		rawProfile, _ := cmd.Flags().GetString("profile")
@@ -91,14 +89,6 @@ var initCmd = &cobra.Command{
 		if aborted {
 			fmt.Println("Aborted.")
 			return nil
-		}
-
-		if applyOverrides {
-			if n, err := applyPortOverridesToProject(name, proj); err != nil {
-				return err
-			} else if n > 0 {
-				fmt.Printf("%s Applied %d port override(s) from state\n", checkmark(), n)
-			}
 		}
 
 		if reconfigure && existing != nil {
@@ -255,33 +245,6 @@ func backupProjectConfig(dir string) (string, error) {
 		return "", fmt.Errorf("write backup: %w", err)
 	}
 	return backup, nil
-}
-
-func applyPortOverridesToProject(projectName string, proj *config.Project) (int, error) {
-	st, err := state.Load()
-	if err != nil {
-		return 0, fmt.Errorf("loading state for overrides: %w", err)
-	}
-	ps, ok := st.Projects[projectName]
-	if !ok || len(ps.PortOverrides) == 0 {
-		return 0, nil
-	}
-
-	applied := 0
-	for svc, basePort := range ps.PortOverrides {
-		if basePort <= 0 {
-			continue
-		}
-		cfg, ok := proj.Services[svc]
-		if !ok {
-			continue
-		}
-		if cfg.Port != basePort {
-			cfg.Port = basePort
-			applied++
-		}
-	}
-	return applied, nil
 }
 
 func checkmark() string {

@@ -12,6 +12,7 @@ func TestBuildServiceEnvironmentIncludesDeveloperToolPaths(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+	t.Setenv("PORT", "8888")
 	t.Setenv("PNPM_HOME", "")
 	t.Setenv("BUN_INSTALL", "")
 	pnpmHome := filepath.Join(home, "Library", "pnpm")
@@ -23,7 +24,7 @@ func TestBuildServiceEnvironmentIncludesDeveloperToolPaths(t *testing.T) {
 		}
 	}
 
-	env := buildServiceEnvironment(map[string]string{"CUSTOM": "1"}, "PORT", 3000)
+	env := buildServiceEnvironment(map[string]string{"CUSTOM": "1", "PORT": "9999"}, "PORT", 3000)
 	path := envValue(env, "PATH")
 
 	for _, want := range []string{pnpmHome, bunBin, nvmBin, "/usr/bin"} {
@@ -41,7 +42,7 @@ func TestBuildServiceEnvironmentIncludesDeveloperToolPaths(t *testing.T) {
 		t.Fatalf("CUSTOM = %q, want 1", got)
 	}
 	if got := envValue(env, "PORT"); got != "3000" {
-		t.Fatalf("PORT = %q, want 3000", got)
+		t.Fatalf("PORT = %q, want configured port 3000 to override inherited and service env", got)
 	}
 }
 

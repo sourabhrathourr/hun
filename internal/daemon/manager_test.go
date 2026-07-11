@@ -1,7 +1,12 @@
 package daemon
 
 import (
+	"encoding/json"
+	"fmt"
+	"net"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -109,9 +114,11 @@ func TestStatusShowsProjectDuringStartup(t *testing.T) {
 	}
 }
 
-func TestRuntimePortDetectionUpdatesStatusAndOverrides(t *testing.T) {
+func TestRuntimePortDetectionUpdatesLiveStatusWithoutPersistingOverride(t *testing.T) {
+	requireRuntimePortInspection(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	runtimePort := freeTCPPort(t)
 
 	m, err := NewManager()
 	if err != nil {
@@ -124,8 +131,8 @@ func TestRuntimePortDetectionUpdatesStatusAndOverrides(t *testing.T) {
 		Name: "runtime-port",
 		Services: map[string]*config.Service{
 			"web": {
-				Cmd:     `printf 'Local: http://localhost:5173/\nLocal: http://localhost:5173/\n'; sleep 2`,
-				Port:    3000,
+				Cmd:     fmt.Sprintf(`python3 -u -c 'import socket,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",%d)); s.listen(); print("Local: http://127.0.0.1:%d/",flush=True); time.sleep(30)'`, runtimePort, runtimePort),
+				Port:    0,
 				PortEnv: "PORT",
 			},
 		},
@@ -138,21 +145,23 @@ func TestRuntimePortDetectionUpdatesStatusAndOverrides(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		status := m.Status()
-		if svc, ok := status["runtime-port"]["web"]; ok && svc.Port == 5173 {
+		if svc, ok := status["runtime-port"]["web"]; ok && svc.Port == runtimePort {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 
 	status := m.Status()
-	if got := status["runtime-port"]["web"].Port; got != 5173 {
-		t.Fatalf("runtime detected port = %d, want 5173", got)
+	if got := status["runtime-port"]["web"].Port; got != runtimePort {
+		t.Fatalf("runtime detected port = %d, want %d", got, runtimePort)
 	}
 
-	snap := m.StateSnapshot()
-	ps := snap.Projects["runtime-port"]
-	if ps.PortOverrides["web"] != 5173 {
-		t.Fatalf("port override = %d, want 5173", ps.PortOverrides["web"])
+	stateJSON, err := json.Marshal(m.StateSnapshot())
+	if err != nil {
+		t.Fatalf("marshal state: %v", err)
+	}
+	if strings.Contains(string(stateJSON), "port_overrides") {
+		t.Fatalf("runtime port must not be persisted as a launch override: %s", stateJSON)
 	}
 
 	if err := m.StopProject("runtime-port"); err != nil {
@@ -160,7 +169,130 @@ func TestRuntimePortDetectionUpdatesStatusAndOverrides(t *testing.T) {
 	}
 }
 
-func TestRuntimePortOverrideStoresBasePortWithOffset(t *testing.T) {
+func TestSilentRuntimeListenerUpdatesLivePort(t *testing.T) {
+	requireRuntimePortInspection(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	runtimePort := freeTCPPort(t)
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer m.Shutdown()
+
+	proj := &config.Project{
+		Name: "silent-runtime-port",
+		Services: map[string]*config.Service{
+			"web": {
+				Cmd:  fmt.Sprintf(`python3 -u -c 'import socket,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",%d)); s.listen(); time.sleep(30)'`, runtimePort),
+				Port: 0,
+			},
+		},
+	}
+	if err := m.StartProject(proj.Name, proj, t.TempDir(), true); err != nil {
+		t.Fatalf("start project: %v", err)
+	}
+	waitForServicePort(t, m, proj.Name, "web", runtimePort)
+}
+
+func TestConfiguredPortWinsOverPreviouslyDetectedRuntimePort(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	hunDir := filepath.Join(home, ".hun")
+	if err := os.MkdirAll(hunDir, 0o755); err != nil {
+		t.Fatalf("create hun dir: %v", err)
+	}
+	legacyState := `{"schema_version":2,"mode":"focus","projects":{"configured-port-priority":{"port_overrides":{"web":5173}}},"registry":{}}`
+	if err := os.WriteFile(filepath.Join(hunDir, "state.json"), []byte(legacyState), 0o644); err != nil {
+		t.Fatalf("write legacy state: %v", err)
+	}
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer m.Shutdown()
+
+	projectPath := t.TempDir()
+	proj := &config.Project{
+		Name: "configured-port-priority",
+		Services: map[string]*config.Service{
+			"web": {
+				Cmd:     "sleep 2",
+				Port:    3000,
+				PortEnv: "PORT",
+			},
+		},
+	}
+
+	if err := m.StartProject(proj.Name, proj, projectPath, true); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	if got := m.Status()[proj.Name]["web"].Port; got != 3000 {
+		t.Fatalf("port with legacy runtime override = %d, want configured port 3000", got)
+	}
+}
+
+func TestConfiguredPortMustBeAvailableBeforeLaunch(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("occupy port: %v", err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer m.Shutdown()
+
+	proj := &config.Project{
+		Name: "occupied-configured-port",
+		Services: map[string]*config.Service{
+			"web": {Cmd: "sleep 2", Port: port, PortEnv: "PORT"},
+		},
+	}
+	err = m.StartProject(proj.Name, proj, t.TempDir(), true)
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("port %d", port)) {
+		t.Fatalf("start error = %v, want occupied configured port error", err)
+	}
+}
+
+func TestPortLeasePreventsConcurrentDelayedBindStarts(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	port := freeTCPPort(t)
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer m.Shutdown()
+
+	project := func(name string) *config.Project {
+		return &config.Project{
+			Name: name,
+			Services: map[string]*config.Service{
+				"web": {Cmd: "sleep 30", Port: port, PortEnv: "PORT"},
+			},
+		}
+	}
+	if err := m.StartProject("lease-first", project("lease-first"), t.TempDir(), true); err != nil {
+		t.Fatalf("start first project: %v", err)
+	}
+	err = m.StartProject("lease-second", project("lease-second"), t.TempDir(), true)
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("port %d", port)) {
+		t.Fatalf("second start error = %v, want port lease conflict", err)
+	}
+}
+
+func TestMultitaskOffsetDoesNotCreatePortForPortlessService(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -170,46 +302,216 @@ func TestRuntimePortOverrideStoresBasePortWithOffset(t *testing.T) {
 	}
 	defer m.Shutdown()
 
-	basePath := t.TempDir()
-	if err := m.StartProject("offset-base", &config.Project{
-		Name: "offset-base",
-		Services: map[string]*config.Service{
-			"svc": {Cmd: "sleep 3", Port: 3000, PortEnv: "PORT"},
-		},
-	}, basePath, false); err != nil {
-		t.Fatalf("start base project: %v", err)
+	for _, name := range []string{"first-portless", "second-portless"} {
+		proj := &config.Project{
+			Name: name,
+			Services: map[string]*config.Service{
+				"worker": {Cmd: "sleep 3"},
+			},
+		}
+		if err := m.StartProject(name, proj, t.TempDir(), false); err != nil {
+			t.Fatalf("start %s: %v", name, err)
+		}
 	}
 
-	targetPath := t.TempDir()
-	if err := m.StartProject("offset-target", &config.Project{
-		Name: "offset-target",
+	if got := m.Status()["second-portless"]["worker"].Port; got != 0 {
+		t.Fatalf("portless service received multitask offset as port %d", got)
+	}
+}
+
+func TestServiceRestartReinjectsConfiguredPortAfterRuntimeMismatch(t *testing.T) {
+	requireRuntimePortInspection(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer m.Shutdown()
+
+	projectPath := t.TempDir()
+	configuredPort := freeTCPPort(t)
+	firstPort := freeTCPPort(t)
+	for firstPort == configuredPort {
+		firstPort = freeTCPPort(t)
+	}
+	cmd := fmt.Sprintf(`python3 -u -c 'import os,socket,time; first=not os.path.exists(".started"); open(".started","a").close(); port=%d if first else int(os.environ["PORT"]); s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",port)); s.listen(); print(f"Uvicorn running on http://127.0.0.1:{port}",flush=True); time.sleep(30)'`, firstPort)
+	proj := &config.Project{
+		Name: "service-restart-port-priority",
 		Services: map[string]*config.Service{
-			"web": {
-				Cmd:     `printf 'Local: http://localhost:5174/\nLocal: http://localhost:5174/\n'; sleep 2`,
-				Port:    3000,
-				PortEnv: "PORT",
+			"web": {Cmd: cmd, Port: configuredPort, PortEnv: "PORT"},
+		},
+	}
+	if err := m.StartProject(proj.Name, proj, projectPath, true); err != nil {
+		t.Fatalf("start project: %v", err)
+	}
+	waitForServicePort(t, m, proj.Name, "web", firstPort)
+	waitForServiceStatus(t, m, proj.Name, "web", "crashed")
+
+	if err := m.RestartService(proj.Name, "web"); err != nil {
+		t.Fatalf("restart service: %v", err)
+	}
+	waitForServicePort(t, m, proj.Name, "web", configuredPort)
+}
+
+func TestSingleUvicornListeningLineRejectsConfiguredPortMismatch(t *testing.T) {
+	requireRuntimePortInspection(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configuredPort := freeTCPPort(t)
+	runtimePort := freeTCPPort(t)
+	for runtimePort == configuredPort {
+		runtimePort = freeTCPPort(t)
+	}
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer m.Shutdown()
+
+	proj := &config.Project{
+		Name: "single-listening-line",
+		Services: map[string]*config.Service{
+			"webcam": {
+				Cmd:  fmt.Sprintf(`python3 -u -c 'import socket,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",%d)); s.listen(); print("INFO: Uvicorn running on http://127.0.0.1:%d (Press CTRL+C to quit)",flush=True); time.sleep(30)'`, runtimePort, runtimePort),
+				Port: configuredPort,
 			},
 		},
-	}, targetPath, false); err != nil {
-		t.Fatalf("start target project: %v", err)
 	}
 
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		snap := m.StateSnapshot()
-		if snap.Projects["offset-target"].PortOverrides["web"] == 5173 {
+	if err := m.StartProject(proj.Name, proj, t.TempDir(), true); err != nil {
+		t.Fatalf("start project: %v", err)
+	}
+	waitForServiceStatus(t, m, proj.Name, "webcam", "crashed")
+	if got := m.Status()[proj.Name]["webcam"].Port; got != runtimePort {
+		t.Fatalf("diagnostic live port = %d, want observed port %d", got, runtimePort)
+	}
+	logs := m.GetLogs(proj.Name, "webcam", 20)
+	foundMismatch := false
+	for _, line := range logs {
+		if strings.Contains(line.Text, fmt.Sprintf("configured port %d but service bound %d", configuredPort, runtimePort)) {
+			foundMismatch = true
 			break
+		}
+	}
+	if !foundMismatch {
+		t.Fatalf("expected explicit port mismatch log, got %#v", logs)
+	}
+}
+
+func TestAdditionalOwnedListenerDoesNotOverrideConfiguredPort(t *testing.T) {
+	requireRuntimePortInspection(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configuredPort := freeTCPPort(t)
+	additionalPort := freeTCPPort(t)
+	for additionalPort == configuredPort {
+		additionalPort = freeTCPPort(t)
+	}
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer m.Shutdown()
+
+	cmd := fmt.Sprintf(`python3 -u -c 'import socket,time; a=socket.socket(); a.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); a.bind(("127.0.0.1",%d)); a.listen(); b=socket.socket(); b.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); b.bind(("127.0.0.1",%d)); b.listen(); print("Local: http://127.0.0.1:%d/",flush=True); time.sleep(30)'`, configuredPort, additionalPort, additionalPort)
+	proj := &config.Project{
+		Name: "additional-owned-listener",
+		Services: map[string]*config.Service{
+			"web": {Cmd: cmd, Port: configuredPort, PortEnv: "PORT"},
+		},
+	}
+	if err := m.StartProject(proj.Name, proj, t.TempDir(), true); err != nil {
+		t.Fatalf("start project: %v", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	status := m.Status()[proj.Name]["web"]
+	if !status.Running || status.Port != configuredPort {
+		t.Fatalf("service status = %+v, want running on configured port %d", status, configuredPort)
+	}
+}
+
+func TestMultipleWrongListenersRejectConfiguredPortMismatch(t *testing.T) {
+	requireRuntimePortInspection(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configuredPort := freeTCPPort(t)
+	firstRuntimePort := freeTCPPort(t)
+	secondRuntimePort := freeTCPPort(t)
+	for firstRuntimePort == configuredPort {
+		firstRuntimePort = freeTCPPort(t)
+	}
+	for secondRuntimePort == configuredPort || secondRuntimePort == firstRuntimePort {
+		secondRuntimePort = freeTCPPort(t)
+	}
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer m.Shutdown()
+
+	cmd := fmt.Sprintf(`python3 -u -c 'import socket,time; a=socket.socket(); a.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); a.bind(("127.0.0.1",%d)); a.listen(); b=socket.socket(); b.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); b.bind(("127.0.0.1",%d)); b.listen(); time.sleep(30)'`, firstRuntimePort, secondRuntimePort)
+	proj := &config.Project{
+		Name: "multiple-wrong-listeners",
+		Services: map[string]*config.Service{
+			"web": {Cmd: cmd, Port: configuredPort, PortEnv: "PORT"},
+		},
+	}
+	if err := m.StartProject(proj.Name, proj, t.TempDir(), true); err != nil {
+		t.Fatalf("start project: %v", err)
+	}
+	waitForServiceStatus(t, m, proj.Name, "web", "crashed")
+}
+
+func requireRuntimePortInspection(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is required for runtime listener tests")
+	}
+	if _, err := lsofPath(); err != nil {
+		t.Skip("lsof is required for runtime listener tests")
+	}
+}
+
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("allocate test port: %v", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatalf("release test port: %v", err)
+	}
+	return port
+}
+
+func waitForServicePort(t *testing.T, m *Manager, project, service string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := m.Status()[project][service].Port; got == want {
+			return
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+	t.Fatalf("service port = %d, want %d", m.Status()[project][service].Port, want)
+}
 
-	snap := m.StateSnapshot()
-	if got := snap.Projects["offset-target"].PortOverrides["web"]; got != 5173 {
-		t.Fatalf("base port override = %d, want 5173 (detected 5174 with +1 offset)", got)
+func waitForServiceStatus(t *testing.T, m *Manager, project, service, want string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := m.Status()[project][service].Status; got == want {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
-
-	_ = m.StopProject("offset-target")
-	_ = m.StopProject("offset-base")
+	t.Fatalf("service status = %q, want %q", m.Status()[project][service].Status, want)
 }
 
 func TestStartProjectSkipsLeafServiceStartupDelay(t *testing.T) {
