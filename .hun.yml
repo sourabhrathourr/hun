@@ -4,7 +4,7 @@ services:
         cmd: bun run dev
         cwd: ./website
         port: 3000
-        ready: listening on
+        ready: Ready in
 detect:
     version: v2
     profile: hybrid
