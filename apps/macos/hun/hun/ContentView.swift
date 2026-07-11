@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var sidebarRevealShowTask: Task<Void, Never>?
     @State private var sidebarRevealHideTask: Task<Void, Never>?
     @State private var collapsedSections: Set<String> = []
+    @State private var presentedSheet: DashboardSheet?
     @FocusState private var sidebarSearchFocused: Bool
     private let sidebarWidth: CGFloat = 250
 
@@ -81,6 +82,7 @@ struct ContentView: View {
             WindowInteractionMonitor(
                 onToggleSidebar: toggleSidebar,
                 onFocusProjectSearch: focusProjectSearch,
+                onOpenSettings: { presentedSheet = .settings },
                 onClearProjectSearchFocus: clearProjectSearchFocus
             )
         )
@@ -89,6 +91,12 @@ struct ContentView: View {
         .animation(.spring(response: 0.32, dampingFraction: 0.88), value: sidebarRevealed)
         .task {
             await store.refresh(force: true)
+        }
+        .sheet(item: $presentedSheet) { sheet in
+            switch sheet {
+            case .settings:
+                HunSettingsSheet()
+            }
         }
     }
 
@@ -155,7 +163,8 @@ struct ContentView: View {
             activeID: store.selectedProjectID ?? "",
             collapsedSections: $collapsedSections,
             onSelectProject: openProject,
-            onToggleSidebar: { if docked { collapseSidebar() } else { dockSidebar() } }
+            onToggleSidebar: { if docked { collapseSidebar() } else { dockSidebar() } },
+            onSettings: { presentedSheet = .settings }
         )
     }
 
@@ -276,6 +285,12 @@ struct ContentView: View {
     }
 }
 
+private enum DashboardSheet: String, Identifiable {
+    case settings
+
+    var id: String { rawValue }
+}
+
 // MARK: - Sidebar
 
 private struct SidebarColumnView: View {
@@ -287,6 +302,7 @@ private struct SidebarColumnView: View {
     @Binding var collapsedSections: Set<String>
     let onSelectProject: (String) -> Void
     let onToggleSidebar: () -> Void
+    let onSettings: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -302,7 +318,8 @@ private struct SidebarColumnView: View {
                 workspaceGroups: workspaceGroups,
                 activeID: activeID,
                 collapsedSections: $collapsedSections,
-                onSelectProject: onSelectProject
+                onSelectProject: onSelectProject,
+                onSettings: onSettings
             )
         }
     }
@@ -333,6 +350,7 @@ private struct SidebarView: View {
     let activeID: String
     @Binding var collapsedSections: Set<String>
     let onSelectProject: (String) -> Void
+    let onSettings: () -> Void
 
     private var allProjects: [HunProject] {
         workspaceGroups.flatMap { $0.projects }
@@ -368,7 +386,11 @@ private struct SidebarView: View {
                 .padding(.bottom, 16)
             }
 
-            SidebarFooter(runningCount: runningCount, totalCount: allProjects.count)
+            SidebarFooter(
+                runningCount: runningCount,
+                totalCount: allProjects.count,
+                onSettings: onSettings
+            )
         }
     }
 
@@ -417,6 +439,7 @@ private struct SidebarView: View {
 private struct SidebarFooter: View {
     let runningCount: Int
     let totalCount: Int
+    let onSettings: () -> Void
 
     var body: some View {
         HStack(spacing: 0) {
@@ -425,9 +448,16 @@ private struct SidebarFooter: View {
                 .foregroundStyle(AppTheme.textTertiary)
                 .monospacedDigit()
             Spacer()
+            ToolbarIconButton(
+                systemImage: "gearshape",
+                helpText: "Settings (⌘,)",
+                action: onSettings
+            )
+            .accessibilityLabel("Open Settings")
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
+        .padding(.leading, 14)
+        .padding(.trailing, 6)
+        .padding(.vertical, 4)
         .overlay(alignment: .top) {
             Rectangle().fill(AppTheme.divider).frame(height: 1)
         }
@@ -620,6 +650,22 @@ private struct TopBarView: View {
 
             Spacer(minLength: 0)
 
+            #if DEBUG
+            Text("DEV")
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .tracking(0.8)
+                .foregroundStyle(AppTheme.textPrimary)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
+                .background(AppTheme.accent.opacity(0.24))
+                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .stroke(AppTheme.accent.opacity(0.42), lineWidth: 1)
+                }
+                .help("Development build · isolated daemon and data")
+            #endif
+
             ModeSelector(mode: $mode)
         }
         .padding(.trailing, 12)
@@ -695,12 +741,14 @@ private struct WindowChromeConfigurator: NSViewRepresentable {
 private struct WindowInteractionMonitor: NSViewRepresentable {
     let onToggleSidebar: () -> Void
     let onFocusProjectSearch: () -> Void
+    let onOpenSettings: () -> Void
     let onClearProjectSearchFocus: () -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             onToggleSidebar: onToggleSidebar,
             onFocusProjectSearch: onFocusProjectSearch,
+            onOpenSettings: onOpenSettings,
             onClearProjectSearchFocus: onClearProjectSearchFocus
         )
     }
@@ -714,6 +762,7 @@ private struct WindowInteractionMonitor: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.onToggleSidebar = onToggleSidebar
         context.coordinator.onFocusProjectSearch = onFocusProjectSearch
+        context.coordinator.onOpenSettings = onOpenSettings
         context.coordinator.onClearProjectSearchFocus = onClearProjectSearchFocus
         context.coordinator.attach(to: nsView)
     }
@@ -725,6 +774,7 @@ private struct WindowInteractionMonitor: NSViewRepresentable {
     final class Coordinator {
         var onToggleSidebar: () -> Void
         var onFocusProjectSearch: () -> Void
+        var onOpenSettings: () -> Void
         var onClearProjectSearchFocus: () -> Void
 
         private weak var view: NSView?
@@ -733,10 +783,12 @@ private struct WindowInteractionMonitor: NSViewRepresentable {
         init(
             onToggleSidebar: @escaping () -> Void,
             onFocusProjectSearch: @escaping () -> Void,
+            onOpenSettings: @escaping () -> Void,
             onClearProjectSearchFocus: @escaping () -> Void
         ) {
             self.onToggleSidebar = onToggleSidebar
             self.onFocusProjectSearch = onFocusProjectSearch
+            self.onOpenSettings = onOpenSettings
             self.onClearProjectSearchFocus = onClearProjectSearchFocus
         }
 
@@ -789,6 +841,9 @@ private struct WindowInteractionMonitor: NSViewRepresentable {
                 return nil
             case "p":
                 onFocusProjectSearch()
+                return nil
+            case ",":
+                onOpenSettings()
                 return nil
             default:
                 return event

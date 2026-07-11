@@ -19,12 +19,15 @@ import (
 
 // Daemon is the background process managing all services.
 type Daemon struct {
-	manager  *Manager
-	listener net.Listener
-	sockPath string
-	pidPath  string
-	lockPath string
-	lockFile *os.File
+	manager   *Manager
+	listener  net.Listener
+	sockPath  string
+	pidPath   string
+	lockPath  string
+	lockFile  *os.File
+	version   string
+	commit    string
+	startedAt time.Time
 }
 
 // New creates a new daemon instance.
@@ -40,10 +43,13 @@ func New() (*Daemon, error) {
 	}
 
 	return &Daemon{
-		manager:  mgr,
-		sockPath: filepath.Join(dir, "daemon.sock"),
-		pidPath:  filepath.Join(dir, "daemon.pid"),
-		lockPath: filepath.Join(dir, "daemon.lock"),
+		manager:   mgr,
+		sockPath:  filepath.Join(dir, "daemon.sock"),
+		pidPath:   filepath.Join(dir, "daemon.pid"),
+		lockPath:  filepath.Join(dir, "daemon.lock"),
+		version:   buildVersion,
+		commit:    buildCommit,
+		startedAt: time.Now().UTC(),
 	}, nil
 }
 
@@ -64,8 +70,13 @@ func (d *Daemon) Run() error {
 	}
 	d.listener = listener
 
-	// Write PID file
-	os.WriteFile(d.pidPath, []byte(fmt.Sprintf("%d", os.Getpid())), 0644)
+	// Write the PID file before accepting requests so clients can always restart this process safely.
+	if err := os.WriteFile(d.pidPath, []byte(fmt.Sprintf("%d", os.Getpid())), 0644); err != nil {
+		_ = listener.Close()
+		_ = os.Remove(d.sockPath)
+		d.releaseLock()
+		return fmt.Errorf("writing daemon PID file: %w", err)
+	}
 
 	// Handle signals for graceful shutdown
 	sigCh := make(chan os.Signal, 1)

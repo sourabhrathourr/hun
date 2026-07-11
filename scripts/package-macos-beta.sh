@@ -10,7 +10,7 @@ DERIVED_DATA="$BUILD_ROOT/DerivedData"
 DIST_DIR="$BUILD_ROOT/dist"
 APP="$DERIVED_DATA/Build/Products/$CONFIGURATION/hun.app"
 CLI="$APP/Contents/Resources/hun"
-CLI_VERSION="${HUN_CLI_VERSION:-v0.2.0}"
+CLI_VERSION="${HUN_CLI_VERSION:-v0.2.1}"
 CLI_COMMIT="${HUN_CLI_COMMIT:-$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo none)}"
 EXPECTED_MIN_MACOS_VERSION="${HUN_MACOS_MIN_VERSION:-15.0}"
 ZIP="$DIST_DIR/hun-macos-beta.zip"
@@ -29,7 +29,7 @@ to build/macos-beta/dist/install-macos-beta.sh.
 Environment:
   HUN_MACOS_BETA_BUILD_DIR  Override the local build output directory.
   HUN_MACOS_BETA_URL        Same as --url.
-  HUN_CLI_VERSION           Version embedded in the bundled CLI. Defaults to v0.2.0.
+  HUN_CLI_VERSION           Version embedded in the bundled CLI. Defaults to v0.2.1.
   HUN_CLI_COMMIT            Commit embedded in the bundled CLI. Defaults to git short SHA.
   HUN_MACOS_MIN_VERSION     Expected LSMinimumSystemVersion. Defaults to 15.0.
 EOF

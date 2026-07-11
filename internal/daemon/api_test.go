@@ -82,14 +82,19 @@ func TestHandleRequestStopServiceRequiresProjectAndService(t *testing.T) {
 }
 
 func TestHandleRequestPingReturnsProtocol(t *testing.T) {
-	d := &Daemon{}
+	startedAt := time.Date(2026, time.July, 11, 12, 0, 0, 0, time.UTC)
+	d := &Daemon{version: "v0.2.1", commit: "abc1234", startedAt: startedAt}
 	resp := d.HandleRequest(Request{Action: "ping"})
 	if !resp.OK {
 		t.Fatalf("ping response error: %s", resp.Error)
 	}
 	var payload struct {
-		Status   string `json:"status"`
-		Protocol int    `json:"protocol"`
+		Status    string    `json:"status"`
+		Protocol  int       `json:"protocol"`
+		Version   string    `json:"version"`
+		Commit    string    `json:"commit"`
+		PID       int       `json:"pid"`
+		StartedAt time.Time `json:"started_at"`
 	}
 	if err := json.Unmarshal(resp.Data, &payload); err != nil {
 		t.Fatalf("unmarshal ping payload: %v", err)
@@ -99,6 +104,15 @@ func TestHandleRequestPingReturnsProtocol(t *testing.T) {
 	}
 	if payload.Protocol != CurrentProtocolVersion {
 		t.Fatalf("ping protocol = %d, want %d", payload.Protocol, CurrentProtocolVersion)
+	}
+	if payload.Version != "v0.2.1" || payload.Commit != "abc1234" {
+		t.Fatalf("ping build = %s (%s), want v0.2.1 (abc1234)", payload.Version, payload.Commit)
+	}
+	if payload.PID != os.Getpid() {
+		t.Fatalf("ping pid = %d, want %d", payload.PID, os.Getpid())
+	}
+	if !payload.StartedAt.Equal(startedAt) {
+		t.Fatalf("ping started_at = %s, want %s", payload.StartedAt, startedAt)
 	}
 }
 

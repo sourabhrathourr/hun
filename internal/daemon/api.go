@@ -3,6 +3,7 @@ package daemon
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/sourabhrathourr/hun/internal/config"
@@ -40,8 +41,12 @@ func (d *Daemon) HandleRequest(req Request) Response {
 	switch req.Action {
 	case "ping":
 		return successResponse(map[string]interface{}{
-			"status":   "pong",
-			"protocol": CurrentProtocolVersion,
+			"status":     "pong",
+			"protocol":   CurrentProtocolVersion,
+			"version":    d.version,
+			"commit":     d.commit,
+			"pid":        os.Getpid(),
+			"started_at": d.startedAt,
 		})
 	case "start":
 		return d.handleStart(req)

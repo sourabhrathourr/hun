@@ -3,9 +3,11 @@ import Foundation
 
 nonisolated protocol HunDaemonSupervisorProtocol {
     func ensureDaemon() async throws
+    func restartDaemon() async throws
 }
 
 nonisolated protocol HunDaemonClientProtocol: AnyObject {
+    func daemonInfo() async throws -> HunDaemonInfo
     func snapshot(force: Bool) async throws -> HunDaemonSnapshot
     func registerProject(path: String) async throws
     func startProject(_ project: String, mode: HunDaemonStartMode) async throws
@@ -25,6 +27,50 @@ nonisolated protocol HunDaemonClientProtocol: AnyObject {
         onLine: @escaping @Sendable (HunDaemonLogLine) -> Void,
         onError: @escaping @Sendable (Error) -> Void
     ) throws -> HunLogSubscribing
+}
+
+nonisolated struct HunDaemonInfo: Decodable, Equatable {
+    let status: String
+    let protocolVersion: Int
+    let version: String
+    let commit: String
+    let pid: Int
+    let startedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case protocolVersion = "protocol"
+        case version
+        case commit
+        case pid
+        case startedAt = "started_at"
+    }
+
+    init(
+        status: String,
+        protocolVersion: Int,
+        version: String,
+        commit: String,
+        pid: Int,
+        startedAt: String
+    ) {
+        self.status = status
+        self.protocolVersion = protocolVersion
+        self.version = version
+        self.commit = commit
+        self.pid = pid
+        self.startedAt = startedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        status = try container.decode(String.self, forKey: .status)
+        protocolVersion = try container.decodeIfPresent(Int.self, forKey: .protocolVersion) ?? 0
+        version = try container.decodeIfPresent(String.self, forKey: .version) ?? "unknown"
+        commit = try container.decodeIfPresent(String.self, forKey: .commit) ?? "none"
+        pid = try container.decodeIfPresent(Int.self, forKey: .pid) ?? 0
+        startedAt = try container.decodeIfPresent(String.self, forKey: .startedAt) ?? ""
+    }
 }
 
 nonisolated protocol HunLogSubscribing: AnyObject {
@@ -187,13 +233,17 @@ nonisolated struct HunDaemonLogLine: Decodable, Equatable {
 }
 
 nonisolated final class HunDaemonClient: HunDaemonClientProtocol {
-    private static let requiredProtocol = 10
+    private static let requiredProtocol = 11
     private let socketPath: String
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
     init(socketPath: String = HunPaths.socketPath) {
         self.socketPath = socketPath
+    }
+
+    func daemonInfo() async throws -> HunDaemonInfo {
+        try await request(HunDaemonRequest(action: "ping"), timeoutNanoseconds: 500_000_000)
     }
 
     func snapshot(force: Bool) async throws -> HunDaemonSnapshot {
@@ -258,7 +308,7 @@ nonisolated final class HunDaemonClient: HunDaemonClientProtocol {
     }
 
     func ping() async -> Bool {
-        await daemonProtocol() != nil
+        (try? await daemonInfo())?.status == "pong"
     }
 
     func isCompatibleDaemon() async -> Bool {
@@ -266,13 +316,8 @@ nonisolated final class HunDaemonClient: HunDaemonClientProtocol {
     }
 
     private func daemonProtocol() async -> Int? {
-        do {
-            let payload: PingPayload = try await request(HunDaemonRequest(action: "ping"), timeoutNanoseconds: 500_000_000)
-            guard payload.status == "pong" else { return nil }
-            return payload.protocol
-        } catch {
-            return nil
-        }
+        guard let info = try? await daemonInfo(), info.status == "pong" else { return nil }
+        return info.protocolVersion
     }
 
     func supportsSnapshot() async -> Bool {
@@ -317,12 +362,26 @@ nonisolated final class HunDaemonSupervisor: HunDaemonSupervisorProtocol {
             return
         }
 
-        terminateExistingDaemon()
+        try await restartDaemon()
+    }
+
+    func restartDaemon() async throws {
+        let info = try? await client.daemonInfo()
+        try terminateExistingDaemon(
+            reportedPID: info?.pid ?? 0,
+            socketResponded: info?.status == "pong"
+        )
+        try await launchDaemon()
+    }
+
+    private func launchDaemon() async throws {
         let binary = try HunPaths.resolveHunBinary()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binary)
         process.arguments = ["daemon"]
-        process.environment = await HunShellEnvironment.loginEnvironment()
+        var environment = await HunShellEnvironment.loginEnvironment()
+        environment["HUN_HOME"] = HunPaths.homeURL.path
+        process.environment = environment
         process.standardInput = nil
         process.standardOutput = nil
         process.standardError = nil
@@ -338,25 +397,18 @@ nonisolated final class HunDaemonSupervisor: HunDaemonSupervisorProtocol {
         throw HunDaemonError.daemon("daemon did not become ready")
     }
 
-    private func terminateExistingDaemon() {
-        guard let pidText = try? String(contentsOfFile: HunPaths.pidPath, encoding: .utf8),
-              let pid = Int32(pidText.trimmingCharacters(in: .whitespacesAndNewlines)),
-              pid > 0
-        else {
-            terminateDaemonProcesses()
-            try? FileManager.default.removeItem(atPath: HunPaths.socketPath)
+    private func terminateExistingDaemon(reportedPID: Int, socketResponded: Bool) throws {
+        let pid = resolvedDaemonProcessID(reportedPID: reportedPID, pidPath: HunPaths.pidPath)
+        guard let pid else {
+            if socketResponded {
+                throw HunDaemonError.daemon("daemon is healthy but did not report a process ID")
+            }
             return
         }
 
         terminateDaemonProcess(pid)
         try? FileManager.default.removeItem(atPath: HunPaths.socketPath)
         try? FileManager.default.removeItem(atPath: HunPaths.pidPath)
-    }
-
-    private func terminateDaemonProcesses(excluding excludedPID: Int32? = nil) {
-        for pid in findDaemonProcessIDs() where pid != excludedPID && pid != Darwin.getpid() {
-            terminateDaemonProcess(pid)
-        }
     }
 
     private func terminateDaemonProcess(_ pid: Int32) {
@@ -373,31 +425,6 @@ nonisolated final class HunDaemonSupervisor: HunDaemonSupervisorProtocol {
         }
     }
 
-    private func findDaemonProcessIDs() -> [Int32] {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        process.arguments = ["-f", "(^|/)hun daemon$"]
-
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = nil
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return []
-        }
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        guard let output = String(data: data, encoding: .utf8) else {
-            return []
-        }
-
-        return output
-            .split(whereSeparator: \.isNewline)
-            .compactMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
-    }
 }
 
 nonisolated final class HunLogSubscription: HunLogSubscribing {
@@ -450,6 +477,19 @@ nonisolated final class HunLogSubscription: HunLogSubscribing {
     }
 }
 
+nonisolated func resolvedDaemonProcessID(reportedPID: Int, pidPath: String) -> Int32? {
+    if reportedPID > 0, reportedPID <= Int(Int32.max) {
+        return Int32(reportedPID)
+    }
+    guard let pidText = try? String(contentsOfFile: pidPath, encoding: .utf8),
+          let pid = Int32(pidText.trimmingCharacters(in: .whitespacesAndNewlines)),
+          pid > 0
+    else {
+        return nil
+    }
+    return pid
+}
+
 nonisolated private final class SocketHandle: @unchecked Sendable {
     private let lock = NSLock()
     private var fd: Int32?
@@ -495,11 +535,6 @@ nonisolated private struct HunDaemonEnvelope<T: Decodable>: Decodable {
 
 nonisolated private struct StatusPayload: Decodable {}
 
-nonisolated private struct PingPayload: Decodable {
-    let status: String
-    let `protocol`: Int?
-}
-
 nonisolated enum HunDaemonError: Error, LocalizedError {
     case daemon(String)
     case missingData
@@ -521,17 +556,30 @@ nonisolated enum HunDaemonError: Error, LocalizedError {
 }
 
 nonisolated enum HunPaths {
-    static var socketPath: String {
+    #if DEBUG
+    static let environmentName = "Development"
+    private static let directoryName = ".hun-dev"
+    #else
+    static let environmentName = "Production"
+    private static let directoryName = ".hun"
+    #endif
+
+    static var homeURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".hun/daemon.sock")
-            .path
+            .appendingPathComponent(directoryName, isDirectory: true)
+    }
+
+    static var socketPath: String {
+        homeURL.appendingPathComponent("daemon.sock").path
     }
 
     static var pidPath: String {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".hun/daemon.pid")
-            .path
+        homeURL.appendingPathComponent("daemon.pid").path
     }
+
+    static var configURL: URL { homeURL.appendingPathComponent("config.yml") }
+    static var stateURL: URL { homeURL.appendingPathComponent("state.json") }
+    static var logsURL: URL { homeURL.appendingPathComponent("logs", isDirectory: true) }
 
     static func resolveHunBinary() throws -> String {
         var candidates: [String] = []

@@ -38,6 +38,10 @@ final class HunStore {
     var pendingProjectReview: HunProjectInitReview?
     var lastError: String?
     var pendingActions: Set<HunActionKey> = []
+    var daemonInfo: HunDaemonInfo?
+    var daemonSettingsError: String?
+    var isLoadingDaemonInfo = false
+    var isRestartingDaemon = false
 
     private let client: HunDaemonClientProtocol
     private let supervisor: HunDaemonSupervisorProtocol
@@ -95,6 +99,36 @@ final class HunStore {
 
     func clearLastError() {
         lastError = nil
+    }
+
+    func refreshDaemonInfo() async {
+        guard !isLoadingDaemonInfo else { return }
+        isLoadingDaemonInfo = true
+        defer { isLoadingDaemonInfo = false }
+        do {
+            daemonInfo = try await client.daemonInfo()
+            daemonSettingsError = nil
+        } catch {
+            daemonInfo = nil
+            daemonSettingsError = error.localizedDescription
+        }
+    }
+
+    func restartDaemon() async {
+        guard !isRestartingDaemon else { return }
+        isRestartingDaemon = true
+        defer { isRestartingDaemon = false }
+        do {
+            try await supervisor.restartDaemon()
+            daemonInfo = try await client.daemonInfo()
+            daemonSettingsError = nil
+            isConnected = true
+            await refresh(force: true)
+        } catch {
+            daemonInfo = nil
+            daemonSettingsError = error.localizedDescription
+            isConnected = false
+        }
     }
 
     func addProject(at url: URL) async {

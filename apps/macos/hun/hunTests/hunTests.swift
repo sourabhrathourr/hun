@@ -46,6 +46,67 @@ struct hunTests {
         #expect(snapshot.projects.map(\.id) == ["app"])
     }
 
+    @Test func daemonSettingsLoadsHealthAndRestartsDaemon() async throws {
+        let client = MockDaemonClient()
+        client.nextDaemonInfo = HunDaemonInfo(
+            status: "pong",
+            protocolVersion: 11,
+            version: "v0.2.1",
+            commit: "abc1234",
+            pid: 4242,
+            startedAt: "2026-07-11T06:30:00Z"
+        )
+        let supervisor = MockSupervisor()
+        let store = HunStore(client: client, supervisor: supervisor, startAutomatically: false)
+
+        await store.refreshDaemonInfo()
+
+        #expect(store.daemonInfo == client.nextDaemonInfo)
+        #expect(store.daemonSettingsError == nil)
+
+        await store.restartDaemon()
+
+        #expect(supervisor.restartCount == 1)
+        #expect(client.daemonInfoRequests == 2)
+        #expect(store.daemonInfo == client.nextDaemonInfo)
+        #expect(store.isRestartingDaemon == false)
+    }
+
+    @Test func daemonInfoDecodesLegacyPingWithoutBuildMetadata() throws {
+        let payload = """
+        {
+          "status": "pong",
+          "protocol": 10
+        }
+        """.data(using: .utf8)!
+
+        let info = try JSONDecoder().decode(HunDaemonInfo.self, from: payload)
+
+        #expect(info.status == "pong")
+        #expect(info.protocolVersion == 10)
+        #expect(info.version == "unknown")
+        #expect(info.commit == "none")
+        #expect(info.pid == 0)
+        #expect(info.startedAt.isEmpty)
+    }
+
+    @Test func debugAppUsesIsolatedHunHome() throws {
+        #if DEBUG
+        #expect(HunPaths.environmentName == "Development")
+        #expect(HunPaths.homeURL.lastPathComponent == ".hun-dev")
+        #expect(HunPaths.socketPath.contains("/.hun-dev/"))
+        #endif
+    }
+
+    @Test func daemonRestartPrefersSocketReportedPIDWhenPIDFileIsMissing() throws {
+        let missingPIDFile = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString)
+            .path
+
+        #expect(resolvedDaemonProcessID(reportedPID: 4242, pidPath: missingPIDFile) == 4242)
+        #expect(resolvedDaemonProcessID(reportedPID: 0, pidPath: missingPIDFile) == nil)
+    }
+
     @Test func logClassificationDoesNotTreatStderrAsError() throws {
         #expect(logLevel("Container otto-redis-1 Running", isErr: true) == .info)
         #expect(logLevel("INFO/MainProcess] beat: Starting...", isErr: true) == .info)
@@ -418,7 +479,13 @@ struct hunTests {
 }
 
 private final class MockSupervisor: HunDaemonSupervisorProtocol {
+    var restartCount = 0
+
     func ensureDaemon() async throws {}
+
+    func restartDaemon() async throws {
+        restartCount += 1
+    }
 }
 
 private final class MockProjectInitializer: HunProjectInitializing {
@@ -444,12 +511,27 @@ private final class MockProjectInitializer: HunProjectInitializing {
 
 private final class MockDaemonClient: HunDaemonClientProtocol {
     var nextSnapshot = HunDaemonSnapshot.fixture(activeProject: "app")
+    var nextDaemonInfo = HunDaemonInfo(
+        status: "pong",
+        protocolVersion: 11,
+        version: "v0.2.1",
+        commit: "abc1234",
+        pid: 4242,
+        startedAt: "2026-07-11T06:30:00Z"
+    )
     var error: Error?
     var startProjectDelay: Duration?
     var actions: [String] = []
     var snapshotForces: [Bool] = []
     var logRequests: [(project: String, service: String?, lines: Int)] = []
     var subscriptions: [(project: String, service: String?)] = []
+	var daemonInfoRequests = 0
+
+	func daemonInfo() async throws -> HunDaemonInfo {
+		if let error { throw error }
+		daemonInfoRequests += 1
+		return nextDaemonInfo
+	}
 
     func snapshot(force: Bool) async throws -> HunDaemonSnapshot {
         if let error { throw error }

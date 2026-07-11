@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 
+	"github.com/sourabhrathourr/hun/internal/daemon"
 	"github.com/spf13/cobra"
 )
 
@@ -15,6 +16,7 @@ func SetVersionInfo(version, commit string) {
 	versionStr = version
 	commitStr = commit
 	rootCmd.Version = versionStr
+	daemon.SetVersionInfo(version, commit)
 }
 
 func init() {

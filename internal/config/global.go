@@ -3,17 +3,22 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-// HunDir returns the path to ~/.hun/, creating it if needed.
+// HunDir returns the configured Hun data directory, defaulting to ~/.hun, and creates it if needed.
 func HunDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
+	dir := strings.TrimSpace(os.Getenv("HUN_HOME"))
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		dir = filepath.Join(home, ".hun")
 	}
-	dir := filepath.Join(home, ".hun")
+	dir = filepath.Clean(dir)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", err
 	}
