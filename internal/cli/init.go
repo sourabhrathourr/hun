@@ -144,10 +144,14 @@ func detectedToProject(name string, result detect.Result) *config.Project {
 		},
 	}
 	for _, svc := range result.Services {
+		portEnv := svc.PortEnv
+		if portEnv == "PORT" {
+			portEnv = ""
+		}
 		s := &config.Service{
 			Cmd:       svc.Cmd,
 			Port:      svc.Port,
-			PortEnv:   svc.PortEnv,
+			PortEnv:   portEnv,
 			Ready:     svc.Ready,
 			DependsOn: svc.DependsOn,
 		}

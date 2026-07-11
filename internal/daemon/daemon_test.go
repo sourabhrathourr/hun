@@ -60,6 +60,23 @@ func TestAcquireLockPreventsConcurrentDaemonStartup(t *testing.T) {
 	}
 }
 
+func TestAcquireLockPublishesOwnerPID(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), "daemon.lock")
+	d := &Daemon{lockPath: lockPath, sockPath: shortTestSocketPath(t)}
+	if err := d.acquireLock(); err != nil {
+		t.Fatalf("acquireLock: %v", err)
+	}
+	defer d.releaseLock()
+
+	raw, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatalf("read lock file: %v", err)
+	}
+	if got, want := strings.TrimSpace(string(raw)), fmt.Sprintf("%d", os.Getpid()); got != want {
+		t.Fatalf("lock owner PID = %q, want %q", got, want)
+	}
+}
+
 func shortTestSocketPath(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(os.TempDir(), fmt.Sprintf("hun-%d-%d.sock", os.Getpid(), time.Now().UnixNano()))

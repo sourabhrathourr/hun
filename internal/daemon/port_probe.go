@@ -15,6 +15,11 @@ import (
 )
 
 var errPortInspectionUnavailable = errors.New("process listener inspection unavailable")
+var errPortUnavailable = errors.New("port unavailable")
+
+func isPortUnavailable(err error) bool {
+	return errors.Is(err, errPortUnavailable)
+}
 
 var localPortLeases = struct {
 	sync.Mutex
@@ -34,7 +39,7 @@ func acquirePortLease(port int) (*portLease, error) {
 	localPortLeases.Lock()
 	if localPortLeases.ports[port] {
 		localPortLeases.Unlock()
-		return nil, fmt.Errorf("configured port %d is reserved by another hun service", port)
+		return nil, fmt.Errorf("configured port %d is reserved by another hun service: %w", port, errPortUnavailable)
 	}
 	localPortLeases.ports[port] = true
 	localPortLeases.Unlock()
@@ -59,7 +64,7 @@ func acquirePortLease(port int) (*portLease, error) {
 	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		_ = file.Close()
 		releaseLocal()
-		return nil, fmt.Errorf("configured port %d is reserved by another hun instance", port)
+		return nil, fmt.Errorf("configured port %d is reserved by another hun instance: %w", port, errPortUnavailable)
 	}
 	return &portLease{port: port, file: file}, nil
 }
@@ -83,11 +88,11 @@ func ensureTCPPortAvailable(port int) error {
 	address := "127.0.0.1:" + strconv.Itoa(port)
 	if conn, err := net.DialTimeout("tcp4", address, 100*time.Millisecond); err == nil {
 		_ = conn.Close()
-		return fmt.Errorf("configured port %d is unavailable: already accepting TCP connections", port)
+		return fmt.Errorf("configured port %d is unavailable: already accepting TCP connections: %w", port, errPortUnavailable)
 	}
 	listener, err := net.Listen("tcp4", "0.0.0.0:"+strconv.Itoa(port))
 	if err != nil {
-		return fmt.Errorf("configured port %d is unavailable: %w", port, err)
+		return fmt.Errorf("configured port %d is unavailable: %v: %w", port, err, errPortUnavailable)
 	}
 	return listener.Close()
 }

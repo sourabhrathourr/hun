@@ -415,17 +415,12 @@ func (d *Daemon) handleFocus(req Request) Response {
 
 func (d *Daemon) transitionToFocus(preferred string) error {
 	survivor := d.manager.FocusSurvivor(preferred)
-	originalOffset := 0
-	if survivor != "" {
-		originalOffset = d.manager.ports.GetOffset(survivor)
-	}
-	needsOffsetNormalization := originalOffset != 0
-
 	var survivorPath string
 	var survivorConfig *config.Project
 	var runningServices []string
+	originalPorts := make(map[string]int)
 	needsBasePortRestart := false
-	if needsOffsetNormalization {
+	if survivor != "" {
 		var ok bool
 		survivorPath, ok = d.manager.ProjectPath(survivor)
 		if !ok {
@@ -441,7 +436,8 @@ func (d *Daemon) transitionToFocus(preferred string) error {
 				continue
 			}
 			runningServices = append(runningServices, service)
-			if svc := survivorConfig.Services[service]; svc != nil && svc.Port > 0 {
+			originalPorts[service] = info.Port
+			if svc := survivorConfig.Services[service]; svc != nil && svc.Port > 0 && info.Port != svc.Port {
 				needsBasePortRestart = true
 			}
 		}
@@ -461,7 +457,7 @@ func (d *Daemon) transitionToFocus(preferred string) error {
 	if err := d.manager.SetFocusMode(survivor); err != nil {
 		return err
 	}
-	if needsOffsetNormalization && !needsBasePortRestart {
+	if !needsBasePortRestart && d.manager.ports.GetOffset(survivor) != 0 {
 		return d.manager.MoveProjectToBaseOffset(survivor)
 	}
 	if !needsBasePortRestart {
@@ -473,7 +469,7 @@ func (d *Daemon) transitionToFocus(preferred string) error {
 			continue
 		}
 		if err := ensureTCPPortAvailable(svc.Port); err != nil {
-			return fmt.Errorf("cannot restore %s to base port %d; it remains running at offset %d: %w", survivor, svc.Port, originalOffset, err)
+			return fmt.Errorf("cannot restore %s/%s to base port %d; it remains running on port %d: %w", survivor, service, svc.Port, originalPorts[service], err)
 		}
 	}
 	if err := d.manager.StopProject(survivor); err != nil {
@@ -482,24 +478,23 @@ func (d *Daemon) transitionToFocus(preferred string) error {
 	for _, service := range runningServices {
 		if err := d.manager.StartService(survivor, service, survivorConfig, survivorPath, true); err != nil {
 			basePortErr := fmt.Errorf("restarting %s/%s on base ports: %w", survivor, service, err)
-			if rollbackErr := d.restoreFocusSurvivor(survivor, survivorPath, survivorConfig, runningServices, originalOffset); rollbackErr != nil {
-				return fmt.Errorf("%v; restoring offset %d also failed: %w", basePortErr, originalOffset, rollbackErr)
+			if rollbackErr := d.restoreFocusSurvivor(survivor, survivorPath, survivorConfig, runningServices, originalPorts); rollbackErr != nil {
+				return fmt.Errorf("%v; restoring previous service ports also failed: %w", basePortErr, rollbackErr)
 			}
-			return fmt.Errorf("%v; restored previous offset %d", basePortErr, originalOffset)
+			return fmt.Errorf("%v; restored previous service ports", basePortErr)
 		}
 	}
 	return nil
 }
 
-func (d *Daemon) restoreFocusSurvivor(project, path string, proj *config.Project, services []string, offset int) error {
+func (d *Daemon) restoreFocusSurvivor(project, path string, proj *config.Project, services []string, ports map[string]int) error {
 	if d.manager.IsRunning(project) {
 		if err := d.manager.StopProject(project); err != nil {
 			return err
 		}
 	}
-	d.manager.ports.SetOffset(project, offset)
 	for _, service := range services {
-		if err := d.manager.StartService(project, service, proj, path, true); err != nil {
+		if err := d.manager.startService(project, service, proj, path, true, ports); err != nil {
 			return err
 		}
 	}

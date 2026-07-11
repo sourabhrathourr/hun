@@ -3,6 +3,7 @@ import AppKit
 
 struct ContentView: View {
     @Environment(HunStore.self) private var store
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var sidebarSearch = ""
     @State private var logSearch = ""
     @State private var sidebarDocked = true
@@ -152,6 +153,9 @@ struct ContentView: View {
                     EmptyStateView(projectCount: model.projects.count, onRefresh: { store.refreshNow() })
                 }
             }
+            .id(store.selectedProjectID)
+            .transition(.opacity)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: store.selectedProjectID)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(AppTheme.appBackground)
         }
@@ -575,7 +579,8 @@ private struct SidebarProjectRow: View {
                     iconPath: project.iconPath,
                     size: 17,
                     cornerRadius: 4,
-                    emphasized: selected
+                    emphasized: selected,
+                    status: project.status
                 )
 
                 Text(project.name)

@@ -181,7 +181,7 @@ func (m *Manager) StartProject(projectName string, projConfig *config.Project, p
 	}
 
 	m.logs.SetProjectConfig(projectName, projConfig.Logs)
-	offset := m.ports.AssignOffset(projectName, exclusive)
+	m.ports.EnsureProject(projectName)
 
 	order, err := topoSort(projConfig)
 	if err != nil {
@@ -217,20 +217,23 @@ func (m *Manager) StartProject(projectName string, projConfig *config.Project, p
 
 	for _, svcName := range order {
 		svcConfig := projConfig.Services[svcName]
-		actualPort := m.ports.ApplyOffset(projectName, svcConfig.Port)
-		proc, err := m.startConfiguredService(projectName, svcName, svcConfig, projectPath, actualPort, dependentCount[svcName] > 0)
+		proc, err := m.startConfiguredService(projectName, svcName, svcConfig, projectPath, !exclusive, 0, dependentCount[svcName] > 0)
 		if err != nil {
 			return rollback(fmt.Errorf("starting service %s: %w", svcName, err))
 		}
 		started[svcName] = proc
 	}
 
-	m.setProjectRunning(projectName, projectPath, offset, exclusive)
+	m.setProjectRunning(projectName, projectPath, m.refreshProjectOffset(projectName), exclusive)
 	return nil
 }
 
 // StartService starts one service and any services it depends on.
 func (m *Manager) StartService(projectName, serviceName string, projConfig *config.Project, projectPath string, exclusive bool) error {
+	return m.startService(projectName, serviceName, projConfig, projectPath, exclusive, nil)
+}
+
+func (m *Manager) startService(projectName, serviceName string, projConfig *config.Project, projectPath string, exclusive bool, preferredPorts map[string]int) error {
 	if projConfig.Services[serviceName] == nil {
 		return fmt.Errorf("service %s not found in project %s", serviceName, projectName)
 	}
@@ -260,7 +263,7 @@ func (m *Manager) StartService(projectName, serviceName string, projConfig *conf
 	}
 
 	m.logs.SetProjectConfig(projectName, projConfig.Logs)
-	offset := m.ports.AssignOffset(projectName, exclusive)
+	m.ports.EnsureProject(projectName)
 	started := make(map[string]*Process)
 	rollback := func(startErr error) error {
 		for _, proc := range started {
@@ -290,26 +293,31 @@ func (m *Manager) StartService(projectName, serviceName string, projConfig *conf
 		m.forgetProcess(projectName, svcName)
 
 		svcConfig := projConfig.Services[svcName]
-		actualPort := m.ports.ApplyOffset(projectName, svcConfig.Port)
-		proc, err := m.startConfiguredService(projectName, svcName, svcConfig, projectPath, actualPort, idx < len(order)-1)
+		proc, err := m.startConfiguredService(projectName, svcName, svcConfig, projectPath, !exclusive, preferredPorts[svcName], idx < len(order)-1)
 		if err != nil {
 			return rollback(fmt.Errorf("starting service %s: %w", svcName, err))
 		}
 		started[svcName] = proc
 	}
 
-	m.setProjectRunning(projectName, projectPath, offset, exclusive)
+	m.setProjectRunning(projectName, projectPath, m.refreshProjectOffset(projectName), exclusive)
 	return nil
 }
 
-func (m *Manager) startConfiguredService(projectName, serviceName string, svcConfig *config.Service, projectPath string, actualPort int, waitForReady bool) (*Process, error) {
-	lease, err := acquirePortLease(actualPort)
+func (m *Manager) startConfiguredService(projectName, serviceName string, svcConfig *config.Service, projectPath string, allowPortFallback bool, preferredPort int, waitForReady bool) (*Process, error) {
+	var actualPort int
+	var lease *portLease
+	var err error
+	if preferredPort > 0 {
+		actualPort, lease, err = m.ports.ReserveExactPort(preferredPort)
+	} else {
+		actualPort, lease, err = m.ports.ReserveAvailablePort(svcConfig.Port, allowPortFallback)
+	}
 	if err != nil {
 		return nil, err
 	}
-	if err := ensureTCPPortAvailable(actualPort); err != nil {
-		lease.release()
-		return nil, err
+	if svcConfig.Port > 0 && actualPort >= svcConfig.Port {
+		m.ports.RecordOffset(projectName, actualPort-svcConfig.Port)
 	}
 
 	dir := projectPath
@@ -319,14 +327,16 @@ func (m *Manager) startConfiguredService(projectName, serviceName string, svcCon
 
 	restartPolicy := svcConfig.Restart
 	proc := &Process{
-		Name:         serviceName,
-		Cmd:          svcConfig.Cmd,
-		Dir:          dir,
-		Env:          svcConfig.Env,
-		PortEnv:      svcConfig.PortEnv,
-		ReadyPattern: svcConfig.Ready,
-		observedPort: actualPort,
-		launchPort:   actualPort,
+		Name:             serviceName,
+		Cmd:              svcConfig.Cmd,
+		Dir:              dir,
+		Env:              svcConfig.Env,
+		PortEnv:          svcConfig.PortEnv,
+		ReadyPattern:     svcConfig.Ready,
+		basePort:         svcConfig.Port,
+		observedPort:     actualPort,
+		launchPort:       actualPort,
+		allowRuntimePort: allowPortFallback,
 	}
 	proc.SetPortLease(lease)
 
@@ -360,7 +370,7 @@ func (m *Manager) startConfiguredService(projectName, serviceName string, svcCon
 		if !intentional && err != nil {
 			status = "crashed"
 		}
-		m.updateServiceState(projectName, serviceName, 0, actualPort, status)
+		m.updateServiceState(projectName, serviceName, 0, proc.ObservedPort(), status)
 		if status == "crashed" && restartPolicy == "on_failure" {
 			time.Sleep(time.Second)
 			m.logs.ResetService(projectName, serviceName)
@@ -376,6 +386,7 @@ func (m *Manager) startConfiguredService(projectName, serviceName string, svcCon
 		if !restarted {
 			proc.ReleasePortLease()
 		}
+		m.refreshProjectOffset(projectName)
 	}
 
 	readyCh := make(chan struct{}, 1)
@@ -503,6 +514,7 @@ func (m *Manager) StopService(projectName, serviceName string) error {
 
 	m.clearRuntimePortSignal(projectName, serviceName)
 	m.updateServiceState(projectName, serviceName, 0, port, "stopped")
+	m.refreshProjectOffset(projectName)
 	return nil
 }
 
@@ -541,24 +553,19 @@ func (m *Manager) RestartService(projectName, serviceName string) error {
 	}
 	m.clearRuntimePortSignal(projectName, serviceName)
 	m.logs.ResetService(projectName, serviceName)
-	launchPort := proc.ResetObservedPort()
-	lease, err := acquirePortLease(launchPort)
+	launchPort, lease, err := m.ports.ReserveAvailablePort(proc.BasePort(), proc.AllowsRuntimePort())
 	if err != nil {
-		m.updateServiceState(projectName, serviceName, 0, launchPort, "crashed")
+		m.updateServiceState(projectName, serviceName, 0, proc.BasePort(), "crashed")
 		return err
 	}
-	proc.SetPortLease(lease)
-	if err := ensureTCPPortAvailable(launchPort); err != nil {
-		proc.ReleasePortLease()
-		m.updateServiceState(projectName, serviceName, 0, launchPort, "crashed")
-		return err
-	}
+	proc.PreparePort(launchPort, lease)
 	if err := proc.Start(); err != nil {
 		proc.ReleasePortLease()
 		m.updateServiceState(projectName, serviceName, 0, launchPort, "crashed")
 		return err
 	}
 	m.updateServiceState(projectName, serviceName, proc.PID(), launchPort, "running")
+	m.refreshProjectOffset(projectName)
 	go m.monitorRuntimePort(projectName, serviceName, proc, proc.PID(), proc.StartedAt())
 	return nil
 }
@@ -718,11 +725,37 @@ func (m *Manager) RunningProjects() []string {
 	return projects
 }
 
+// refreshProjectOffset derives compatibility metadata from live service ports.
+// It is never used to choose a future port.
+func (m *Manager) refreshProjectOffset(project string) int {
+	m.mu.RLock()
+	procs := m.processes[project]
+	maxOffset := 0
+	for _, proc := range procs {
+		if !proc.IsRunning() {
+			continue
+		}
+		basePort := proc.BasePort()
+		observedPort := proc.ObservedPort()
+		if basePort > 0 && observedPort > basePort && observedPort-basePort > maxOffset {
+			maxOffset = observedPort - basePort
+		}
+	}
+	m.mu.RUnlock()
+
+	m.ports.SetOffset(project, maxOffset)
+	_ = m.mutateState(func(st *state.State) {
+		ps := st.Projects[project]
+		ps.Offset = maxOffset
+		st.Projects[project] = ps
+	})
+	return maxOffset
+}
+
 // MoveProjectToBaseOffset normalizes a project whose running services do not
 // use configured ports, avoiding an unnecessary process restart.
 func (m *Manager) MoveProjectToBaseOffset(project string) error {
-	m.ports.ReleaseOffset(project)
-	m.ports.AssignOffset(project, true)
+	m.ports.SetOffset(project, 0)
 	return m.mutateState(func(st *state.State) {
 		ps := st.Projects[project]
 		ps.Offset = 0
@@ -998,7 +1031,7 @@ func (m *Manager) applyVerifiedRuntimePort(project, service string, proc *Proces
 	key := project + ":" + service
 
 	m.mu.Lock()
-	if m.processes[project][service] != proc {
+	if m.processes[project] == nil || m.processes[project][service] != proc {
 		m.mu.Unlock()
 		return
 	}
@@ -1009,11 +1042,25 @@ func (m *Manager) applyVerifiedRuntimePort(project, service string, proc *Proces
 		m.mu.Unlock()
 		return
 	}
+	allowRuntimePort := proc.AllowsRuntimePort()
+	m.mu.Unlock()
+
+	var adoptErr error
+	if launchPort > 0 && detected != launchPort && allowRuntimePort {
+		adoptErr = proc.AdoptRuntimePort(detected)
+	}
+
+	m.mu.Lock()
+	if m.processes[project] == nil || m.processes[project][service] != proc {
+		m.mu.Unlock()
+		return
+	}
+	signal = m.portSignals[key]
 	proc.SetObservedPort(detected)
 	signal.port = detected
 	signal.lastSeen = time.Now()
 	signal.confirmed = true
-	shouldStop := launchPort > 0 && detected != launchPort && !signal.stopping
+	shouldStop := launchPort > 0 && detected != launchPort && (!allowRuntimePort || adoptErr != nil) && !signal.stopping
 	if shouldStop {
 		signal.stopping = true
 	}
@@ -1021,18 +1068,29 @@ func (m *Manager) applyVerifiedRuntimePort(project, service string, proc *Proces
 	procPID := proc.PID()
 	m.mu.Unlock()
 
-	offset := m.ports.GetOffset(project)
-	basePort := detected - offset
-	if basePort <= 0 {
+	basePort := proc.BasePort()
+	offset := 0
+	if basePort > 0 {
+		offset = detected - basePort
+		if offset < 0 {
+			offset = 0
+		}
+		m.ports.RecordOffset(project, offset)
+	} else {
 		basePort = detected
 	}
 
 	m.updateServiceState(project, service, procPID, detected, "running")
+	m.refreshProjectOffset(project)
 
 	m.emitInternalServiceLine(project, service, fmt.Sprintf("[hun] detected runtime port %d (base %d, offset %d)", detected, basePort, offset), false)
 
 	if shouldStop {
-		m.emitInternalServiceLine(project, service, fmt.Sprintf("[hun] configured port %d but service bound %d; stopping service", launchPort, detected), true)
+		reason := ""
+		if adoptErr != nil {
+			reason = fmt.Sprintf("; unable to reserve detected port: %v", adoptErr)
+		}
+		m.emitInternalServiceLine(project, service, fmt.Sprintf("[hun] configured port %d but service bound %d%s; stopping service", launchPort, detected, reason), true)
 		go func() {
 			_ = proc.Stop()
 			m.mu.RLock()

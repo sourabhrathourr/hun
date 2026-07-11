@@ -120,6 +120,22 @@ func (d *Daemon) acquireLock() error {
 		_ = lockFile.Close()
 		return fmt.Errorf("daemon already starting or running")
 	}
+	pid := []byte(fmt.Sprintf("%d\n", os.Getpid()))
+	if err := lockFile.Truncate(0); err != nil {
+		_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+		_ = lockFile.Close()
+		return fmt.Errorf("clearing daemon lock owner: %w", err)
+	}
+	if _, err := lockFile.WriteAt(pid, 0); err != nil {
+		_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+		_ = lockFile.Close()
+		return fmt.Errorf("writing daemon lock owner: %w", err)
+	}
+	if err := lockFile.Sync(); err != nil {
+		_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+		_ = lockFile.Close()
+		return fmt.Errorf("syncing daemon lock owner: %w", err)
+	}
 	d.lockFile = lockFile
 	return nil
 }

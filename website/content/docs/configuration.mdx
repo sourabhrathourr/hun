@@ -36,19 +36,19 @@ cwd: ./backend
 
 ### `port` (Optional)
 The port this service listens on. **hun** needs to know this to manage port collisions in Multitask Mode.
-If omitted, **hun** assumes the service doesn't bind a port (like a worker).
-This value is authoritative for every launch. **hun** rejects the launch if the configured TCP port is already occupied, and a per-port lease prevents concurrent hun services or instances from selecting the same port while an application is still starting. Runtime detection verifies listening sockets against the launched process group before updating the live port shown in the UI, and it never rewrites or overrides the configured port on a later start. If a service binds a different verified port, **hun** stops it and reports the mismatch instead of silently accepting the fallback.
+If omitted, **hun** assumes the service doesn't bind a port (like a worker). When present, **hun** always publishes the selected launch port as `PORT`. The configured value is used when available; a Multitask fallback such as `3001` is published when the base port is occupied.
+This is the preferred base port. In Focus mode it is strict: **hun** rejects the launch if that TCP port is occupied. In Multitask mode **hun** uses it unchanged when free and searches upward by `ports.default_offset` only when this service's port is occupied. A per-port lease prevents concurrent hun services or instances from selecting the same port while an application is still starting. Runtime detection verifies listening sockets against the launched process group before updating the live port shown in the UI. Focus mode rejects a different verified listener; Multitask mode adopts it safely.
 
 ```yaml
 port: 8080
 ```
 
 ### `port_env` (Optional)
-If your app reads the port from an environment variable, tell **hun** which one. 
-**hun** will inject the configured `port` (including an intentional Multitask offset) into this variable. The configured value takes priority over inherited environment variables and values under the service's `env` section.
+If your app reads the port from a custom environment variable, tell **hun** which one.
+**hun** always injects the selected port as `PORT` and also injects it into this custom variable. That is normally the configured `port`, or the first available fallback for this service in Multitask mode. The selected value takes priority over inherited environment variables and values under the service's `env` section. This field is an optional alias, not a separate source of truth.
 
 ```yaml
-port_env: PORT  # hun will set PORT=3000 (or 3001, etc.)
+port_env: API_PORT  # hun sets both PORT and API_PORT to 8000 (or its fallback)
 ```
 
 ### `env` (Optional)
@@ -102,7 +102,6 @@ services:
     cmd: npm run dev
     cwd: ./web
     port: 3000
-    port_env: PORT
     ready: "Ready in"
 
   # Backend (Go)

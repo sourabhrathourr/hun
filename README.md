@@ -73,7 +73,6 @@ services:
     cmd: npm run dev
     cwd: ./frontend
     port: 3000
-    port_env: PORT
     ready: "compiled successfully"
 
   backend:
@@ -100,16 +99,16 @@ logs:
   retention: 7d
 ```
 
-`port` is authoritative. When `port_env` is set, hun injects the configured
-port (plus an intentional Multitask offset) into that variable, overriding any
-inherited or service-level value. A port observed in service output is shown as
-live runtime information but never changes future launches. If a service
-explicitly announces that it bound a different port, hun stops it and reports
-the mismatch instead of silently accepting the fallback. Hun verifies live TCP
-listeners against the launched process group before changing status, and it
-rejects configured ports that are already occupied before launch. A per-port
-lease prevents concurrent hun services or instances from selecting the same
-configured port while a slower application is still starting.
+`port` is the preferred base port. In Multitask mode, hun keeps it unchanged
+when it is free and searches upward by the configured offset step only when
+that individual service port is occupied. Hun always injects the selected port
+as `PORT`, overriding inherited or service-level values. When `port_env` names
+a different variable, hun injects the same selected port there as an additional
+alias. Runtime detection verifies live listeners against the launched process
+group. Focus mode rejects a different verified listener; Multitask mode safely
+adopts it so frameworks with their own fallback behavior can keep running. A
+per-port lease prevents concurrent hun services or instances from selecting
+the same port while an application is still starting.
 
 ## Commands
 

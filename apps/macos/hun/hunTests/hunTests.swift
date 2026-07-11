@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 @testable import hun
@@ -18,6 +19,59 @@ struct hunTests {
         #expect(store.model.projects.first?.status == .running)
         #expect(store.model.projects.first?.iconPath == "/tmp/projects/app/logo.png")
         #expect(store.model.projects.first?.iconIsCustom == true)
+    }
+
+    @Test func dashboardNavigationRestoresLastVisibleProject() async throws {
+        let suiteName = "hunTests.navigation.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let snapshot = HunDaemonSnapshot.fixture(activeProject: "app")
+            .appending(.fixtureProject(path: "/tmp/projects/shop"))
+
+        let firstClient = MockDaemonClient()
+        firstClient.nextSnapshot = snapshot
+        let firstStore = HunStore(
+            client: firstClient,
+            supervisor: MockSupervisor(),
+            navigationDefaults: defaults,
+            startAutomatically: false
+        )
+        await firstStore.refresh(force: true)
+        firstStore.selectProject("shop")
+        firstStore.selectedLogScope = .combined
+
+        #expect(defaults.string(forKey: "hun.dashboard.logScope") == "combined")
+
+        let restoredClient = MockDaemonClient()
+        restoredClient.nextSnapshot = snapshot
+        let restoredStore = HunStore(
+            client: restoredClient,
+            supervisor: MockSupervisor(),
+            navigationDefaults: defaults,
+            startAutomatically: false
+        )
+        #expect(restoredStore.selectedLogScope == .combined)
+        await restoredStore.refresh(force: true)
+
+        #expect(restoredStore.selectedProjectID == "shop")
+        #expect(restoredStore.openTabIDs.contains("shop"))
+        #expect(restoredStore.selectedServiceID == "web")
+        #expect(restoredStore.selectedLogScope == .combined)
+    }
+
+    @Test func focusSwitchSelectsProjectForDashboardImmediately() async throws {
+        let client = MockDaemonClient()
+        client.nextSnapshot = HunDaemonSnapshot.fixture(activeProject: "app")
+            .appending(.fixtureProject(path: "/tmp/projects/shop"))
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        await store.refresh(force: true)
+        let project = try #require(store.project(id: "shop"))
+
+        store.focus(project)
+
+        #expect(store.selectedProjectID == "shop")
+        #expect(store.openTabIDs.contains("shop"))
+        try await waitUntil { client.actions.contains("start:shop:exclusive") }
     }
 
     @Test func snapshotDecodingDefaultsMissingWarnings() throws {
@@ -151,6 +205,62 @@ struct hunTests {
 
         #expect(resolvedDaemonProcessID(reportedPID: 4242, pidPath: missingPIDFile) == 4242)
         #expect(resolvedDaemonProcessID(reportedPID: 0, pidPath: missingPIDFile) == nil)
+    }
+
+    @Test func daemonRestartFallsBackToPIDFromHeldLock() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let lockPath = directory.appendingPathComponent("daemon.lock").path
+        try "4242".write(toFile: lockPath, atomically: true, encoding: .utf8)
+        let fd = Darwin.open(lockPath, O_RDWR)
+        #expect(fd >= 0)
+        defer {
+            _ = hunSystemFlock(fd, LOCK_UN)
+            _ = Darwin.close(fd)
+        }
+        #expect(hunSystemFlock(fd, LOCK_EX | LOCK_NB) == 0)
+
+        let missingPIDPath = directory.appendingPathComponent("daemon.pid").path
+        #expect(resolvedDaemonProcessID(reportedPID: 0, pidPath: missingPIDPath, lockPath: lockPath) == 4242)
+    }
+
+    @Test func daemonRestartDoesNotTrustPIDFromUnlockedLock() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let lockPath = directory.appendingPathComponent("daemon.lock").path
+        try "4242".write(toFile: lockPath, atomically: true, encoding: .utf8)
+        let missingPIDPath = directory.appendingPathComponent("daemon.pid").path
+
+        #expect(resolvedDaemonProcessID(reportedPID: 0, pidPath: missingPIDPath, lockPath: lockPath) == nil)
+    }
+
+    @Test func daemonTerminationWaitsForForcedExit() throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        process.arguments = [
+            "-c",
+            "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); print('ready', flush=True); time.sleep(30)"
+        ]
+        let output = Pipe()
+        process.standardOutput = output
+        try process.run()
+        defer {
+            if process.isRunning {
+                _ = Darwin.kill(process.processIdentifier, SIGKILL)
+            }
+        }
+        _ = output.fileHandleForReading.availableData
+
+        try terminateDaemonProcess(process.processIdentifier, gracefulTimeout: 0.1, forcedTimeout: 1)
+        process.waitUntilExit()
+
+        #expect(!daemonProcessExists(process.processIdentifier))
     }
 
     @Test func logClassificationDoesNotTreatStderrAsError() throws {
@@ -761,6 +871,18 @@ private extension HunDaemonSnapshot {
             scanDirs: scanDirs,
             lastScanAt: lastScanAt,
             projects: projects,
+            warnings: warnings
+        )
+    }
+
+    func appending(_ project: HunDaemonProject) -> HunDaemonSnapshot {
+        HunDaemonSnapshot(
+            protocolVersion: protocolVersion,
+            mode: mode,
+            activeProject: activeProject,
+            scanDirs: scanDirs,
+            lastScanAt: lastScanAt,
+            projects: projects + [project],
             warnings: warnings
         )
     }

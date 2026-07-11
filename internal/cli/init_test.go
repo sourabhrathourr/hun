@@ -6,8 +6,23 @@ import (
 	"testing"
 
 	"github.com/sourabhrathourr/hun/internal/config"
+	"github.com/sourabhrathourr/hun/internal/detect"
 	"github.com/sourabhrathourr/hun/internal/state"
 )
+
+func TestDetectedProjectOmitsRedundantStandardPortEnv(t *testing.T) {
+	project := detectedToProject("app", detect.Result{Services: []detect.DetectedService{
+		{Name: "web", Cmd: "bun run dev", Port: 3000, PortEnv: "PORT"},
+		{Name: "api", Cmd: "python main.py", Port: 8000, PortEnv: "API_PORT"},
+	}})
+
+	if got := project.Services["web"].PortEnv; got != "" {
+		t.Fatalf("standard port env = %q, want omitted because PORT is automatic", got)
+	}
+	if got := project.Services["api"].PortEnv; got != "API_PORT" {
+		t.Fatalf("custom port env = %q, want API_PORT alias preserved", got)
+	}
+}
 
 func TestParseConfirmPromptAnswer(t *testing.T) {
 	tests := []struct {

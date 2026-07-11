@@ -32,8 +32,8 @@ Use this skill to create or improve `.hun.yml` for a development project. Hun ru
    - Use stable service names such as `frontend`, `backend`, `worker`, `scheduler`, `redis`, `postgres`, `db`.
    - Use relative `cwd` values from the project root.
    - Use `depends_on` only for services Hun manages in the same file.
-   - Add `port` when the service binds a known port. Treat it as the authoritative launch port.
-   - Add `port_env` only when the service actually reads a named environment variable; it is a delivery adapter for `port`, never a separate source of truth.
+   - Add `port` when the service binds a known port. Treat it as the preferred base port; Multitask fallback is chosen only when that port is occupied.
+   - Hun always publishes a configured service's selected launch port as `PORT`. Add `port_env` only when the service reads a different named environment variable; it is an additional alias for `port`, never a separate source of truth.
    - Add `ready` strings only when the repo logs or common framework output make them likely.
 
 5. Validate and report.
@@ -51,14 +51,12 @@ services:
     cmd: npm run dev
     cwd: ./frontend
     port: 3000
-    port_env: PORT
     ready: "Ready"
 
   backend:
     cmd: python manage.py runserver
     cwd: ./backend
     port: 8000
-    port_env: PORT
     depends_on:
       - postgres
 
@@ -95,7 +93,7 @@ Supported service fields:
 ## Guardrails
 
 - Never put secrets directly in `.hun.yml`; reference environment variables or `.env` files instead.
-- When both `port` and `port_env` are present, `port` wins. Hun injects that value into `port_env`; do not infer or document an environment value as a competing port.
+- When both `port` and `port_env` are present, `port` wins as the base. Hun injects the selected launch port into `PORT` and into `port_env`; do not infer or document an environment value as a competing port.
 - Do not rewrite unrelated files unless the user explicitly asks.
 - Do not add a separate "add service" workflow; `.hun.yml` is the source of truth for service changes.
 - Do not make Hun run package installation, migrations, or destructive setup automatically unless the repo already documents that as the dev startup command or the user confirms it.

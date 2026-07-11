@@ -1,6 +1,9 @@
 import Darwin
 import Foundation
 
+@_silgen_name("flock")
+nonisolated func hunSystemFlock(_ fd: Int32, _ operation: Int32) -> Int32
+
 nonisolated protocol HunDaemonSupervisorProtocol {
     func ensureDaemon() async throws
     func restartDaemon() async throws
@@ -397,12 +400,20 @@ nonisolated final class HunDaemonSupervisor: HunDaemonSupervisorProtocol {
             if await client.isCompatibleDaemon() {
                 return
             }
+            if !process.isRunning {
+                process.waitUntilExit()
+                throw HunDaemonError.daemon("daemon exited during startup with status \(process.terminationStatus)")
+            }
         }
         throw HunDaemonError.daemon("daemon did not become ready")
     }
 
     private func terminateExistingDaemon(reportedPID: Int, socketResponded: Bool) throws {
-        let pid = resolvedDaemonProcessID(reportedPID: reportedPID, pidPath: HunPaths.pidPath)
+        let pid = resolvedDaemonProcessID(
+            reportedPID: reportedPID,
+            pidPath: HunPaths.pidPath,
+            lockPath: HunPaths.lockPath
+        )
         guard let pid else {
             if socketResponded {
                 throw HunDaemonError.daemon("daemon is healthy but did not report a process ID")
@@ -410,25 +421,10 @@ nonisolated final class HunDaemonSupervisor: HunDaemonSupervisorProtocol {
             return
         }
 
-        terminateDaemonProcess(pid)
+        try terminateDaemonProcess(pid)
         try? FileManager.default.removeItem(atPath: HunPaths.socketPath)
         try? FileManager.default.removeItem(atPath: HunPaths.pidPath)
     }
-
-    private func terminateDaemonProcess(_ pid: Int32) {
-        Darwin.kill(pid, SIGTERM)
-        let deadline = Date().addingTimeInterval(2)
-        while Date() < deadline {
-            if Darwin.kill(pid, 0) != 0 {
-                return
-            }
-            Thread.sleep(forTimeInterval: 0.05)
-        }
-        if Darwin.kill(pid, 0) == 0 {
-            Darwin.kill(pid, SIGKILL)
-        }
-    }
-
 }
 
 nonisolated final class HunLogSubscription: HunLogSubscribing {
@@ -481,17 +477,80 @@ nonisolated final class HunLogSubscription: HunLogSubscribing {
     }
 }
 
-nonisolated func resolvedDaemonProcessID(reportedPID: Int, pidPath: String) -> Int32? {
+nonisolated func resolvedDaemonProcessID(reportedPID: Int, pidPath: String, lockPath: String? = nil) -> Int32? {
     if reportedPID > 0, reportedPID <= Int(Int32.max) {
         return Int32(reportedPID)
     }
-    guard let pidText = try? String(contentsOfFile: pidPath, encoding: .utf8),
+    if let pid = daemonPID(in: pidPath) {
+        return pid
+    }
+    guard let lockPath else { return nil }
+    return lockedDaemonProcessID(lockPath: lockPath)
+}
+
+nonisolated func daemonPID(in path: String) -> Int32? {
+    guard let pidText = try? String(contentsOfFile: path, encoding: .utf8),
           let pid = Int32(pidText.trimmingCharacters(in: .whitespacesAndNewlines)),
           pid > 0
-    else {
+    else { return nil }
+    return pid
+}
+
+nonisolated func lockedDaemonProcessID(lockPath: String) -> Int32? {
+    let fd = Darwin.open(lockPath, O_RDWR)
+    guard fd >= 0 else { return nil }
+    defer { _ = Darwin.close(fd) }
+
+    errno = 0
+    if hunSystemFlock(fd, LOCK_EX | LOCK_NB) == 0 {
+        _ = hunSystemFlock(fd, LOCK_UN)
         return nil
     }
-    return pid
+    guard errno == EWOULDBLOCK || errno == EAGAIN else { return nil }
+    return daemonPID(in: lockPath)
+}
+
+nonisolated func daemonProcessExists(_ pid: Int32) -> Bool {
+    errno = 0
+    if Darwin.kill(pid, 0) == 0 {
+        return true
+    }
+    return errno != ESRCH
+}
+
+nonisolated func terminateDaemonProcess(
+    _ pid: Int32,
+    gracefulTimeout: TimeInterval = 2,
+    forcedTimeout: TimeInterval = 2
+) throws {
+    guard daemonProcessExists(pid) else { return }
+
+    errno = 0
+    if Darwin.kill(pid, SIGTERM) != 0 && errno != ESRCH {
+        throw HunDaemonError.daemon("could not terminate daemon PID \(pid): errno \(errno)")
+    }
+    if waitForDaemonExit(pid, timeout: gracefulTimeout) {
+        return
+    }
+
+    errno = 0
+    if Darwin.kill(pid, SIGKILL) != 0 && errno != ESRCH {
+        throw HunDaemonError.daemon("could not force terminate daemon PID \(pid): errno \(errno)")
+    }
+    guard waitForDaemonExit(pid, timeout: forcedTimeout) else {
+        throw HunDaemonError.daemon("daemon PID \(pid) remained alive after SIGKILL")
+    }
+}
+
+nonisolated func waitForDaemonExit(_ pid: Int32, timeout: TimeInterval) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    repeat {
+        if !daemonProcessExists(pid) {
+            return true
+        }
+        Thread.sleep(forTimeInterval: 0.05)
+    } while Date() < deadline
+    return !daemonProcessExists(pid)
 }
 
 nonisolated private final class SocketHandle: @unchecked Sendable {
@@ -579,6 +638,10 @@ nonisolated enum HunPaths {
 
     static var pidPath: String {
         homeURL.appendingPathComponent("daemon.pid").path
+    }
+
+    static var lockPath: String {
+        homeURL.appendingPathComponent("daemon.lock").path
     }
 
     static var configURL: URL { homeURL.appendingPathComponent("config.yml") }

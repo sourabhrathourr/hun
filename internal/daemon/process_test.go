@@ -46,6 +46,22 @@ func TestBuildServiceEnvironmentIncludesDeveloperToolPaths(t *testing.T) {
 	}
 }
 
+func TestBuildServiceEnvironmentAlwaysPublishesSelectedPort(t *testing.T) {
+	t.Setenv("PORT", "8888")
+
+	env := buildServiceEnvironment(map[string]string{
+		"PORT":     "9999",
+		"API_PORT": "7777",
+	}, "API_PORT", 3001)
+
+	if got := envValue(env, "PORT"); got != "3001" {
+		t.Fatalf("PORT = %q, want selected port 3001", got)
+	}
+	if got := envValue(env, "API_PORT"); got != "3001" {
+		t.Fatalf("API_PORT = %q, want selected port alias 3001", got)
+	}
+}
+
 func TestProcessStartFindsCommandFromDeveloperPath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

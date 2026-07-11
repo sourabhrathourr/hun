@@ -17,14 +17,16 @@ import (
 
 // Process represents a single running service process.
 type Process struct {
-	Name         string
-	Cmd          string
-	Dir          string
-	Env          map[string]string
-	PortEnv      string
-	ReadyPattern string
-	observedPort int // currently reported to status and UI
-	launchPort   int // configured port plus any intentional multitask offset
+	Name             string
+	Cmd              string
+	Dir              string
+	Env              map[string]string
+	PortEnv          string
+	ReadyPattern     string
+	observedPort     int  // currently reported to status and UI
+	basePort         int  // configured port before any availability fallback
+	launchPort       int  // port selected and requested at process launch
+	allowRuntimePort bool // multitask services may adopt another verified owned listener
 
 	cmd       *exec.Cmd
 	stdin     io.Closer
@@ -113,8 +115,12 @@ func buildServiceEnvironment(overrides map[string]string, portEnv string, port i
 	for k, v := range overrides {
 		env = setEnv(env, k, v)
 	}
-	if portEnv != "" && port > 0 {
-		env = setEnv(env, portEnv, fmt.Sprintf("%d", port))
+	if port > 0 {
+		selectedPort := fmt.Sprintf("%d", port)
+		env = setEnv(env, "PORT", selectedPort)
+		if portEnv != "" {
+			env = setEnv(env, portEnv, selectedPort)
+		}
 	}
 	return env
 }
@@ -347,6 +353,51 @@ func (p *Process) ResetObservedPort() int {
 	defer p.mu.Unlock()
 	p.observedPort = p.launchPort
 	return p.observedPort
+}
+
+// BasePort returns the configured port before multitask availability fallback.
+func (p *Process) BasePort() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.basePort
+}
+
+// AllowsRuntimePort reports whether a verified alternative listener may be
+// adopted instead of terminating the service.
+func (p *Process) AllowsRuntimePort() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.allowRuntimePort
+}
+
+// PreparePort updates the selected launch port and installs its reservation.
+func (p *Process) PreparePort(port int, lease *portLease) {
+	p.mu.Lock()
+	oldLease := p.portLease
+	p.portLease = lease
+	p.launchPort = port
+	p.observedPort = port
+	p.mu.Unlock()
+	oldLease.release()
+}
+
+// AdoptRuntimePort transfers the service reservation to a verified listener.
+func (p *Process) AdoptRuntimePort(port int) error {
+	p.mu.Lock()
+	if p.portLease != nil && p.portLease.port == port {
+		p.launchPort = port
+		p.observedPort = port
+		p.mu.Unlock()
+		return nil
+	}
+	p.mu.Unlock()
+
+	lease, err := acquirePortLease(port)
+	if err != nil {
+		return err
+	}
+	p.PreparePort(port, lease)
+	return nil
 }
 
 func (p *Process) SetPortLease(lease *portLease) {

@@ -16,7 +16,7 @@ If your server actually prints `Server is running`, **hun** will never switch fr
 This usually happens if:
 1.  You have a stray process running outside of **hun**.
 2.  Two services in the same project try to use the same port.
-3.  You are in Multitask mode and the port offset logic failed (rare).
+3.  The service ignores its selected Multitask fallback port and does not provide its own available fallback.
 
 **Fix**:
 1.  `hun stop --all`

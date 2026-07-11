@@ -10,7 +10,7 @@ import AppKit
 
 @main
 struct hunApp: App {
-    @State private var store = HunStore()
+    @State private var store = HunStore(navigationDefaults: .standard)
 
     var body: some Scene {
         WindowGroup("hun", id: "dashboard") {
@@ -32,7 +32,7 @@ struct hunApp: App {
             MenuBarView()
                 .environment(store)
         } label: {
-            Image(systemName: "terminal")
+            Image(systemName: "rectangle.badge.sparkles.fill")
         }
         .menuBarExtraStyle(.window)
     }

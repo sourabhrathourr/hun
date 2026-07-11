@@ -34,9 +34,10 @@ struct ProjectIconView: View {
             }
 
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .stroke(AppTheme.divider, lineWidth: 0.5)
+                .strokeBorder(iconBorderColor, lineWidth: iconBorderWidth)
         }
         .frame(width: size, height: size)
+        .animation(.easeOut(duration: 0.16), value: status)
         .overlay(alignment: .bottomTrailing) {
             if status == .crashed {
                 Circle()
@@ -50,6 +51,15 @@ struct ProjectIconView: View {
 
     private var initial: String {
         String(name.prefix(1).uppercased())
+    }
+
+    private var iconBorderColor: Color {
+        guard status == .running else { return AppTheme.divider }
+        return AppTheme.success.opacity(emphasized ? 0.48 : 0.36)
+    }
+
+    private var iconBorderWidth: CGFloat {
+        status == .running ? 0.75 : 0.5
     }
 }
 

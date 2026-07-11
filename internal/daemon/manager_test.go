@@ -230,11 +230,16 @@ func TestSilentRuntimeListenerUpdatesLivePort(t *testing.T) {
 func TestConfiguredPortWinsOverPreviouslyDetectedRuntimePort(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	configuredPort := freeTCPPort(t)
+	legacyRuntimePort := freeTCPPort(t)
+	for legacyRuntimePort == configuredPort {
+		legacyRuntimePort = freeTCPPort(t)
+	}
 	hunDir := filepath.Join(home, ".hun")
 	if err := os.MkdirAll(hunDir, 0o755); err != nil {
 		t.Fatalf("create hun dir: %v", err)
 	}
-	legacyState := `{"schema_version":2,"mode":"focus","projects":{"configured-port-priority":{"port_overrides":{"web":5173}}},"registry":{}}`
+	legacyState := fmt.Sprintf(`{"schema_version":2,"mode":"focus","projects":{"configured-port-priority":{"port_overrides":{"web":%d}}},"registry":{}}`, legacyRuntimePort)
 	if err := os.WriteFile(filepath.Join(hunDir, "state.json"), []byte(legacyState), 0o644); err != nil {
 		t.Fatalf("write legacy state: %v", err)
 	}
@@ -251,7 +256,7 @@ func TestConfiguredPortWinsOverPreviouslyDetectedRuntimePort(t *testing.T) {
 		Services: map[string]*config.Service{
 			"web": {
 				Cmd:     "sleep 2",
-				Port:    3000,
+				Port:    configuredPort,
 				PortEnv: "PORT",
 			},
 		},
@@ -261,8 +266,8 @@ func TestConfiguredPortWinsOverPreviouslyDetectedRuntimePort(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 
-	if got := m.Status()[proj.Name]["web"].Port; got != 3000 {
-		t.Fatalf("port with legacy runtime override = %d, want configured port 3000", got)
+	if got := m.Status()[proj.Name]["web"].Port; got != configuredPort {
+		t.Fatalf("port with legacy runtime override = %d, want configured port %d", got, configuredPort)
 	}
 }
 
@@ -348,6 +353,248 @@ func TestMultitaskOffsetDoesNotCreatePortForPortlessService(t *testing.T) {
 	if got := m.Status()["second-portless"]["worker"].Port; got != 0 {
 		t.Fatalf("portless service received multitask offset as port %d", got)
 	}
+}
+
+func TestMultitaskUsesFreeConfiguredPortWhenAnotherProjectRuns(t *testing.T) {
+	requireRuntimePortInspection(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer m.Shutdown()
+
+	otherPort := freeTCPPort(t)
+	basePort := freeTCPPort(t)
+	for basePort == otherPort {
+		basePort = freeTCPPort(t)
+	}
+	other := &config.Project{
+		Name: "already-running",
+		Services: map[string]*config.Service{
+			"api": {Cmd: tcpServerCommand(otherPort), Port: otherPort},
+		},
+	}
+	if err := m.StartProject(other.Name, other, t.TempDir(), false); err != nil {
+		t.Fatalf("start other project: %v", err)
+	}
+	waitForServicePort(t, m, other.Name, "api", otherPort)
+
+	frontend := &config.Project{
+		Name: "frontend",
+		Services: map[string]*config.Service{
+			"frontend": {Cmd: tcpServerCommand(basePort), Port: basePort},
+		},
+	}
+	if err := m.StartProject(frontend.Name, frontend, t.TempDir(), false); err != nil {
+		t.Fatalf("start frontend: %v", err)
+	}
+	time.Sleep(2500 * time.Millisecond)
+
+	got := m.Status()[frontend.Name]["frontend"]
+	if !got.Running || got.Status != "running" || got.Port != basePort {
+		t.Fatalf("frontend = %+v, want running on free configured port %d; logs: %#v", got, basePort, m.GetLogs(frontend.Name, "frontend", 20))
+	}
+}
+
+func TestMultitaskOffsetsOnlyServiceWhosePortIsOccupied(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	occupiedPort := freeTCPPort(t)
+	freePort := freeTCPPort(t)
+	for freePort == occupiedPort || freePort == occupiedPort+1 {
+		freePort = freeTCPPort(t)
+	}
+	blocker, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", occupiedPort))
+	if err != nil {
+		t.Fatalf("occupy base port: %v", err)
+	}
+	defer blocker.Close()
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer m.Shutdown()
+
+	proj := &config.Project{
+		Name: "mixed-collision",
+		Services: map[string]*config.Service{
+			"occupied": {Cmd: "sleep 30", Port: occupiedPort},
+			"free":     {Cmd: "sleep 30", Port: freePort},
+		},
+	}
+	if err := m.StartProject(proj.Name, proj, t.TempDir(), false); err != nil {
+		t.Fatalf("start project: %v", err)
+	}
+
+	status := m.Status()[proj.Name]
+	if got := status["occupied"].Port; got != occupiedPort+1 {
+		t.Fatalf("occupied service port = %d, want first free offset %d", got, occupiedPort+1)
+	}
+	if got := status["free"].Port; got != freePort {
+		t.Fatalf("free service port = %d, want unchanged configured port %d", got, freePort)
+	}
+}
+
+func TestMultitaskInjectsSelectedFallbackWithoutPortEnv(t *testing.T) {
+	requireRuntimePortInspection(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	basePort := freeTCPPort(t)
+	for ensureTCPPortAvailable(basePort+1) != nil {
+		basePort = freeTCPPort(t)
+	}
+	blocker, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", basePort))
+	if err != nil {
+		t.Fatalf("occupy base port: %v", err)
+	}
+	defer blocker.Close()
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer m.Shutdown()
+
+	cmd := `python3 -u -c 'import os,socket,time; port=int(os.environ["PORT"]); s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",port)); s.listen(); print(f"Local: http://localhost:{port}",flush=True); time.sleep(30)'`
+	proj := &config.Project{
+		Name: "automatic-port-fallback",
+		Services: map[string]*config.Service{
+			"web": {Cmd: cmd, Port: basePort},
+		},
+	}
+	if err := m.StartProject(proj.Name, proj, t.TempDir(), false); err != nil {
+		t.Fatalf("start project: %v", err)
+	}
+	waitForServicePort(t, m, proj.Name, "web", basePort+1)
+	time.Sleep(250 * time.Millisecond)
+	if got := m.Status()[proj.Name]["web"]; !got.Running || got.Port != basePort+1 {
+		t.Fatalf("service = %+v, want injected fallback port %d", got, basePort+1)
+	}
+}
+
+func TestMultitaskAcceptsVerifiedAlternativeRuntimePort(t *testing.T) {
+	requireRuntimePortInspection(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	basePort := freeTCPPort(t)
+	runtimePort := freeTCPPort(t)
+	for runtimePort == basePort || runtimePort == basePort+1 {
+		runtimePort = freeTCPPort(t)
+	}
+	blocker, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", basePort))
+	if err != nil {
+		t.Fatalf("occupy base port: %v", err)
+	}
+	defer blocker.Close()
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer m.Shutdown()
+
+	proj := &config.Project{
+		Name: "runtime-fallback",
+		Services: map[string]*config.Service{
+			"web": {Cmd: tcpServerCommand(runtimePort), Port: basePort},
+		},
+	}
+	if err := m.StartProject(proj.Name, proj, t.TempDir(), false); err != nil {
+		t.Fatalf("start project: %v", err)
+	}
+	waitForServicePort(t, m, proj.Name, "web", runtimePort)
+	time.Sleep(250 * time.Millisecond)
+
+	got := m.Status()[proj.Name]["web"]
+	if !got.Running || got.Status != "running" || got.Port != runtimePort {
+		t.Fatalf("service = %+v, want running on verified alternative port %d; logs: %#v", got, runtimePort, m.GetLogs(proj.Name, "web", 20))
+	}
+}
+
+func TestCrashedProjectDoesNotInfluenceLaterMultitaskPort(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer m.Shutdown()
+
+	if err := m.StartProject("running", &config.Project{
+		Name: "running",
+		Services: map[string]*config.Service{
+			"worker": {Cmd: "sleep 30"},
+		},
+	}, t.TempDir(), false); err != nil {
+		t.Fatalf("start running project: %v", err)
+	}
+	if err := m.StartProject("crashed", &config.Project{
+		Name: "crashed",
+		Services: map[string]*config.Service{
+			"worker": {Cmd: "exit 1"},
+		},
+	}, t.TempDir(), false); err != nil {
+		t.Fatalf("start crashing project: %v", err)
+	}
+	waitForServiceStatus(t, m, "crashed", "worker", "crashed")
+
+	basePort := freeTCPPort(t)
+	next := &config.Project{
+		Name: "next",
+		Services: map[string]*config.Service{
+			"web": {Cmd: "sleep 30", Port: basePort},
+		},
+	}
+	if err := m.StartProject(next.Name, next, t.TempDir(), false); err != nil {
+		t.Fatalf("start next project: %v", err)
+	}
+	if got := m.Status()[next.Name]["web"].Port; got != basePort {
+		t.Fatalf("next service port = %d, want free configured port %d", got, basePort)
+	}
+}
+
+func TestPreferredPortReservationDoesNotLeaseConfiguredBase(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	basePort := freeTCPPort(t)
+	preferredPort := freeTCPPort(t)
+	for preferredPort == basePort {
+		preferredPort = freeTCPPort(t)
+	}
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer m.Shutdown()
+
+	proj := &config.Project{
+		Name: "preferred-port",
+		Services: map[string]*config.Service{
+			"web": {Cmd: "sleep 30", Port: basePort},
+		},
+	}
+	if err := m.startService(proj.Name, "web", proj, t.TempDir(), true, map[string]int{"web": preferredPort}); err != nil {
+		t.Fatalf("start service on preferred port: %v", err)
+	}
+	if got := m.Status()[proj.Name]["web"].Port; got != preferredPort {
+		t.Fatalf("service port = %d, want preferred port %d", got, preferredPort)
+	}
+
+	lease, err := acquirePortLease(basePort)
+	if err != nil {
+		t.Fatalf("configured base port was leaked as a reservation: %v", err)
+	}
+	lease.release()
 }
 
 func TestServiceRestartReinjectsConfiguredPortAfterRuntimeMismatch(t *testing.T) {
@@ -519,6 +766,10 @@ func freeTCPPort(t *testing.T) int {
 		t.Fatalf("release test port: %v", err)
 	}
 	return port
+}
+
+func tcpServerCommand(port int) string {
+	return fmt.Sprintf(`python3 -u -c 'import socket,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",%d)); s.listen(); print("Local: http://localhost:%d",flush=True); time.sleep(30)'`, port, port)
 }
 
 func waitForServicePort(t *testing.T, m *Manager, project, service string, want int) {

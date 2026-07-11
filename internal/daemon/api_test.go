@@ -328,7 +328,7 @@ func TestHandleStartAlreadyRunningParallelUpdatesMode(t *testing.T) {
 	}
 }
 
-func TestHandleFocusKeepsPreferredRunningProjectAndNormalizesOffset(t *testing.T) {
+func TestHandleFocusKeepsPreferredRunningProjectOnFreeBasePort(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	root := t.TempDir()
@@ -377,11 +377,11 @@ func TestHandleFocusKeepsPreferredRunningProjectAndNormalizesOffset(t *testing.T
 	}
 
 	oldPID := m.Status()["focus-second"]["web"].PID
-	if port := m.Status()["focus-second"]["web"].Port; port != secondPort+1 {
-		t.Fatalf("preferred project port = %d, want multitask port %d", port, secondPort+1)
+	if port := m.Status()["focus-second"]["web"].Port; port != secondPort {
+		t.Fatalf("preferred project port = %d, want free configured port %d", port, secondPort)
 	}
-	if offset := m.ports.GetOffset("focus-second"); offset == 0 {
-		t.Fatal("expected preferred project to start with a multitask offset")
+	if offset := m.ports.GetOffset("focus-second"); offset != 0 {
+		t.Fatalf("preferred project offset = %d, want 0 for a free configured port", offset)
 	}
 
 	d := &Daemon{manager: m}
@@ -400,8 +400,8 @@ func TestHandleFocusKeepsPreferredRunningProjectAndNormalizesOffset(t *testing.T
 		t.Fatalf("preferred project offset = %d, want 0", offset)
 	}
 	newPID := m.Status()["focus-second"]["web"].PID
-	if newPID == oldPID {
-		t.Fatalf("preferred project PID = %d, want restart at base ports", newPID)
+	if newPID != oldPID {
+		t.Fatalf("preferred project PID changed from %d to %d despite already using its base port", oldPID, newPID)
 	}
 	if port := m.Status()["focus-second"]["web"].Port; port != secondPort {
 		t.Fatalf("preferred project port = %d, want configured base port %d", port, secondPort)
@@ -568,6 +568,12 @@ func TestHandleFocusKeepsOffsetSurvivorRunningWhenBasePortIsBusy(t *testing.T) {
 	if err := m.StartProject("busy-other", other, otherDir, false); err != nil {
 		t.Fatalf("start other project: %v", err)
 	}
+	blocker, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", basePort))
+	if err != nil {
+		t.Fatalf("occupy base port: %v", err)
+	}
+	defer blocker.Close()
+
 	survivor, err := config.LoadProject(survivorDir)
 	if err != nil {
 		t.Fatalf("load survivor project: %v", err)
@@ -577,12 +583,6 @@ func TestHandleFocusKeepsOffsetSurvivorRunningWhenBasePortIsBusy(t *testing.T) {
 	}
 	waitForServiceRunning(t, m, "busy-survivor", "web")
 	original := m.Status()["busy-survivor"]["web"]
-
-	blocker, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", basePort))
-	if err != nil {
-		t.Fatalf("occupy base port: %v", err)
-	}
-	defer blocker.Close()
 
 	d := &Daemon{manager: m}
 	resp := d.HandleRequest(Request{Action: "focus", Project: "busy-survivor", Mode: "focus"})

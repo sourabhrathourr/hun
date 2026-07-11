@@ -23,24 +23,35 @@ final class HunStore {
     }
     var selectedProjectID: HunProject.ID? {
         didSet {
-            guard oldValue != selectedProjectID, !isApplyingSnapshot else { return }
+            guard oldValue != selectedProjectID else { return }
+            persistNavigationState()
+            guard !isApplyingSnapshot else { return }
             ensureSelectedService()
             scheduleLogReload()
         }
     }
     var selectedServiceID: HunService.ID? {
         didSet {
-            guard oldValue != selectedServiceID, !isApplyingSnapshot else { return }
+            guard oldValue != selectedServiceID else { return }
+            persistNavigationState()
+            guard !isApplyingSnapshot else { return }
             scheduleLogReload()
         }
     }
     var selectedLogScope: LogScope = .service {
         didSet {
-            guard oldValue != selectedLogScope, !isApplyingSnapshot else { return }
+            guard oldValue != selectedLogScope else { return }
+            persistNavigationState()
+            guard !isApplyingSnapshot else { return }
             scheduleLogReload()
         }
     }
-    var openTabIDs: [HunProject.ID] = []
+    var openTabIDs: [HunProject.ID] = [] {
+        didSet {
+            guard oldValue != openTabIDs else { return }
+            persistNavigationState()
+        }
+    }
     var isConnected = false
     var isRefreshing = false
     var isAddingProject = false
@@ -55,6 +66,7 @@ final class HunStore {
     private let client: HunDaemonClientProtocol
     private let supervisor: HunDaemonSupervisorProtocol
     private let projectInitializer: HunProjectInitializing
+    private let navigationDefaults: UserDefaults?
     private var pollTask: Task<Void, Never>?
     private var logSubscription: HunLogSubscribing?
     private var logsByProject: [HunProject.ID: [HunLogLine]] = [:]
@@ -67,11 +79,21 @@ final class HunStore {
         client: HunDaemonClientProtocol = HunDaemonClient(),
         supervisor: HunDaemonSupervisorProtocol = HunDaemonSupervisor(),
         projectInitializer: HunProjectInitializing = HunProjectInitializer(),
+        navigationDefaults: UserDefaults? = nil,
         startAutomatically: Bool = true
     ) {
         self.client = client
         self.supervisor = supervisor
         self.projectInitializer = projectInitializer
+        if let navigationDefaults {
+            selectedProjectID = navigationDefaults.string(forKey: NavigationPreferenceKey.selectedProject)
+            selectedServiceID = navigationDefaults.string(forKey: NavigationPreferenceKey.selectedService)
+            openTabIDs = navigationDefaults.stringArray(forKey: NavigationPreferenceKey.openTabs) ?? []
+            selectedLogScope = navigationDefaults.string(forKey: NavigationPreferenceKey.logScope) == "combined"
+                ? .combined
+                : .service
+        }
+        self.navigationDefaults = navigationDefaults
         if startAutomatically {
             Task { await start() }
         }
@@ -349,6 +371,7 @@ final class HunStore {
     }
 
     func focus(_ project: HunProject) {
+        selectProject(project.id)
         perform(key: .project(project.id, .startProject)) { [self] in
             try await self.client.startProject(project.id, mode: .exclusive)
         }
@@ -500,6 +523,17 @@ final class HunStore {
         selectedServiceID = project.services.first?.id
     }
 
+    private func persistNavigationState() {
+        guard let navigationDefaults else { return }
+        navigationDefaults.set(selectedProjectID, forKey: NavigationPreferenceKey.selectedProject)
+        navigationDefaults.set(selectedServiceID, forKey: NavigationPreferenceKey.selectedService)
+        navigationDefaults.set(openTabIDs, forKey: NavigationPreferenceKey.openTabs)
+        navigationDefaults.set(
+            selectedLogScope == .combined ? "combined" : "service",
+            forKey: NavigationPreferenceKey.logScope
+        )
+    }
+
     private var currentLogKey: String {
         guard let selectedProjectID else { return "" }
         switch selectedLogScope {
@@ -566,6 +600,13 @@ final class HunStore {
         guard let index = model.projects.firstIndex(where: { $0.id == projectID }) else { return }
         model.projects[index].logs = logsByProject[projectID] ?? []
     }
+}
+
+private enum NavigationPreferenceKey {
+    static let selectedProject = "hun.dashboard.selectedProject"
+    static let selectedService = "hun.dashboard.selectedService"
+    static let openTabs = "hun.dashboard.openTabs"
+    static let logScope = "hun.dashboard.logScope"
 }
 
 nonisolated enum HunActionKind: String, Hashable {

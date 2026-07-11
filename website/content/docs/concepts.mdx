@@ -59,6 +59,6 @@ hun run project-b
 In this mode:
 1.  `project-a` stays running.
 2.  `project-b` starts *alongside* it.
-3.  **Port Offsets**: If both try to bind port 3000, **hun** will automatically shift `project-b` to 3001 (or another offset) to prevent collisions.
+3.  **Per-service port fallback**: Each service keeps its configured port when it is free. If two services both need port 3000, **hun** shifts only the colliding service to 3001 (or the next available offset).
 
 This keeps you flexible without the manual "port tetris".
