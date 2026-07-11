@@ -607,7 +607,7 @@ nonisolated struct HunProject: Identifiable, Hashable {
     var iconIsCustom: Bool
     var status: ProjectStatus
     var isActive: Bool
-    var branch: String
+    var branch: String?
     var modeLabel: String
     var startedText: String
     var services: [HunService]
@@ -623,7 +623,8 @@ nonisolated struct HunProject: Identifiable, Hashable {
         iconIsCustom = snapshot.iconCustom
         status = ProjectStatus(snapshot.status)
         isActive = snapshot.isActive || snapshot.id == activeID
-        branch = snapshot.branch?.isEmpty == false ? snapshot.branch! : "unknown"
+        let normalizedBranch = snapshot.branch?.trimmingCharacters(in: .whitespacesAndNewlines)
+        branch = normalizedBranch?.isEmpty == false ? normalizedBranch : nil
         modeLabel = isActive ? "Active" : status.title
         startedText = Self.runtimeText(startedAt: snapshot.startedAt, status: status)
         services = snapshot.services.map(HunService.init).sorted { $0.name < $1.name }
@@ -779,7 +780,7 @@ nonisolated enum HunLogClassifier {
 }
 
 nonisolated struct HandoffNote: Hashable {
-    var branch: String
+    var branch: String?
     var note: String
 }
 

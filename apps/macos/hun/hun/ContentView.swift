@@ -1057,7 +1057,9 @@ private struct ProjectHeaderView: View {
 
                 HStack(spacing: 14) {
                     StatusMetaItem(status: project.status)
-                    MetaItem(icon: "arrow.triangle.branch", text: project.branch)
+                    if let branch = project.branch {
+                        MetaItem(icon: "arrow.triangle.branch", text: branch)
+                    }
                     MetaItem(icon: "folder", text: collapsePath(project.path))
                 }
 

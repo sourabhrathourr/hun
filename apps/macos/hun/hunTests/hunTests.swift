@@ -46,6 +46,25 @@ struct hunTests {
         #expect(snapshot.projects.map(\.id) == ["app"])
     }
 
+    @Test func projectWithoutGitBranchDoesNotInventUnknownBranch() throws {
+        let snapshot = HunDaemonProject(
+            id: "plain-folder",
+            name: "plain-folder",
+            path: "/tmp/plain-folder",
+            status: "stopped",
+            isActive: false,
+            branch: nil,
+            lastNote: nil,
+            startedAt: nil,
+            services: [],
+            configError: nil
+        )
+
+        let project = HunProject(snapshot: snapshot, activeID: nil, logs: [])
+
+        #expect(project.branch == nil)
+    }
+
     @Test func runningServiceBuildsLocalBrowserURLWithoutChangingPortMetadata() throws {
         let running = HunService(snapshot: HunDaemonService(
             id: "web",
