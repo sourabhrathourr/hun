@@ -3,6 +3,17 @@ title: Changelog
 description: What's new in hun.
 ---
 
+## v0.2.2
+
+*Released 2026-07-11*
+
+-   **Reliable Multitask Ports**: Hun now keeps configured ports when they are free, offsets only genuine collisions, and automatically publishes the selected launch port as `PORT` without requiring `port_env`.
+-   **Verified Runtime Ownership**: Port detection reconciles only listeners owned by the launched service, safely adopts valid framework fallbacks, and rejects collisions with other Hun services or instances.
+-   **Resilient Daemon Recovery**: Daemon locks now publish their owner PID, and the macOS app can recover from missing sockets, stale PID files, failed termination, and orphaned development daemons.
+-   **Accurate Service Readiness**: Readiness and live-port state stay aligned with the actual process, avoiding stale `waiting` indicators after a service is already available.
+-   **Dashboard Continuity**: The macOS app restores the last selected project, open tabs, selected service, and log scope across launches. Focus switches from the menu bar immediately select the destination project.
+-   **Subtle Runtime UI**: Running projects receive a restrained green icon outline, project changes crossfade with Reduce Motion support, and the menu bar uses a native adaptive symbol while the custom mark is being designed.
+
 ## v0.2.1
 
 *Released 2026-07-11*
