@@ -706,11 +706,62 @@ func (m *Manager) RunningProjects() []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	projects := make([]string, 0, len(m.processes))
-	for name := range m.processes {
-		projects = append(projects, name)
+	for name, procs := range m.processes {
+		for _, proc := range procs {
+			if proc.IsRunning() {
+				projects = append(projects, name)
+				break
+			}
+		}
 	}
 	sort.Strings(projects)
 	return projects
+}
+
+// MoveProjectToBaseOffset normalizes a project whose running services do not
+// use configured ports, avoiding an unnecessary process restart.
+func (m *Manager) MoveProjectToBaseOffset(project string) error {
+	m.ports.ReleaseOffset(project)
+	m.ports.AssignOffset(project, true)
+	return m.mutateState(func(st *state.State) {
+		ps := st.Projects[project]
+		ps.Offset = 0
+		st.Projects[project] = ps
+	})
+}
+
+// FocusSurvivor chooses the running project to keep when entering focus mode.
+// A running UI preference wins, followed by the daemon-active project, then the
+// most recently started running project.
+func (m *Manager) FocusSurvivor(preferred string) string {
+	running := m.RunningProjects()
+	if len(running) == 0 {
+		return ""
+	}
+
+	runningSet := make(map[string]bool, len(running))
+	for _, name := range running {
+		runningSet[name] = true
+	}
+	if runningSet[preferred] {
+		return preferred
+	}
+
+	snapshot := m.StateSnapshot()
+	if runningSet[snapshot.ActiveProject] {
+		return snapshot.ActiveProject
+	}
+
+	latest := running[0]
+	latestStartedAt := time.Time{}
+	for _, name := range running {
+		startedAt, err := time.Parse(time.RFC3339Nano, snapshot.Projects[name].StartedAt)
+		if err == nil && startedAt.After(latestStartedAt) {
+			latest = name
+			latestStartedAt = startedAt
+		}
+	}
+	return latest
 }
 
 // SetFocus updates active project and mode without process restarts.
@@ -725,6 +776,15 @@ func (m *Manager) SetFocus(project, mode string) error {
 		if mode != "" {
 			st.Mode = mode
 		}
+	})
+}
+
+// SetFocusMode records the single survivor of a completed focus transition.
+// Unlike SetFocus, an empty project deliberately clears stale active state.
+func (m *Manager) SetFocusMode(project string) error {
+	return m.mutateState(func(st *state.State) {
+		st.ActiveProject = project
+		st.Mode = "focus"
 	})
 }
 
@@ -1046,7 +1106,7 @@ func (m *Manager) setProjectRunning(project, path string, offset int, exclusive 
 		ps.Status = "running"
 		ps.Offset = offset
 		ps.Path = path
-		ps.StartedAt = time.Now().UTC().Format(time.RFC3339)
+		ps.StartedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		if ps.Services == nil {
 			ps.Services = make(map[string]state.ServiceState)
 		}
@@ -1176,6 +1236,7 @@ func runHook(cmd, dir string) error {
 	c := exec.Command(shell, "-c", cmd)
 	c.Dir = dir
 	c.Env = buildServiceEnvironment(nil, "", 0)
+	c.Env = setEnv(c.Env, "HUN_HOOK", "1")
 	return c.Run()
 }
 

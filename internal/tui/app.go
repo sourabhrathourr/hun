@@ -722,11 +722,6 @@ func (m Model) handleFocusPromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 		cmds := []tea.Cmd{m.focusCmd(keep), m.showToast("Switched to focus mode")}
-		for _, project := range m.focusPromptProjects {
-			if project != keep {
-				cmds = append(cmds, m.stopProjectCmd(project))
-			}
-		}
 		cmds = append(cmds, m.refreshServices()...)
 		return m, tea.Batch(cmds...)
 	}

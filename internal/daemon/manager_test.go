@@ -13,7 +13,38 @@ import (
 	"time"
 
 	"github.com/sourabhrathourr/hun/internal/config"
+	"github.com/sourabhrathourr/hun/internal/state"
 )
+
+func TestFocusSurvivorPriority(t *testing.T) {
+	older := &Process{running: true}
+	newer := &Process{running: true}
+	m := &Manager{
+		processes: map[string]map[string]*Process{
+			"older": {"web": older},
+			"newer": {"web": newer},
+		},
+		st: &state.State{
+			Projects: map[string]state.ProjectState{
+				"older": {StartedAt: "2026-07-11T08:00:00.000000001Z"},
+				"newer": {StartedAt: "2026-07-11T08:00:00.000000002Z"},
+			},
+			Registry: map[string]string{},
+		},
+	}
+
+	if got := m.FocusSurvivor("older"); got != "older" {
+		t.Fatalf("preferred survivor = %q, want older", got)
+	}
+	m.st.ActiveProject = "older"
+	if got := m.FocusSurvivor("not-running"); got != "older" {
+		t.Fatalf("daemon-active survivor = %q, want older", got)
+	}
+	m.st.ActiveProject = ""
+	if got := m.FocusSurvivor(""); got != "newer" {
+		t.Fatalf("most-recent survivor = %q, want newer", got)
+	}
+}
 
 func TestStartProjectRollsBackOnServiceStartFailure(t *testing.T) {
 	home := t.TempDir()

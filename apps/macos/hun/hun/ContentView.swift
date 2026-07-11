@@ -102,11 +102,15 @@ struct ContentView: View {
 
     private var mainContent: some View {
         @Bindable var store = store
+        let mode = Binding(
+            get: { store.globalMode },
+            set: { store.changeMode($0, preferredProject: store.selectedProjectID) }
+        )
         return VStack(spacing: 0) {
             TopBarView(
                 openProjects: openProjects,
                 activeID: $store.selectedProjectID,
-                mode: $store.globalMode,
+                mode: mode,
                 showSidebarControl: !sidebarDocked,
                 onSelect: selectProjectTab,
                 onClose: closeTab,

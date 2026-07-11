@@ -23,9 +23,12 @@ struct MenuBarView: View {
     }
 
     var body: some View {
-        @Bindable var store = store
+        let mode = Binding(
+            get: { store.globalMode },
+            set: { store.changeMode($0, preferredProject: nil) }
+        )
         VStack(spacing: 0) {
-            MenuBarHeader(mode: $store.globalMode)
+            MenuBarHeader(mode: mode)
 
             divider
 

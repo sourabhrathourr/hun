@@ -96,7 +96,7 @@ struct hunTests {
         let client = MockDaemonClient()
         client.nextDaemonInfo = HunDaemonInfo(
             status: "pong",
-            protocolVersion: 11,
+            protocolVersion: 12,
             version: "v0.2.1",
             commit: "abc1234",
             pid: 4242,
@@ -397,8 +397,14 @@ struct hunTests {
         try await waitUntil { client.actions.contains("stop:app:web") }
         store.remove(service, from: project)
         try await waitUntil { client.actions.contains("remove:app:web") }
-        store.globalMode = .multitask
-        try await waitUntil { client.actions.contains("mode:multitask") }
+        let snapshotsBeforeModeChange = client.snapshotForces.count
+        store.changeMode(.multitask, preferredProject: nil)
+        try await waitUntil {
+            client.actions.contains("mode:multitask:none") &&
+                client.snapshotForces.count > snapshotsBeforeModeChange
+        }
+        store.changeMode(.focus, preferredProject: "app")
+        try await waitUntil { client.actions.contains("mode:focus:app") }
 
         #expect(client.actions.contains("start:app:exclusive"))
         #expect(client.actions.contains("start:app:web:exclusive"))
@@ -407,7 +413,36 @@ struct hunTests {
         #expect(client.actions.contains("restart:app:web"))
         #expect(client.actions.contains("stop:app:web"))
         #expect(client.actions.contains("remove:app:web"))
-        #expect(client.actions.contains("mode:multitask"))
+        #expect(client.actions.contains("mode:multitask:none"))
+        #expect(client.actions.contains("mode:focus:app"))
+    }
+
+    @Test func rapidModeChangesApplyLatestIntentLast() async throws {
+        let client = MockDaemonClient()
+        client.modeChangeDelay = .milliseconds(100)
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        await store.refresh(force: true)
+
+        store.changeMode(.multitask, preferredProject: nil)
+        store.changeMode(.focus, preferredProject: "app")
+
+        try await waitUntil { client.actions.last == "mode:focus:app" }
+
+        #expect(store.globalMode == .focus)
+        #expect(client.actions.last == "mode:focus:app")
+    }
+
+    @Test func modeChangeWithoutDashboardPreferenceDoesNotUseHiddenSelection() async throws {
+        let client = MockDaemonClient()
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        await store.refresh(force: true)
+
+        store.changeMode(.multitask, preferredProject: nil)
+        try await waitUntil { client.actions.contains("mode:multitask:none") }
+        store.changeMode(.focus, preferredProject: nil)
+        try await waitUntil { client.actions.contains("mode:focus:none") }
+
+        #expect(client.actions.contains("mode:focus:none"))
     }
 
     @Test func projectActionsExposePendingState() async throws {
@@ -559,7 +594,7 @@ private final class MockDaemonClient: HunDaemonClientProtocol {
     var nextSnapshot = HunDaemonSnapshot.fixture(activeProject: "app")
     var nextDaemonInfo = HunDaemonInfo(
         status: "pong",
-        protocolVersion: 11,
+        protocolVersion: 12,
         version: "v0.2.1",
         commit: "abc1234",
         pid: 4242,
@@ -567,6 +602,7 @@ private final class MockDaemonClient: HunDaemonClientProtocol {
     )
     var error: Error?
     var startProjectDelay: Duration?
+    var modeChangeDelay: Duration?
     var actions: [String] = []
     var snapshotForces: [Bool] = []
     var logRequests: [(project: String, service: String?, lines: Int)] = []
@@ -628,8 +664,12 @@ private final class MockDaemonClient: HunDaemonClientProtocol {
         actions.append("remove:\(project):\(service)")
     }
 
-    func setMode(_ mode: HunMode) async throws {
-        actions.append("mode:\(mode.rawValue)")
+    func setMode(_ mode: HunMode, preferredProject: String?) async throws {
+        if let modeChangeDelay {
+            try? await Task.sleep(for: modeChangeDelay)
+        }
+        nextSnapshot = nextSnapshot.replacingMode(mode.rawValue)
+        actions.append("mode:\(mode.rawValue):\(preferredProject ?? "none")")
     }
 
     func logs(project: String, service: String?, lines: Int) async throws -> [HunDaemonLogLine] {
@@ -710,6 +750,18 @@ private extension HunDaemonSnapshot {
                 )
             ],
             warnings: []
+        )
+    }
+
+    func replacingMode(_ mode: String) -> HunDaemonSnapshot {
+        HunDaemonSnapshot(
+            protocolVersion: protocolVersion,
+            mode: mode,
+            activeProject: activeProject,
+            scanDirs: scanDirs,
+            lastScanAt: lastScanAt,
+            projects: projects,
+            warnings: warnings
         )
     }
 }

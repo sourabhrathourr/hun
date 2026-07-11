@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/sourabhrathourr/hun/internal/config"
@@ -18,6 +19,7 @@ type Request struct {
 	Mode    string `json:"mode,omitempty"` // "exclusive" or "parallel"
 	Lines   int    `json:"lines,omitempty"`
 	Note    string `json:"note,omitempty"`
+	Origin  string `json:"origin,omitempty"`
 }
 
 // Response is the JSON response from the daemon.
@@ -38,6 +40,19 @@ func errorResponse(msg string) Response {
 
 // HandleRequest routes an API request to the appropriate handler.
 func (d *Daemon) HandleRequest(req Request) Response {
+	if serializesLifecycle(req.Action) {
+		if req.Origin == "hook" {
+			return errorResponse("lifecycle commands cannot run recursively from Hun hooks")
+		}
+		wait := 30 * time.Second
+		if req.Action == "snapshot" {
+			wait = 100 * time.Millisecond
+		}
+		if !d.acquireLifecycle(wait) {
+			return errorResponse("lifecycle operation in progress")
+		}
+		defer d.lifecycleMu.Unlock()
+	}
 	switch req.Action {
 	case "ping":
 		return successResponse(map[string]interface{}{
@@ -83,6 +98,29 @@ func (d *Daemon) HandleRequest(req Request) Response {
 		return errorResponse("subscribe must be handled at connection level")
 	default:
 		return errorResponse(fmt.Sprintf("unknown action: %s", req.Action))
+	}
+}
+
+func (d *Daemon) acquireLifecycle(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if d.lifecycleMu.TryLock() {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func serializesLifecycle(action string) bool {
+	switch action {
+	case "start", "start_service", "stop", "stop_service", "remove_service", "restart", "focus",
+		"snapshot", "refresh", "register_project", "add_project":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -360,8 +398,110 @@ func (d *Daemon) handleFocus(req Request) Response {
 	if req.Project == "" && mode == "" {
 		return errorResponse("project or mode required")
 	}
+	if mode == "focus" {
+		if err := d.transitionToFocus(req.Project); err != nil {
+			return errorResponse(err.Error())
+		}
+		return successResponse(map[string]string{
+			"status":  "ok",
+			"project": d.manager.FocusSurvivor(req.Project),
+		})
+	}
 	if err := d.manager.SetFocus(req.Project, mode); err != nil {
 		return errorResponse(err.Error())
 	}
 	return successResponse(map[string]string{"status": "ok"})
+}
+
+func (d *Daemon) transitionToFocus(preferred string) error {
+	survivor := d.manager.FocusSurvivor(preferred)
+	originalOffset := 0
+	if survivor != "" {
+		originalOffset = d.manager.ports.GetOffset(survivor)
+	}
+	needsOffsetNormalization := originalOffset != 0
+
+	var survivorPath string
+	var survivorConfig *config.Project
+	var runningServices []string
+	needsBasePortRestart := false
+	if needsOffsetNormalization {
+		var ok bool
+		survivorPath, ok = d.manager.ProjectPath(survivor)
+		if !ok {
+			return fmt.Errorf("focus survivor %q is not registered", survivor)
+		}
+		var err error
+		survivorConfig, err = config.LoadProject(survivorPath)
+		if err != nil {
+			return fmt.Errorf("loading focus survivor config: %w", err)
+		}
+		for service, info := range d.manager.Status()[survivor] {
+			if !info.Running {
+				continue
+			}
+			runningServices = append(runningServices, service)
+			if svc := survivorConfig.Services[service]; svc != nil && svc.Port > 0 {
+				needsBasePortRestart = true
+			}
+		}
+		sort.Strings(runningServices)
+	}
+
+	for _, name := range d.manager.RunningProjects() {
+		if name == survivor {
+			continue
+		}
+		d.saveGitContext(name)
+		if err := d.manager.StopProject(name); err != nil {
+			return fmt.Errorf("stopping %s for focus mode: %w", name, err)
+		}
+	}
+
+	if err := d.manager.SetFocusMode(survivor); err != nil {
+		return err
+	}
+	if needsOffsetNormalization && !needsBasePortRestart {
+		return d.manager.MoveProjectToBaseOffset(survivor)
+	}
+	if !needsBasePortRestart {
+		return nil
+	}
+	for _, service := range runningServices {
+		svc := survivorConfig.Services[service]
+		if svc == nil || svc.Port <= 0 {
+			continue
+		}
+		if err := ensureTCPPortAvailable(svc.Port); err != nil {
+			return fmt.Errorf("cannot restore %s to base port %d; it remains running at offset %d: %w", survivor, svc.Port, originalOffset, err)
+		}
+	}
+	if err := d.manager.StopProject(survivor); err != nil {
+		return fmt.Errorf("stopping %s to restore base ports: %w", survivor, err)
+	}
+	for _, service := range runningServices {
+		if err := d.manager.StartService(survivor, service, survivorConfig, survivorPath, true); err != nil {
+			basePortErr := fmt.Errorf("restarting %s/%s on base ports: %w", survivor, service, err)
+			if rollbackErr := d.restoreFocusSurvivor(survivor, survivorPath, survivorConfig, runningServices, originalOffset); rollbackErr != nil {
+				return fmt.Errorf("%v; restoring offset %d also failed: %w", basePortErr, originalOffset, rollbackErr)
+			}
+			return fmt.Errorf("%v; restored previous offset %d", basePortErr, originalOffset)
+		}
+	}
+	return nil
+}
+
+func (d *Daemon) restoreFocusSurvivor(project, path string, proj *config.Project, services []string, offset int) error {
+	if d.manager.IsRunning(project) {
+		if err := d.manager.StopProject(project); err != nil {
+			return err
+		}
+	}
+	d.manager.ports.SetOffset(project, offset)
+	for _, service := range services {
+		if err := d.manager.StartService(project, service, proj, path, true); err != nil {
+			return err
+		}
+	}
+	return d.manager.SetFocusMode(project)
 }

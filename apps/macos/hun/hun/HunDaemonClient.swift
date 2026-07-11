@@ -19,7 +19,7 @@ nonisolated protocol HunDaemonClientProtocol: AnyObject {
     func restartProject(_ project: String) async throws
     func restartService(_ project: String, service: String) async throws
     func removeService(_ project: String, service: String) async throws
-    func setMode(_ mode: HunMode) async throws
+    func setMode(_ mode: HunMode, preferredProject: String?) async throws
     func logs(project: String, service: String?, lines: Int) async throws -> [HunDaemonLogLine]
     func subscribe(
         project: String,
@@ -233,7 +233,7 @@ nonisolated struct HunDaemonLogLine: Decodable, Equatable {
 }
 
 nonisolated final class HunDaemonClient: HunDaemonClientProtocol {
-    private static let requiredProtocol = 11
+    private static let requiredProtocol = 12
     private let socketPath: String
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -290,8 +290,12 @@ nonisolated final class HunDaemonClient: HunDaemonClientProtocol {
         try await send(HunDaemonRequest(action: "remove_service", project: project, service: service))
     }
 
-    func setMode(_ mode: HunMode) async throws {
-        try await send(HunDaemonRequest(action: "focus", mode: mode.rawValue))
+    func setMode(_ mode: HunMode, preferredProject: String?) async throws {
+        try await send(HunDaemonRequest(
+            action: "focus",
+            project: preferredProject,
+            mode: mode.rawValue
+        ))
     }
 
     func logs(project: String, service: String?, lines: Int) async throws -> [HunDaemonLogLine] {

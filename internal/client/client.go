@@ -141,6 +141,9 @@ func (c *Client) waitForDaemonDown(timeout time.Duration) bool {
 
 // Send sends a request to the daemon and returns the response.
 func (c *Client) Send(req daemon.Request) (*daemon.Response, error) {
+	if os.Getenv("HUN_HOOK") == "1" {
+		req.Origin = "hook"
+	}
 	if err := c.EnsureDaemon(); err != nil {
 		return nil, err
 	}

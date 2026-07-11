@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -19,15 +20,16 @@ import (
 
 // Daemon is the background process managing all services.
 type Daemon struct {
-	manager   *Manager
-	listener  net.Listener
-	sockPath  string
-	pidPath   string
-	lockPath  string
-	lockFile  *os.File
-	version   string
-	commit    string
-	startedAt time.Time
+	manager     *Manager
+	listener    net.Listener
+	sockPath    string
+	pidPath     string
+	lockPath    string
+	lockFile    *os.File
+	version     string
+	commit      string
+	startedAt   time.Time
+	lifecycleMu sync.Mutex
 }
 
 // New creates a new daemon instance.
@@ -89,7 +91,11 @@ func (d *Daemon) Run() error {
 
 	// Recover previously running projects from persisted state in background.
 	// The daemon should start serving socket requests immediately.
-	go d.recoverRunningProjects()
+	go func() {
+		d.lifecycleMu.Lock()
+		defer d.lifecycleMu.Unlock()
+		d.recoverRunningProjects()
+	}()
 
 	// Accept connections
 	for {

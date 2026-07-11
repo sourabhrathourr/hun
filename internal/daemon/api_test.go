@@ -2,8 +2,11 @@ package daemon
 
 import (
 	"encoding/json"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -322,6 +325,360 @@ func TestHandleStartAlreadyRunningParallelUpdatesMode(t *testing.T) {
 	}
 	if snap.ActiveProject != "already-running-mode" {
 		t.Fatalf("active project = %q, want already-running-mode", snap.ActiveProject)
+	}
+}
+
+func TestHandleFocusKeepsPreferredRunningProjectAndNormalizesOffset(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := t.TempDir()
+	writeDaemonGlobalConfig(t, home, root)
+	firstPort := freeTCPPort(t)
+	secondPort := freeTCPPort(t)
+	for secondPort == firstPort || secondPort+1 == firstPort {
+		secondPort = freeTCPPort(t)
+	}
+	firstDir := writeDaemonProjectRaw(t, root, "focus-first", fmt.Sprintf("name: focus-first\nservices:\n  web:\n    cmd: sleep 5\n    port: %d\n", firstPort))
+	secondDir := writeDaemonProjectRaw(t, root, "focus-second", fmt.Sprintf("name: focus-second\nservices:\n  web:\n    cmd: sleep 5\n    port: %d\n", secondPort))
+
+	st, err := state.Load()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	st.Register("focus-first", firstDir)
+	st.Register("focus-second", secondDir)
+	if err := st.Save(); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer m.Shutdown()
+
+	projects := []struct {
+		name string
+		path string
+	}{
+		{name: "focus-first", path: firstDir},
+		{name: "focus-second", path: secondDir},
+	}
+	for _, item := range projects {
+		name, path := item.name, item.path
+		proj, loadErr := config.LoadProject(path)
+		if loadErr != nil {
+			t.Fatalf("load project %s: %v", name, loadErr)
+		}
+		if startErr := m.StartProject(name, proj, path, false); startErr != nil {
+			t.Fatalf("start project %s: %v", name, startErr)
+		}
+		waitForServiceRunning(t, m, name, "web")
+	}
+
+	oldPID := m.Status()["focus-second"]["web"].PID
+	if port := m.Status()["focus-second"]["web"].Port; port != secondPort+1 {
+		t.Fatalf("preferred project port = %d, want multitask port %d", port, secondPort+1)
+	}
+	if offset := m.ports.GetOffset("focus-second"); offset == 0 {
+		t.Fatal("expected preferred project to start with a multitask offset")
+	}
+
+	d := &Daemon{manager: m}
+	resp := d.HandleRequest(Request{Action: "focus", Project: "focus-second", Mode: "focus"})
+	if !resp.OK {
+		t.Fatalf("focus response error: %s", resp.Error)
+	}
+
+	if m.IsRunning("focus-first") {
+		t.Fatal("expected non-preferred project to stop")
+	}
+	if !m.IsRunning("focus-second") {
+		t.Fatal("expected preferred project to remain running")
+	}
+	if offset := m.ports.GetOffset("focus-second"); offset != 0 {
+		t.Fatalf("preferred project offset = %d, want 0", offset)
+	}
+	newPID := m.Status()["focus-second"]["web"].PID
+	if newPID == oldPID {
+		t.Fatalf("preferred project PID = %d, want restart at base ports", newPID)
+	}
+	if port := m.Status()["focus-second"]["web"].Port; port != secondPort {
+		t.Fatalf("preferred project port = %d, want configured base port %d", port, secondPort)
+	}
+
+	snap := m.StateSnapshot()
+	if snap.Mode != "focus" || snap.ActiveProject != "focus-second" {
+		t.Fatalf("focus state = mode %q active %q, want focus/focus-second", snap.Mode, snap.ActiveProject)
+	}
+}
+
+func TestHandleFocusFallsBackToDaemonActiveProject(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := t.TempDir()
+	writeDaemonGlobalConfig(t, home, root)
+	firstDir := writeDaemonProject(t, root, "active-first", "web")
+	secondDir := writeDaemonProject(t, root, "active-second", "web")
+
+	st, err := state.Load()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	st.Register("active-first", firstDir)
+	st.Register("active-second", secondDir)
+	if err := st.Save(); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer m.Shutdown()
+
+	for _, item := range []struct {
+		name string
+		path string
+	}{{"active-first", firstDir}, {"active-second", secondDir}} {
+		proj, loadErr := config.LoadProject(item.path)
+		if loadErr != nil {
+			t.Fatalf("load project %s: %v", item.name, loadErr)
+		}
+		if startErr := m.StartProject(item.name, proj, item.path, false); startErr != nil {
+			t.Fatalf("start project %s: %v", item.name, startErr)
+		}
+		waitForServiceRunning(t, m, item.name, "web")
+	}
+	if err := m.SetFocus("active-first", "multitask"); err != nil {
+		t.Fatalf("set daemon-active project: %v", err)
+	}
+
+	d := &Daemon{manager: m}
+	resp := d.HandleRequest(Request{Action: "focus", Project: "not-running", Mode: "focus"})
+	if !resp.OK {
+		t.Fatalf("focus response error: %s", resp.Error)
+	}
+
+	if !m.IsRunning("active-first") || m.IsRunning("active-second") {
+		t.Fatalf("running projects = %#v, want only active-first", m.RunningProjects())
+	}
+	snap := m.StateSnapshot()
+	if snap.Mode != "focus" || snap.ActiveProject != "active-first" {
+		t.Fatalf("focus state = mode %q active %q, want focus/active-first", snap.Mode, snap.ActiveProject)
+	}
+}
+
+func TestHandleFocusPreservesSurvivorRunningServiceSet(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := t.TempDir()
+	writeDaemonGlobalConfig(t, home, root)
+	otherDir := writeDaemonProject(t, root, "partial-other", "web")
+	port := freeTCPPort(t)
+	partialDir := writeDaemonProjectRaw(t, root, "partial-survivor", fmt.Sprintf(`name: partial-survivor
+services:
+  web:
+    cmd: sleep 5
+    port: %d
+  worker:
+    cmd: sleep 5
+`, port))
+
+	st, err := state.Load()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	st.Register("partial-other", otherDir)
+	st.Register("partial-survivor", partialDir)
+	if err := st.Save(); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer m.Shutdown()
+
+	other, err := config.LoadProject(otherDir)
+	if err != nil {
+		t.Fatalf("load other project: %v", err)
+	}
+	if err := m.StartProject("partial-other", other, otherDir, false); err != nil {
+		t.Fatalf("start other project: %v", err)
+	}
+
+	partial, err := config.LoadProject(partialDir)
+	if err != nil {
+		t.Fatalf("load partial project: %v", err)
+	}
+	if err := m.StartService("partial-survivor", "web", partial, partialDir, false); err != nil {
+		t.Fatalf("start partial service: %v", err)
+	}
+	waitForServiceRunning(t, m, "partial-survivor", "web")
+
+	d := &Daemon{manager: m}
+	resp := d.HandleRequest(Request{Action: "focus", Project: "partial-survivor", Mode: "focus"})
+	if !resp.OK {
+		t.Fatalf("focus response error: %s", resp.Error)
+	}
+
+	status := m.Status()["partial-survivor"]
+	if !status["web"].Running {
+		t.Fatal("expected previously running web service to survive")
+	}
+	if _, exists := status["worker"]; exists {
+		t.Fatalf("expected stopped worker to remain stopped, got %+v", status["worker"])
+	}
+	if status["web"].Port != port {
+		t.Fatalf("web port = %d, want configured base port %d", status["web"].Port, port)
+	}
+}
+
+func TestHandleFocusKeepsOffsetSurvivorRunningWhenBasePortIsBusy(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := t.TempDir()
+	writeDaemonGlobalConfig(t, home, root)
+	otherDir := writeDaemonProject(t, root, "busy-other", "web")
+	basePort := freeTCPPort(t)
+	survivorDir := writeDaemonProjectRaw(t, root, "busy-survivor", fmt.Sprintf("name: busy-survivor\nservices:\n  web:\n    cmd: sleep 5\n    port: %d\n", basePort))
+
+	st, err := state.Load()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	st.Register("busy-other", otherDir)
+	st.Register("busy-survivor", survivorDir)
+	if err := st.Save(); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer m.Shutdown()
+
+	other, err := config.LoadProject(otherDir)
+	if err != nil {
+		t.Fatalf("load other project: %v", err)
+	}
+	if err := m.StartProject("busy-other", other, otherDir, false); err != nil {
+		t.Fatalf("start other project: %v", err)
+	}
+	survivor, err := config.LoadProject(survivorDir)
+	if err != nil {
+		t.Fatalf("load survivor project: %v", err)
+	}
+	if err := m.StartProject("busy-survivor", survivor, survivorDir, false); err != nil {
+		t.Fatalf("start survivor project: %v", err)
+	}
+	waitForServiceRunning(t, m, "busy-survivor", "web")
+	original := m.Status()["busy-survivor"]["web"]
+
+	blocker, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", basePort))
+	if err != nil {
+		t.Fatalf("occupy base port: %v", err)
+	}
+	defer blocker.Close()
+
+	d := &Daemon{manager: m}
+	resp := d.HandleRequest(Request{Action: "focus", Project: "busy-survivor", Mode: "focus"})
+	if resp.OK {
+		t.Fatalf("expected busy base port error, got %+v", resp)
+	}
+
+	current := m.Status()["busy-survivor"]["web"]
+	if !current.Running || current.PID != original.PID || current.Port != original.Port {
+		t.Fatalf("survivor changed after preflight failure: before=%+v after=%+v", original, current)
+	}
+	if m.IsRunning("busy-other") {
+		t.Fatal("expected non-survivor to remain stopped")
+	}
+	snap := m.StateSnapshot()
+	if snap.Mode != "focus" || snap.ActiveProject != "busy-survivor" {
+		t.Fatalf("focus state = mode %q active %q, want focus/busy-survivor", snap.Mode, snap.ActiveProject)
+	}
+}
+
+func TestHandleFocusWaitsForConcurrentProjectStart(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := t.TempDir()
+	writeDaemonGlobalConfig(t, home, root)
+	keepDir := writeDaemonProject(t, root, "serialized-keep", "web")
+	marker := filepath.Join(t.TempDir(), "pre-started")
+	startingDir := writeDaemonProjectRaw(t, root, "serialized-starting", fmt.Sprintf(`name: serialized-starting
+hooks:
+  pre_start: touch %s && sleep 0.2
+services:
+  web:
+    cmd: sleep 5
+`, marker))
+
+	st, err := state.Load()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	st.Register("serialized-keep", keepDir)
+	st.Register("serialized-starting", startingDir)
+	if err := st.Save(); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer m.Shutdown()
+	keep, err := config.LoadProject(keepDir)
+	if err != nil {
+		t.Fatalf("load keep project: %v", err)
+	}
+	if err := m.StartProject("serialized-keep", keep, keepDir, false); err != nil {
+		t.Fatalf("start keep project: %v", err)
+	}
+
+	d := &Daemon{manager: m}
+	startResult := make(chan Response, 1)
+	go func() {
+		startResult <- d.HandleRequest(Request{Action: "start", Project: "serialized-starting", Mode: "parallel"})
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("concurrent start did not enter pre_start hook: %v", err)
+	}
+	hookRequestStarted := time.Now()
+	hookResp := d.HandleRequest(Request{Action: "focus", Project: "serialized-keep", Mode: "focus", Origin: "hook"})
+	if hookResp.OK || !strings.Contains(hookResp.Error, "cannot run recursively") {
+		t.Fatalf("hook lifecycle response = %+v, want immediate recursive-operation error", hookResp)
+	}
+	if elapsed := time.Since(hookRequestStarted); elapsed > 100*time.Millisecond {
+		t.Fatalf("hook lifecycle request took %s, want fail-fast response", elapsed)
+	}
+
+	focusResult := make(chan Response, 1)
+	go func() {
+		focusResult <- d.HandleRequest(Request{Action: "focus", Project: "serialized-keep", Mode: "focus"})
+	}()
+
+	if resp := <-startResult; !resp.OK {
+		t.Fatalf("start response error: %s", resp.Error)
+	}
+	if resp := <-focusResult; !resp.OK {
+		t.Fatalf("focus response error: %s", resp.Error)
+	}
+	if !m.IsRunning("serialized-keep") || m.IsRunning("serialized-starting") {
+		t.Fatalf("running projects = %#v, want only serialized-keep", m.RunningProjects())
 	}
 }
 

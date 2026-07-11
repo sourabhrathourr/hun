@@ -9,7 +9,16 @@ final class HunStore {
     var globalMode: HunMode = .focus {
         didSet {
             guard oldValue != globalMode, !isApplyingSnapshot else { return }
-            Task { await setMode(globalMode) }
+            let mode = globalMode
+            let preferredProject = mode == .focus ? pendingModePreferredProjectID : nil
+            modeChangeGeneration += 1
+            let generation = modeChangeGeneration
+            let previousTask = modeChangeTask
+            modeChangeTask = Task { [weak self] in
+                await previousTask?.value
+                guard let self, generation == self.modeChangeGeneration else { return }
+                await self.setMode(mode, preferredProject: preferredProject)
+            }
         }
     }
     var selectedProjectID: HunProject.ID? {
@@ -50,6 +59,9 @@ final class HunStore {
     private var logSubscription: HunLogSubscribing?
     private var logsByProject: [HunProject.ID: [HunLogLine]] = [:]
     private var isApplyingSnapshot = false
+    private var pendingModePreferredProjectID: HunProject.ID?
+    private var modeChangeTask: Task<Void, Never>?
+    private var modeChangeGeneration = 0
 
     init(
         client: HunDaemonClientProtocol = HunDaemonClient(),
@@ -71,6 +83,22 @@ final class HunStore {
 
     var runningProjects: [HunProject] {
         model.projects.filter { $0.status == .running }
+    }
+
+    func changeMode(_ mode: HunMode, preferredProject: HunProject.ID?) {
+        guard mode != globalMode else { return }
+        pendingModePreferredProjectID = runningProjectID(preferredProject)
+        globalMode = mode
+        pendingModePreferredProjectID = nil
+    }
+
+    private func runningProjectID(_ requestedProject: HunProject.ID?) -> HunProject.ID? {
+        guard let requestedProject,
+              model.projects.contains(where: { $0.id == requestedProject && $0.status == .running })
+        else {
+            return nil
+        }
+        return requestedProject
     }
 
     func projectAction(for project: HunProject) -> HunActionKind? {
@@ -368,9 +396,9 @@ final class HunStore {
         }
     }
 
-    private func setMode(_ mode: HunMode) async {
+    private func setMode(_ mode: HunMode, preferredProject: String?) async {
         do {
-            try await client.setMode(mode)
+            try await client.setMode(mode, preferredProject: preferredProject)
             await refresh(force: false)
         } catch {
             if !isTransientDaemonError(error) {
@@ -405,7 +433,8 @@ final class HunStore {
             message.contains("no such file or directory") ||
             message.contains("connection refused") ||
             message.contains("broken pipe") ||
-            message.contains("socket is not connected")
+            message.contains("socket is not connected") ||
+            message.contains("lifecycle operation in progress")
     }
 
     private func startPolling() {
