@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-ZIP_URL="${HUN_MACOS_BETA_URL:-https://github.com/sourabhrathourr/hun/releases/download/macos-beta-20260620-211133/hun-macos-beta.zip}"
-EXPECTED_SHA256="${HUN_MACOS_BETA_SHA256:-e9c1b27359e587eaa2c6764babb500fe1772c52ef7eedfbf50547fc8944ad026}"
+ZIP_URL="${HUN_MACOS_BETA_URL:-https://github.com/sourabhrathourr/hun/releases/download/v0.2.1/hun-macos-beta.zip}"
+EXPECTED_SHA256="${HUN_MACOS_BETA_SHA256:-f391d6a6aa43bb71a11da287a98059e6e6e53c94298376deeb8452062663d3f2}"
 
 if [ "$(uname -s)" != "Darwin" ]; then
   echo "hun macOS beta installer only supports macOS." >&2
