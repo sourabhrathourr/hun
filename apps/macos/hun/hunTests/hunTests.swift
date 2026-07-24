@@ -707,6 +707,8 @@ struct hunTests {
         #expect(scroller.alphaValue == 1)
         #expect(revealedWidth == restingWidth)
         #expect(scrollView.scrollerStyle == .overlay)
+        #expect(HunScrollStyleMetrics.thumbWidth == 2)
+        #expect(HunScrollStyleMetrics.thumbOpacity < 0.3)
         #expect(
             HunOverlayScroller.scrollerWidth(for: .regular, scrollerStyle: .overlay)
                 == HunScrollStyleMetrics.laneWidth

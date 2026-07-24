@@ -3,8 +3,11 @@ import SwiftUI
 
 enum HunScrollStyleMetrics {
     static let laneWidth: CGFloat = 10
-    static let thumbWidth: CGFloat = 3
+    static let thumbWidth: CGFloat = 2
     static let minimumThumbLength: CGFloat = 28
+    static let thumbOpacity: CGFloat = 0.26
+    static let pressedThumbOpacity: CGFloat = 0.42
+    static let nativeScrollerOpacity: CGFloat = 0.52
     static let revealDuration: TimeInterval = 0.14
     static let hideDelay: TimeInterval = 0.55
 }
@@ -289,7 +292,7 @@ final class HunScrollVisibilityController {
             return
         }
 
-        let targetAlpha: CGFloat = revealed ? 1 : 0
+        let targetAlpha: CGFloat = revealed ? HunScrollStyleMetrics.nativeScrollerOpacity : 0
         guard scroller.alphaValue != targetAlpha else { return }
         if animated {
             NSAnimationContext.runAnimationGroup { context in
@@ -418,7 +421,11 @@ final class HunOverlayScroller: NSScroller {
             yRadius: HunScrollStyleMetrics.thumbWidth / 2
         )
         let pressed = (NSEvent.pressedMouseButtons & 0x1) != 0
-        NSColor.white.withAlphaComponent(pressed ? 0.62 : 0.40).setFill()
+        NSColor.labelColor.withAlphaComponent(
+            pressed
+                ? HunScrollStyleMetrics.pressedThumbOpacity
+                : HunScrollStyleMetrics.thumbOpacity
+        ).setFill()
         thumb.fill()
     }
 }

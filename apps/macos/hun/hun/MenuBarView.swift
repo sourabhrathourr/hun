@@ -133,8 +133,7 @@ private struct SleekMenuScrollView<Content: View>: View {
                 MenuScrollIndicator(
                     viewportHeight: viewportHeight,
                     contentHeight: contentHeight,
-                    contentOffset: contentOffset,
-                    emphasized: hovering
+                    contentOffset: contentOffset
                 )
                 .padding(.trailing, 3)
                 .transition(.opacity)
@@ -368,7 +367,6 @@ private struct MenuScrollIndicator: View {
     let viewportHeight: CGFloat
     let contentHeight: CGFloat
     let contentOffset: CGFloat
-    let emphasized: Bool
 
     private var trackHeight: CGFloat {
         max(1, viewportHeight - 12)
@@ -389,16 +387,14 @@ private struct MenuScrollIndicator: View {
     var body: some View {
         ZStack(alignment: .top) {
             Capsule()
-                .fill(Color.white.opacity(0.10))
-                .frame(width: 3, height: trackHeight)
-
-            Capsule()
-                .fill(Color.white.opacity(emphasized ? 0.52 : 0.42))
-                .frame(width: 3, height: thumbHeight)
+                .fill(
+                    Color(nsColor: .labelColor)
+                        .opacity(HunScrollStyleMetrics.thumbOpacity)
+                )
+                .frame(width: HunScrollStyleMetrics.thumbWidth, height: thumbHeight)
                 .offset(y: thumbOffset)
         }
         .frame(width: 8, height: viewportHeight)
-        .animation(.easeOut(duration: 0.16), value: emphasized)
         .animation(.easeOut(duration: 0.10), value: thumbOffset)
     }
 }
