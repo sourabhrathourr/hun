@@ -16,10 +16,14 @@ type Request struct {
 	Project string `json:"project,omitempty"`
 	Service string `json:"service,omitempty"`
 	Path    string `json:"path,omitempty"`
+	Branch  string `json:"branch,omitempty"`
+	Message string `json:"message,omitempty"`
 	Mode    string `json:"mode,omitempty"` // "exclusive" or "parallel"
 	Lines   int    `json:"lines,omitempty"`
 	Note    string `json:"note,omitempty"`
 	Origin  string `json:"origin,omitempty"`
+	Staged  bool   `json:"staged,omitempty"`
+	Stash   bool   `json:"stash,omitempty"`
 }
 
 // Response is the JSON response from the daemon.
@@ -40,6 +44,10 @@ func errorResponse(msg string) Response {
 
 // HandleRequest routes an API request to the appropriate handler.
 func (d *Daemon) HandleRequest(req Request) Response {
+	if serializesGitMutation(req.Action) {
+		d.gitMu.Lock()
+		defer d.gitMu.Unlock()
+	}
 	if serializesLifecycle(req.Action) {
 		if req.Origin == "hook" {
 			return errorResponse("lifecycle commands cannot run recursively from Hun hooks")
@@ -89,6 +97,28 @@ func (d *Daemon) HandleRequest(req Request) Response {
 		return d.handleRegisterProject(req)
 	case "logs":
 		return d.handleLogs(req)
+	case "git_status":
+		return d.handleGitStatus(req)
+	case "git_branches":
+		return d.handleGitBranches(req)
+	case "git_diff":
+		return d.handleGitDiff(req)
+	case "git_stage":
+		return d.handleGitStage(req)
+	case "git_unstage":
+		return d.handleGitUnstage(req)
+	case "git_commit":
+		return d.handleGitCommit(req)
+	case "git_create_branch":
+		return d.handleGitCreateBranch(req)
+	case "git_switch_branch":
+		return d.handleGitSwitchBranch(req)
+	case "git_fetch":
+		return d.handleGitFetch(req)
+	case "git_pull":
+		return d.handleGitPull(req)
+	case "git_push":
+		return d.handleGitPush(req)
 	case "ports":
 		return d.handlePorts()
 	case "focus":
@@ -98,6 +128,16 @@ func (d *Daemon) HandleRequest(req Request) Response {
 		return errorResponse("subscribe must be handled at connection level")
 	default:
 		return errorResponse(fmt.Sprintf("unknown action: %s", req.Action))
+	}
+}
+
+func serializesGitMutation(action string) bool {
+	switch action {
+	case "git_stage", "git_unstage", "git_commit", "git_create_branch", "git_switch_branch",
+		"git_fetch", "git_pull", "git_push":
+		return true
+	default:
+		return false
 	}
 }
 

@@ -30,6 +30,7 @@ type Daemon struct {
 	commit      string
 	startedAt   time.Time
 	lifecycleMu sync.Mutex
+	gitMu       sync.Mutex
 }
 
 // New creates a new daemon instance.

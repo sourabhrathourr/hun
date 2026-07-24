@@ -32,6 +32,20 @@ nonisolated protocol HunDaemonClientProtocol: AnyObject {
     ) throws -> HunLogSubscribing
 }
 
+nonisolated protocol HunGitClientProtocol: AnyObject {
+    func gitStatus(project: String) async throws -> HunGitStatus
+    func gitBranches(project: String) async throws -> [HunGitBranch]
+    func gitDiff(project: String, path: String, staged: Bool) async throws -> HunGitDiff
+    func gitStage(project: String, path: String) async throws -> HunGitStatus
+    func gitUnstage(project: String, path: String) async throws -> HunGitStatus
+    func gitCommit(project: String, message: String) async throws -> HunGitStatus
+    func gitCreateBranch(project: String, branch: String) async throws -> HunGitStatus
+    func gitSwitchBranch(project: String, branch: String, stash: Bool) async throws -> HunGitStatus
+    func gitFetch(project: String) async throws -> HunGitStatus
+    func gitPull(project: String) async throws -> HunGitStatus
+    func gitPush(project: String) async throws -> HunGitStatus
+}
+
 nonisolated struct HunDaemonInfo: Decodable, Equatable {
     let status: String
     let protocolVersion: Int
@@ -235,8 +249,8 @@ nonisolated struct HunDaemonLogLine: Decodable, Equatable {
     }
 }
 
-nonisolated final class HunDaemonClient: HunDaemonClientProtocol {
-    private static let requiredProtocol = 12
+nonisolated final class HunDaemonClient: HunDaemonClientProtocol, HunGitClientProtocol {
+    private static let requiredProtocol = 13
     private let socketPath: String
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -303,6 +317,60 @@ nonisolated final class HunDaemonClient: HunDaemonClientProtocol {
 
     func logs(project: String, service: String?, lines: Int) async throws -> [HunDaemonLogLine] {
         try await request(HunDaemonRequest(action: "logs", project: project, service: service, lines: lines))
+    }
+
+    func gitStatus(project: String) async throws -> HunGitStatus {
+        try await request(HunDaemonRequest(action: "git_status", project: project))
+    }
+
+    func gitBranches(project: String) async throws -> [HunGitBranch] {
+        try await request(HunDaemonRequest(action: "git_branches", project: project))
+    }
+
+    func gitDiff(project: String, path: String, staged: Bool) async throws -> HunGitDiff {
+        try await request(HunDaemonRequest(
+            action: "git_diff",
+            project: project,
+            path: path,
+            staged: staged
+        ))
+    }
+
+    func gitStage(project: String, path: String) async throws -> HunGitStatus {
+        try await request(HunDaemonRequest(action: "git_stage", project: project, path: path))
+    }
+
+    func gitUnstage(project: String, path: String) async throws -> HunGitStatus {
+        try await request(HunDaemonRequest(action: "git_unstage", project: project, path: path))
+    }
+
+    func gitCommit(project: String, message: String) async throws -> HunGitStatus {
+        try await request(HunDaemonRequest(action: "git_commit", project: project, message: message))
+    }
+
+    func gitCreateBranch(project: String, branch: String) async throws -> HunGitStatus {
+        try await request(HunDaemonRequest(action: "git_create_branch", project: project, branch: branch))
+    }
+
+    func gitSwitchBranch(project: String, branch: String, stash: Bool) async throws -> HunGitStatus {
+        try await request(HunDaemonRequest(
+            action: "git_switch_branch",
+            project: project,
+            branch: branch,
+            stash: stash
+        ))
+    }
+
+    func gitFetch(project: String) async throws -> HunGitStatus {
+        try await request(HunDaemonRequest(action: "git_fetch", project: project))
+    }
+
+    func gitPull(project: String) async throws -> HunGitStatus {
+        try await request(HunDaemonRequest(action: "git_pull", project: project))
+    }
+
+    func gitPush(project: String) async throws -> HunGitStatus {
+        try await request(HunDaemonRequest(action: "git_push", project: project))
     }
 
     func subscribe(
@@ -586,8 +654,12 @@ nonisolated private struct HunDaemonRequest: Encodable {
     var project: String?
     var service: String?
     var path: String?
+    var branch: String?
+    var message: String?
     var mode: String?
     var lines: Int?
+    var staged: Bool?
+    var stash: Bool?
 }
 
 nonisolated private struct HunDaemonEnvelope<T: Decodable>: Decodable {

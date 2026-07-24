@@ -6,6 +6,89 @@ import Testing
 
 @MainActor
 struct hunTests {
+    @Test func gitWorkspaceModelLoadsRepositoryAndCoordinatesFileActions() async throws {
+        let client = MockGitClient()
+        client.status = .fixture()
+        client.branches = [
+            HunGitBranch(name: "main", current: true, remote: false, upstream: "origin/main", updatedAt: 10),
+            HunGitBranch(name: "feature/ui", current: false, remote: false, upstream: nil, updatedAt: 9)
+        ]
+        client.diff = HunGitDiff(
+            path: "ContentView.swift",
+            staged: false,
+            content: "@@ -1 +1 @@\n-old\n+new\n",
+            binary: false,
+            truncated: false
+        )
+        let model = HunGitWorkspaceModel(client: client)
+
+        await model.load(projectID: "app")
+        await model.loadBranches()
+        let change = try #require(model.status?.files.first)
+        await model.loadDiff(for: change, staged: false)
+
+        #expect(model.status?.branch == "main")
+        #expect(model.status?.changeCount == 1)
+        #expect(model.branches.map(\.name) == ["main", "feature/ui"])
+        #expect(model.selectedDiff?.content.contains("+new") == true)
+
+        await model.stage(change)
+
+        #expect(client.actions == ["stage:app:ContentView.swift"])
+        #expect(model.status?.files.first?.staged == true)
+        #expect(model.errorMessage == nil)
+    }
+
+    @Test func silentGitRefreshCannotOverwriteMutationOrDismissActionError() async throws {
+        let client = MockGitClient()
+        client.statusDelay = .milliseconds(80)
+        let model = HunGitWorkspaceModel(client: client)
+        await model.load(projectID: "app")
+        let change = try #require(model.status?.files.first)
+
+        let refresh = Task { await model.refresh(silently: true) }
+        try await Task.sleep(for: .milliseconds(20))
+        await model.stage(change)
+        model.errorMessage = "Switch requires a clean working tree."
+        await refresh.value
+
+        #expect(model.status?.files.first?.staged == true)
+        #expect(model.errorMessage == "Switch requires a clean working tree.")
+    }
+
+    @Test func failedGitFetchKeepsItsErrorVisible() async {
+        let client = MockGitClient()
+        let model = HunGitWorkspaceModel(client: client)
+        await model.load(projectID: "app")
+        client.fetchError = TestError.boom
+
+        await model.fetch()
+
+        #expect(model.errorMessage == "boom")
+        #expect(client.branchRequests == 0)
+    }
+
+    @Test func failedGitStageDoesNotReloadDiffOrHideItsError() async throws {
+        let client = MockGitClient()
+        client.status.files[0] = HunGitFileChange(
+            path: "ContentView.swift",
+            originalPath: nil,
+            indexStatus: "M",
+            worktreeStatus: "M",
+            untracked: false,
+            conflicted: false
+        )
+        let model = HunGitWorkspaceModel(client: client)
+        await model.load(projectID: "app")
+        let change = try #require(model.status?.files.first)
+        client.stageError = TestError.boom
+
+        await model.stage(change)
+
+        #expect(model.errorMessage == "boom")
+        #expect(client.diffRequests == 0)
+    }
+
     @Test func snapshotDecodingMapsProjectState() async throws {
         let client = MockDaemonClient()
         client.nextSnapshot = .fixture(activeProject: "app")
@@ -151,7 +234,7 @@ struct hunTests {
         let client = MockDaemonClient()
         client.nextDaemonInfo = HunDaemonInfo(
             status: "pong",
-            protocolVersion: 12,
+            protocolVersion: 13,
             version: "v0.2.1",
             commit: "abc1234",
             pid: 4242,
@@ -891,6 +974,90 @@ private final class MockSupervisor: HunDaemonSupervisorProtocol {
     }
 }
 
+private final class MockGitClient: HunGitClientProtocol {
+    var status = HunGitStatus.fixture()
+    var branches: [HunGitBranch] = []
+    var diff = HunGitDiff(path: "", staged: false, content: "", binary: false, truncated: false)
+    var statusDelay: Duration?
+    var fetchError: Error?
+    var stageError: Error?
+    var branchRequests = 0
+    var diffRequests = 0
+    var actions: [String] = []
+
+    func gitStatus(project: String) async throws -> HunGitStatus {
+        let result = status
+        if let statusDelay {
+            try? await Task.sleep(for: statusDelay)
+        }
+        return result
+    }
+
+    func gitBranches(project: String) async throws -> [HunGitBranch] {
+        branchRequests += 1
+        return branches
+    }
+
+    func gitDiff(project: String, path: String, staged: Bool) async throws -> HunGitDiff {
+        diffRequests += 1
+        return diff
+    }
+
+    func gitStage(project: String, path: String) async throws -> HunGitStatus {
+        actions.append("stage:\(project):\(path)")
+        if let stageError {
+            throw stageError
+        }
+        status.files[0] = HunGitFileChange(
+            path: status.files[0].path,
+            originalPath: status.files[0].originalPath,
+            indexStatus: "M",
+            worktreeStatus: ".",
+            untracked: false,
+            conflicted: false
+        )
+        return status
+    }
+
+    func gitUnstage(project: String, path: String) async throws -> HunGitStatus {
+        actions.append("unstage:\(project):\(path)")
+        return status
+    }
+
+    func gitCommit(project: String, message: String) async throws -> HunGitStatus {
+        actions.append("commit:\(project):\(message)")
+        return status
+    }
+
+    func gitCreateBranch(project: String, branch: String) async throws -> HunGitStatus {
+        actions.append("create:\(project):\(branch)")
+        return status
+    }
+
+    func gitSwitchBranch(project: String, branch: String, stash: Bool) async throws -> HunGitStatus {
+        actions.append("switch:\(project):\(branch):\(stash)")
+        return status
+    }
+
+    func gitFetch(project: String) async throws -> HunGitStatus {
+        actions.append("fetch:\(project)")
+        if let fetchError {
+            throw fetchError
+        }
+        return status
+    }
+
+    func gitPull(project: String) async throws -> HunGitStatus {
+        actions.append("pull:\(project)")
+        return status
+    }
+
+    func gitPush(project: String) async throws -> HunGitStatus {
+        actions.append("push:\(project)")
+        return status
+    }
+}
+
 private final class MockProjectInitializer: HunProjectInitializing {
     var urls: [URL] = []
     var error: Error?
@@ -912,11 +1079,37 @@ private final class MockProjectInitializer: HunProjectInitializing {
     }
 }
 
+private extension HunGitStatus {
+    static func fixture() -> HunGitStatus {
+        HunGitStatus(
+            isRepository: true,
+            branch: "main",
+            head: "abc123",
+            upstream: "origin/main",
+            ahead: 0,
+            behind: 0,
+            detached: false,
+            clean: false,
+            operation: nil,
+            files: [
+                HunGitFileChange(
+                    path: "ContentView.swift",
+                    originalPath: nil,
+                    indexStatus: ".",
+                    worktreeStatus: "M",
+                    untracked: false,
+                    conflicted: false
+                )
+            ]
+        )
+    }
+}
+
 private final class MockDaemonClient: HunDaemonClientProtocol {
     var nextSnapshot = HunDaemonSnapshot.fixture(activeProject: "app")
     var nextDaemonInfo = HunDaemonInfo(
         status: "pong",
-        protocolVersion: 12,
+        protocolVersion: 13,
         version: "v0.2.1",
         commit: "abc1234",
         pid: 4242,

@@ -13,6 +13,7 @@ struct ContentView: View {
     @State private var collapsedSections: Set<String> = []
     @State private var presentedSheet: DashboardSheet?
     @State private var terminalController = HunTerminalController()
+    @State private var gitWorkspace = HunGitWorkspaceModel()
     @FocusState private var sidebarSearchFocused: Bool
     private let sidebarWidth: CGFloat = 250
 
@@ -181,6 +182,7 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 ProjectDetailView(
                     project: project,
+                    gitWorkspace: gitWorkspace,
                     mode: store.globalMode,
                     pendingAction: store.projectAction(for: project),
                     logSearch: $logSearch,
@@ -224,6 +226,9 @@ struct ContentView: View {
                 reduceMotion ? nil : .easeOut(duration: 0.16),
                 value: terminalController.isPresented
             )
+            .task(id: project.id) {
+                await gitWorkspace.monitor(projectID: project.id)
+            }
         }
     }
 
@@ -1028,6 +1033,7 @@ private struct ToolbarIconButton: View {
 
 private struct ProjectDetailView: View {
     let project: HunProject
+    let gitWorkspace: HunGitWorkspaceModel
     let mode: HunMode
     let pendingAction: HunActionKind?
     @Binding var logSearch: String
@@ -1055,6 +1061,7 @@ private struct ProjectDetailView: View {
         VStack(spacing: 0) {
             ProjectHeaderView(
                 project: project,
+                gitWorkspace: gitWorkspace,
                 mode: mode,
                 pendingAction: pendingAction,
                 onFocus: onFocus,
@@ -1069,35 +1076,43 @@ private struct ProjectDetailView: View {
 
             Rectangle().fill(AppTheme.divider).frame(height: 1)
 
-            HStack(spacing: 0) {
-                ServicesPanelView(
-                    services: project.services,
-                    selectedID: $selectedServiceID,
-                    selectedScope: $selectedLogScope,
-                    onOpenConfig: onOpenConfig,
-                    onRun: onRunService,
-                    onRestart: onRestartService,
-                    onStop: onStopService,
-                    onRemove: onRemoveService
-                )
-                .frame(width: 320)
-                .background(AppTheme.appBackground)
+            if gitWorkspace.isWorkspacePresented {
+                HunGitWorkspaceView(project: project, model: gitWorkspace)
+                    .transition(.opacity)
+            } else {
+                HStack(spacing: 0) {
+                    ServicesPanelView(
+                        services: project.services,
+                        selectedID: $selectedServiceID,
+                        selectedScope: $selectedLogScope,
+                        onOpenConfig: onOpenConfig,
+                        onRun: onRunService,
+                        onRestart: onRestartService,
+                        onStop: onStopService,
+                        onRemove: onRemoveService
+                    )
+                    .frame(width: 320)
+                    .background(AppTheme.appBackground)
 
-                Rectangle().fill(AppTheme.divider).frame(width: 1)
+                    Rectangle().fill(AppTheme.divider).frame(width: 1)
 
-                LogsPanelView(
-                    selectedService: selectedService,
-                    scope: $selectedLogScope,
-                    logs: visibleLogs,
-                    searchText: $logSearch
-                )
+                    LogsPanelView(
+                        selectedService: selectedService,
+                        scope: $selectedLogScope,
+                        logs: visibleLogs,
+                        searchText: $logSearch
+                    )
+                }
+                .transition(.opacity)
             }
         }
+        .animation(.easeOut(duration: 0.14), value: gitWorkspace.isWorkspacePresented)
     }
 }
 
 private struct ProjectHeaderView: View {
     let project: HunProject
+    let gitWorkspace: HunGitWorkspaceModel
     let mode: HunMode
     let pendingAction: HunActionKind?
     let onFocus: () -> Void
@@ -1158,8 +1173,8 @@ private struct ProjectHeaderView: View {
 
                 HStack(spacing: 14) {
                     StatusMetaItem(status: project.status)
-                    if let branch = project.branch {
-                        MetaItem(icon: "arrow.triangle.branch", text: branch)
+                    if project.branch != nil || gitWorkspace.status?.isRepository == true {
+                        HunRepositoryStatusCapsule(project: project, model: gitWorkspace)
                     }
                     MetaItem(icon: "folder", text: collapsePath(project.path))
                 }
