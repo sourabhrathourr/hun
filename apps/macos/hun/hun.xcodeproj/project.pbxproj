@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		5A31B6992FE1000000D3B44F /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 5A31B69B2FE1000000D3B44F /* SwiftTerm */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		5A31B67C2FA5344F00D3B44F /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +56,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5A31B6992FE1000000D3B44F /* SwiftTerm in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -113,6 +118,7 @@
 			);
 			name = hun;
 			packageProductDependencies = (
+				5A31B69B2FE1000000D3B44F /* SwiftTerm */,
 			);
 			productName = hun;
 			productReference = 5A31B66E2FA5344E00D3B44F /* hun.app */;
@@ -200,6 +206,9 @@
 			productRefGroup = 5A31B66F2FA5344E00D3B44F /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
+			packageReferences = (
+				5A31B69A2FE1000000D3B44F /* XCRemoteSwiftPackageReference "SwiftTerm" */,
+			);
 			targets = (
 				5A31B66D2FA5344E00D3B44F /* hun */,
 				5A31B67A2FA5344F00D3B44F /* hunTests */,
@@ -599,6 +608,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		5A31B69A2FE1000000D3B44F /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm.git";
+			requirement = {
+				kind = exactVersion;
+				version = 1.11.2;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		5A31B69B2FE1000000D3B44F /* SwiftTerm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5A31B69A2FE1000000D3B44F /* XCRemoteSwiftPackageReference "SwiftTerm" */;
+			productName = SwiftTerm;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 5A31B6662FA5344E00D3B44F /* Project object */;
 }

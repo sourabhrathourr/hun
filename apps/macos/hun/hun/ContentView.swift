@@ -12,6 +12,7 @@ struct ContentView: View {
     @State private var sidebarRevealHideTask: Task<Void, Never>?
     @State private var collapsedSections: Set<String> = []
     @State private var presentedSheet: DashboardSheet?
+    @State private var terminalController = HunTerminalController()
     @FocusState private var sidebarSearchFocused: Bool
     private let sidebarWidth: CGFloat = 250
 
@@ -90,8 +91,38 @@ struct ContentView: View {
         .ignoresSafeArea(.container, edges: .top)
         .animation(.spring(response: 0.34, dampingFraction: 0.86), value: sidebarDocked)
         .animation(.spring(response: 0.32, dampingFraction: 0.88), value: sidebarRevealed)
+        .focusedSceneValue(
+            \.hunTerminalCommand,
+            HunTerminalCommandAction(
+                canToggle: activeProject != nil,
+                canClear: terminalController.isPresented && terminalController.activeSession != nil,
+                toggle: toggleTerminal,
+                clear: terminalController.clearActiveTerminal
+            )
+        )
         .task {
             await store.refresh(force: true)
+        }
+        .onChange(of: store.selectedProjectID) { _, projectID in
+            guard let projectID,
+                  let project = model.projects.first(where: { $0.id == projectID })
+            else {
+                terminalController.hide()
+                return
+            }
+            terminalController.projectDidChange(
+                HunTerminalProjectContext(
+                    id: project.id,
+                    name: project.name,
+                    rootPath: project.path
+                )
+            )
+        }
+        .onChange(of: model.projects.map(\.id)) { _, projectIDs in
+            terminalController.pruneSessions(validProjectIDs: Set(projectIDs))
+        }
+        .onDisappear {
+            terminalController.shutdown()
         }
         .sheet(item: $presentedSheet) { sheet in
             switch sheet {
@@ -128,27 +159,7 @@ struct ContentView: View {
 
             Group {
                 if let project = activeProject {
-                    ProjectDetailView(
-                        project: project,
-                        mode: store.globalMode,
-                        pendingAction: store.projectAction(for: project),
-                        logSearch: $logSearch,
-                        selectedServiceID: $store.selectedServiceID,
-                        selectedLogScope: $store.selectedLogScope,
-                        visibleLogs: visibleLogs,
-                        onFocus: { store.focus(project) },
-                        onRun: { store.run(project) },
-                        onRestart: { store.restart(project) },
-                        onStop: { store.stop(project) },
-                        onOpenConfig: { store.openConfig(for: project) },
-                        onChooseLogo: { store.chooseLogo(for: project) },
-                        onClearLogo: { store.clearLogo(for: project) },
-                        onCopyAgentPrompt: { store.copyAgentPrompt(for: project) },
-                        onRunService: { service in store.run(service, in: project) },
-                        onRestartService: { service in store.restart(service, in: project) },
-                        onStopService: { service in store.stop(service, in: project) },
-                        onRemoveService: { service in store.remove(service, from: project) }
-                    )
+                    projectWorkspace(project)
                 } else {
                     EmptyStateView(projectCount: model.projects.count, onRefresh: { store.refreshNow() })
                 }
@@ -160,6 +171,60 @@ struct ContentView: View {
             .background(AppTheme.appBackground)
         }
         .padding(.leading, sidebarDocked ? 0 : 8)
+    }
+
+    private func projectWorkspace(_ project: HunProject) -> some View {
+        @Bindable var store = store
+        @Bindable var terminalController = terminalController
+
+        return GeometryReader { proxy in
+            VStack(spacing: 0) {
+                ProjectDetailView(
+                    project: project,
+                    mode: store.globalMode,
+                    pendingAction: store.projectAction(for: project),
+                    logSearch: $logSearch,
+                    selectedServiceID: $store.selectedServiceID,
+                    selectedLogScope: $store.selectedLogScope,
+                    visibleLogs: visibleLogs,
+                    onFocus: { store.focus(project) },
+                    onRun: { store.run(project) },
+                    onRestart: { store.restart(project) },
+                    onStop: { store.stop(project) },
+                    onOpenConfig: { store.openConfig(for: project) },
+                    onChooseLogo: { store.chooseLogo(for: project) },
+                    onClearLogo: { store.clearLogo(for: project) },
+                    onCopyAgentPrompt: { store.copyAgentPrompt(for: project) },
+                    onRunService: { service in store.run(service, in: project) },
+                    onRestartService: { service in store.restart(service, in: project) },
+                    onStopService: { service in store.stop(service, in: project) },
+                    onRemoveService: { service in store.remove(service, from: project) }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                if terminalController.isPresented,
+                   let session = terminalController.activeSession
+                {
+                    HunTerminalPanel(
+                        session: session,
+                        preferredHeight: $terminalController.panelHeight,
+                        availableHeight: proxy.size.height,
+                        onClose: terminalController.hide
+                    )
+                    .frame(
+                        height: HunTerminalPanelMetrics.clamp(
+                            terminalController.panelHeight,
+                            availableHeight: proxy.size.height
+                        )
+                    )
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(
+                reduceMotion ? nil : .easeOut(duration: 0.16),
+                value: terminalController.isPresented
+            )
+        }
     }
 
     private func sidebar(docked: Bool) -> some View {
@@ -271,6 +336,17 @@ struct ContentView: View {
         } else {
             dockSidebar()
         }
+    }
+
+    private func toggleTerminal() {
+        guard let project = activeProject else { return }
+        terminalController.toggle(
+            project: HunTerminalProjectContext(
+                id: project.id,
+                name: project.name,
+                rootPath: project.path
+            )
+        )
     }
 
     private func focusProjectSearch() {
@@ -911,6 +987,8 @@ private struct ProjectTabView: View {
 private struct ToolbarIconButton: View {
     let systemImage: String
     var helpText: String? = nil
+    var isActive = false
+    var isDisabled = false
     let action: () -> Void
     @State private var hovering = false
 
@@ -918,17 +996,30 @@ private struct ToolbarIconButton: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(hovering ? AppTheme.textPrimary : AppTheme.textTertiary)
+                .foregroundStyle(iconColor)
                 .frame(width: 26, height: 26)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(hovering ? AppTheme.hover : Color.clear)
+                        .fill(buttonBackground)
                 )
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(isDisabled)
         .onHover { hovering = $0 }
         .help(helpText ?? "")
+    }
+
+    private var iconColor: Color {
+        if isDisabled { return AppTheme.textTertiary.opacity(0.45) }
+        if isActive || hovering { return AppTheme.textPrimary }
+        return AppTheme.textTertiary
+    }
+
+    private var buttonBackground: Color {
+        if isActive { return AppTheme.tabActive }
+        if hovering && !isDisabled { return AppTheme.hover }
+        return .clear
     }
 }
 

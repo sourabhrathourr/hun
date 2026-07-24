@@ -1,3 +1,4 @@
+import AppKit
 import Darwin
 import Foundation
 import Testing
@@ -646,6 +647,150 @@ struct hunTests {
         #expect(store.model.projects.count == 1)
     }
 
+    @Test func terminalLaunchConfigurationUsesProjectAndLoginShellEnvironment() throws {
+        let configuration = HunTerminalLaunchConfiguration.projectShell(
+            rootPath: "/tmp/projects/app",
+            environment: [
+                "SHELL": "/bin/zsh",
+                "PATH": "/opt/homebrew/bin:/usr/bin",
+                "TERM_SESSION_ID": "stale",
+                "TOKEN": "part=with=equals"
+            ]
+        )
+
+        #expect(configuration.executable == "/bin/zsh")
+        #expect(configuration.execName == "-zsh")
+        #expect(configuration.currentDirectory == "/tmp/projects/app")
+        #expect(configuration.environment.contains("PWD=/tmp/projects/app"))
+        #expect(configuration.environment.contains("HUN_PROJECT_ROOT=/tmp/projects/app"))
+        #expect(configuration.environment.contains("TERM=xterm-256color"))
+        #expect(configuration.environment.contains("COLORTERM=truecolor"))
+        #expect(configuration.environment.contains("TOKEN=part=with=equals"))
+        #expect(!configuration.environment.contains(where: { $0.hasPrefix("TERM_SESSION_ID=") }))
+        #expect(configuration.environment == configuration.environment.sorted())
+    }
+
+    @Test func terminalLaunchConfigurationFallsBackFromInvalidShell() {
+        let configuration = HunTerminalLaunchConfiguration.projectShell(
+            rootPath: "/tmp/projects/app",
+            environment: ["SHELL": "/missing/not-a-shell"]
+        )
+
+        #expect(configuration.executable == "/bin/zsh")
+        #expect(configuration.execName == "-zsh")
+        #expect(configuration.environment.contains("SHELL=/bin/zsh"))
+    }
+
+    @Test func terminalPanelHeightPreservesWorkspaceAndMinimumTerminalSize() {
+        #expect(HunTerminalPanelMetrics.clamp(80, availableHeight: 700) == 164)
+        #expect(HunTerminalPanelMetrics.clamp(900, availableHeight: 700) == 530)
+        #expect(HunTerminalPanelMetrics.clamp(280, availableHeight: 700) == 280)
+    }
+
+    @Test func terminalDirectoryNormalizesShellFileURLs() {
+        #expect(
+            HunTerminalSession.normalizedDirectory(
+                "file://mac.local/Users/me/Side%20Projects/hun"
+            ) == "/Users/me/Side Projects/hun"
+        )
+        #expect(HunTerminalSession.normalizedDirectory("/tmp/hun") == "/tmp/hun")
+    }
+
+    @Test func terminalControllerPreservesOneSessionPerProject() async throws {
+        let suiteName = "hunTests.terminal.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        var engines: [MockTerminalEngine] = []
+        let controller = HunTerminalController(
+            engineFactory: {
+                let engine = MockTerminalEngine()
+                engines.append(engine)
+                return engine
+            },
+            environmentProvider: {
+                ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"]
+            },
+            defaults: defaults
+        )
+
+        let first = controller.show(
+            project: HunTerminalProjectContext(
+                id: "app",
+                name: "App",
+                rootPath: "/tmp/projects/app"
+            )
+        )
+        try await waitUntil { engines.first?.startCount == 1 }
+        controller.hide()
+        let restored = controller.show(
+            project: HunTerminalProjectContext(
+                id: "app",
+                name: "App",
+                rootPath: "/tmp/projects/app"
+            )
+        )
+
+        #expect(first === restored)
+        #expect(engines.count == 1)
+        #expect(engines[0].startCount == 1)
+        #expect(engines[0].lastConfiguration?.currentDirectory == "/tmp/projects/app")
+
+        controller.clearActiveTerminal()
+        #expect(engines[0].clearCount == 1)
+
+        controller.hide()
+        controller.clearActiveTerminal()
+        #expect(engines[0].clearCount == 1)
+
+        _ = controller.show(
+            project: HunTerminalProjectContext(
+                id: "app",
+                name: "App",
+                rootPath: "/tmp/projects/app"
+            )
+        )
+        controller.projectDidChange(
+            HunTerminalProjectContext(
+                id: "shop",
+                name: "Shop",
+                rootPath: "/tmp/projects/shop"
+            )
+        )
+        try await waitUntil { engines.count == 2 && engines[1].startCount == 1 }
+        controller.pruneSessions(validProjectIDs: ["shop"])
+
+        #expect(engines[0].terminateCount == 1)
+        #expect(engines[1].terminateCount == 0)
+    }
+
+    @Test func terminalControllerBoundsRetainedShellProcesses() {
+        var engines: [MockTerminalEngine] = []
+        let controller = HunTerminalController(
+            engineFactory: {
+                let engine = MockTerminalEngine()
+                engines.append(engine)
+                return engine
+            },
+            environmentProvider: { [:] },
+            defaults: nil
+        )
+
+        for index in 0...HunTerminalController.maximumRetainedSessionCount {
+            _ = controller.session(
+                for: HunTerminalProjectContext(
+                    id: "project-\(index)",
+                    name: "Project \(index)",
+                    rootPath: "/tmp/project-\(index)"
+                )
+            )
+        }
+
+        #expect(engines.count == HunTerminalController.maximumRetainedSessionCount + 1)
+        #expect(engines[0].terminateCount == 1)
+        #expect(engines.dropFirst().allSatisfy { $0.terminateCount == 0 })
+    }
+
     private func waitUntil(_ predicate: @escaping () -> Bool) async throws {
         for _ in 0..<20 {
             if predicate() {
@@ -666,6 +811,42 @@ struct hunTests {
                 isErr: isErr
             )
         ).level
+    }
+}
+
+@MainActor
+private final class MockTerminalEngine: HunTerminalEngine {
+    weak var delegate: (any HunTerminalEngineDelegate)?
+    let view = NSView(frame: .zero)
+    private(set) var isRunning = false
+    private(set) var startCount = 0
+    private(set) var clearCount = 0
+    private(set) var resetCount = 0
+    private(set) var terminateCount = 0
+    private(set) var focusCount = 0
+    private(set) var lastConfiguration: HunTerminalLaunchConfiguration?
+
+    func start(configuration: HunTerminalLaunchConfiguration) {
+        startCount += 1
+        lastConfiguration = configuration
+        isRunning = true
+    }
+
+    func reset() {
+        resetCount += 1
+    }
+
+    func clear() {
+        clearCount += 1
+    }
+
+    func terminate() {
+        terminateCount += 1
+        isRunning = false
+    }
+
+    func focus() {
+        focusCount += 1
     }
 }
 

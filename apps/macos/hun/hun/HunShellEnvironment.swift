@@ -1,17 +1,18 @@
+import Darwin
 import Foundation
 
 nonisolated enum HunShellEnvironment {
-    static func loginEnvironment() async -> [String: String] {
+    static func loginEnvironment(timeout: TimeInterval = 3) async -> [String: String] {
         await Task.detached(priority: .utility) {
             do {
-                return try captureLoginEnvironment()
+                return try captureLoginEnvironment(timeout: timeout)
             } catch {
                 return ProcessInfo.processInfo.environment
             }
         }.value
     }
 
-    static func captureLoginEnvironment() throws -> [String: String] {
+    static func captureLoginEnvironment(timeout: TimeInterval = 3) throws -> [String: String] {
         let parent = ProcessInfo.processInfo.environment
         let home = parent["HOME"] ?? NSHomeDirectory()
         let user = parent["USER"] ?? NSUserName()
@@ -37,7 +38,7 @@ nonisolated enum HunShellEnvironment {
         process.standardError = error
 
         try process.run()
-        process.waitUntilExit()
+        try waitForExit(process, timeout: timeout)
 
         guard process.terminationStatus == 0 else {
             let stderr = String(data: error.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
@@ -71,15 +72,37 @@ nonisolated enum HunShellEnvironment {
         }
         return merged
     }
+
+    private static func waitForExit(_ process: Process, timeout: TimeInterval) throws {
+        let deadline = Date().addingTimeInterval(max(timeout, 0))
+        while process.isRunning, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        guard process.isRunning else { return }
+
+        process.terminate()
+        let terminationDeadline = Date().addingTimeInterval(0.2)
+        while process.isRunning, Date() < terminationDeadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        if process.isRunning {
+            _ = Darwin.kill(process.processIdentifier, SIGKILL)
+        }
+        process.waitUntilExit()
+        throw HunShellEnvironmentError.captureTimedOut
+    }
 }
 
 nonisolated enum HunShellEnvironmentError: Error, LocalizedError {
     case captureFailed(String)
+    case captureTimedOut
 
     var errorDescription: String? {
         switch self {
         case .captureFailed(let message):
             return message.isEmpty ? "could not capture login shell environment" : message
+        case .captureTimedOut:
+            return "capturing the login shell environment timed out"
         }
     }
 }
