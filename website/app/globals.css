@@ -41,14 +41,24 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: transparent;
   --sidebar-ring: oklch(0.556 0 0);
+
+  /* Terminal surface: warm near-black, distinct from the neutral --background.
+     Used by the Terminal and MiniTui demo widgets. */
+  --terminal: oklch(0.178 0.004 84.6);
+  --terminal-border: oklch(0.232 0.006 78.2);
+  --terminal-ring: oklch(0.278 0.006 78.2);
 }
 
 @theme inline {
-  --font-sans: 'JetBrains Mono Variable', monospace;
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
   --font-serif: 'Instrument Serif', serif;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-sidebar-ring: var(--sidebar-ring);
+  --color-terminal: var(--terminal);
+  --color-terminal-border: var(--terminal-border);
+  --color-terminal-ring: var(--terminal-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
@@ -84,6 +94,35 @@
   --radius-2xl: calc(var(--radius) + 8px);
   --radius-3xl: calc(var(--radius) + 12px);
   --radius-4xl: calc(var(--radius) + 16px);
+}
+
+@theme {
+  /* Type scale — landing hierarchy, lowercase display headings.
+     Headings/display are fluid so they degrade gracefully on mobile.
+     NOTE: the negative letter-spacing on display/headline assumes the
+     plan's clean sans-serif body/heading font. If JetBrains Mono (mono)
+     stays on headings, set these to ~0 — negative tracking cramps mono. */
+  --text-display: clamp(2.5rem, 5vw + 1rem, 4rem);
+  --text-display--line-height: 1.05;
+  --text-display--letter-spacing: -0.02em;
+  --text-headline: clamp(1.75rem, 3vw + 0.5rem, 2.5rem);
+  --text-headline--line-height: 1.1;
+  --text-headline--letter-spacing: -0.015em;
+  --text-title: 1.375rem;
+  --text-title--line-height: 1.25;
+  --text-title--letter-spacing: -0.01em;
+  --text-lead: 1.125rem;
+  --text-lead--line-height: 1.6;
+  --text-body: 1rem;
+  --text-body--line-height: 1.7;
+  --text-caption: 0.8125rem;
+  --text-caption--line-height: 1.5;
+
+  /* Section rhythm — plan calls for generous vertical spacing, single
+     column, each section a full-width moment. */
+  --spacing-section: 8rem;
+  --spacing-section-sm: 5rem;
+  --spacing-block: 2.5rem;
 }
 
 @layer base {

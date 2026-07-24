@@ -161,7 +161,7 @@ export function MiniTui() {
     <div
       ref={containerRef}
       tabIndex={0}
-      className="bg-[#12110f] border border-[#1f1d1a] rounded-sm text-[12px] font-mono overflow-hidden outline-none focus:ring-1 focus:ring-[#2a2825]"
+      className="bg-terminal border border-terminal-border rounded-sm text-[12px] font-mono overflow-hidden outline-none focus:ring-1 focus:ring-terminal-ring"
     >
       {/* top bar */}
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-border">

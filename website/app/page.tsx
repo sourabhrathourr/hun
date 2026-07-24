@@ -1,176 +1,54 @@
-import { Reveal } from "@/components/reveal";
-import { InstallButton } from "@/components/install-button";
-import { Terminal } from "@/components/terminal";
-import { MiniTui } from "@/components/mini-tui";
-import Link from "next/link";
+import { HeroGlow } from "@/components/hero-glow";
+import { LandingSections } from "@/components/landing-sections";
+import { RevealGroup, RevealItem } from "@/components/motion";
+import { PillNav } from "@/components/pill-nav";
+import { TerminalSwitcher } from "@/components/terminal-switcher";
+import { VersionSwitcher } from "@/components/version-switcher";
+
+/**
+ * Landing v1 — "the daemon's status light": serif display headline over a
+ * DotOrbit particle field with a breathing ambient light. Sections below the
+ * hero are shared across versions (components/landing-sections.tsx).
+ */
 
 export default function Page() {
-  const d = 0.1;
-
   return (
-    <div className="min-h-dvh bg-background text-foreground flex items-start justify-center px-5 sm:px-6 py-12 sm:py-20">
-      <main className="max-w-xl w-full">
-        <div className="space-y-6 sm:space-y-7 text-[14px] sm:text-[15px] leading-relaxed text-muted-foreground">
-          <Reveal>
-            <div className="mb-8">
-              <span className="text-foreground font-serif text-[30px] sm:text-[42px] leading-tight block mb-5">
-                hun.sh
-              </span>
-              <div className="text-[13px] text-muted-foreground/50 space-y-1">
-                <p>brew tap hundotsh/tap</p>
-                <code className="text-foreground/80 bg-muted pl-2 pr-1.5 py-0.5 rounded-sm inline-flex items-center gap-2">
-                  brew install hun
-                  <InstallButton
-                    copyText={"brew tap hundotsh/tap && brew install hun"}
-                  />
-                </code>
-              </div>
-            </div>
-          </Reveal>
+    <div className="relative min-h-dvh overflow-x-clip bg-background text-foreground">
+      {/* signature moment: breathing light over a quietly-alive dot field */}
+      <HeroGlow />
 
-          <Reveal delay={d}>
-            <p>
-              a command-line tool for seamless project context switching.
-              manages your dev services, ports, and logs. switches your entire
-              environment in one command.
-            </p>
-          </Reveal>
+      {/* floating pill nav */}
+      <PillNav />
 
-          <Reveal delay={d * 2}>
-            <MiniTui />
-          </Reveal>
-
-          <Reveal delay={d * 3}>
-            <p>
-              say you&apos;re working on two projects. letraz, an ai resume
-              builder, runs a next.js frontend on 3000, a thumbnail service on
-              4000, a backend on 8000, and postgres on 5432. novara, a remote
-              healthcare platform, needs a frontend on 3000, backend on 8000, a
-              node worker, and docker compose running a database, redis, and
-              rabbitmq. now picture yourself ctrl+c-ing through six terminal
-              tabs, killing orphan processes on :3000, restarting docker, and
-              doing this every single time you switch. you lose context,
-              hun preserves it.
-            </p>
-          </Reveal>
-
-          <Reveal delay={d * 4}>
-            <Terminal />
-          </Reveal>
-
-          <Reveal delay={d * 5}>
-            <p>
-              run{" "}
-              <code className="text-foreground/80 bg-muted px-1.5 py-0.5 rounded-sm text-[13px]">
-                hun init
-              </code>{" "}
-              in each project and it detects your services automatically. then{" "}
-              <code className="text-foreground/80 bg-muted px-1.5 py-0.5 rounded-sm text-[13px]">
-                hun switch
-              </code>{" "}
-              to swap between them, or{" "}
-              <code className="text-foreground/80 bg-muted px-1.5 py-0.5 rounded-sm text-[13px]">
-                hun run
-              </code>{" "}
-              to run them side by side with automatic port offsets.
-            </p>
-          </Reveal>
-
-          <Reveal delay={d * 6}>
-            <p>
-              a daemon runs in the background. manages process groups, captures
-              all output, detects ports. close your laptop, come back,
-              everything&apos;s still there.
-            </p>
-          </Reveal>
-
-          <Reveal delay={d * 7}>
-            <div className="flex flex-wrap gap-2 text-[12px]">
-              {[
-                "node",
-                "go",
-                "python",
-                "docker compose",
-                "monorepos",
-                "hybrid stacks",
-              ].map((s) => (
-                <span
-                  key={s}
-                  className="text-muted-foreground/50 border border-border rounded-sm px-2 py-0.5"
-                >
-                  {s}
-                </span>
-              ))}
-            </div>
-          </Reveal>
-
-          <Reveal delay={d * 8}>
-            <p>
-              not a tmux replacement. tmux does session persistence and terminal
-              multiplexing. hun thinks in projects — which services to start,
-              which ports to free, which logs to capture. use both.
-            </p>
-          </Reveal>
-
-          <Reveal delay={d * 9}>
-            <div className="border border-border rounded-sm bg-muted/20 p-4 space-y-3">
-              <div>
-                <p className="text-foreground/80 text-[13px] font-medium">
-                  <Link href="/macos" className="hover:text-foreground">
-                    macOS app beta
-                  </Link>
-                </p>
-                <p className="text-muted-foreground/55 text-[13px] mt-1">
-                  early testing build for the menu bar app. installs hun.app
-                  with the bundled cli inside the app.
-                </p>
-              </div>
-              <div className="text-foreground/80 bg-muted px-2 py-1.5 rounded-sm flex items-start gap-2 text-[12px] leading-relaxed font-mono">
-                <code className="min-w-0 flex-1 whitespace-pre-wrap break-all sm:break-normal">
-                  curl -fsSL https://hun.sh/install-macos-beta.sh | sh
-                </code>
-                <InstallButton
-                  copyText={
-                    "curl -fsSL https://hun.sh/install-macos-beta.sh | sh"
-                  }
-                />
-              </div>
-            </div>
-          </Reveal>
-
-          <Reveal delay={d * 10}>
-            <p className="text-muted-foreground/40 text-[12px]">
-              <Link
-                href="/docs"
-                className="underline underline-offset-2 hover:text-muted-foreground/60"
+      <div className="relative z-10 mx-auto w-full max-w-3xl px-5 sm:px-6">
+        {/* hero enters as one choreographed sequence on load */}
+        <RevealGroup inView={false} stagger={0.12}>
+          <section className="pt-40 pb-section-sm sm:pt-44">
+            <RevealItem blur y={16}>
+              <h1
+                className="font-serif text-[clamp(3rem,7vw,4.75rem)] leading-[1.02] text-foreground"
+                style={{ textWrap: "balance" }}
               >
-                docs
-              </Link>{" "}
-              &middot;{" "}
-              <Link
-                href="/macos"
-                className="underline underline-offset-2 hover:text-muted-foreground/60"
-              >
-                macOS app beta
-              </Link>{" "}
-              &middot;{" "}
-              <a
-                href="https://github.com/sourabhrathourr/hun"
-                className="underline underline-offset-2 hover:text-muted-foreground/60"
-              >
-                github
-              </a>{" "}
-              &middot; built by{" "}
-              <a
-                href="https://sourabh.fun"
-                className="underline underline-offset-2 hover:text-muted-foreground/60"
-              >
-                sourabh rathour
-              </a>
-            </p>
-          </Reveal>
-        </div>
-      </main>
+                stop killing terminals.
+              </h1>
+            </RevealItem>
+            <RevealItem y={14}>
+              <p className="mt-6 max-w-xl text-lead text-muted-foreground">
+                hun manages your dev services, ports, and logs — and switches
+                your entire environment in one command.
+              </p>
+            </RevealItem>
+            <RevealItem y={20} className="mt-block sm:-mx-10">
+              {/* glass: the one panel that actually overlaps the glow */}
+              <TerminalSwitcher glass />
+            </RevealItem>
+          </section>
+        </RevealGroup>
+
+        <LandingSections />
+      </div>
+
+      <VersionSwitcher current="v1" />
     </div>
   );
 }
