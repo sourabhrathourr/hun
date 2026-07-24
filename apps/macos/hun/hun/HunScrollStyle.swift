@@ -320,8 +320,9 @@ final class HunScrollVisibilityController {
     }
 }
 
-final class HunStyledScrollView: NSScrollView {
+class HunStyledScrollView: NSScrollView {
     private let visibilityController = HunScrollVisibilityController()
+    private let horizontalVisibilityController = HunScrollVisibilityController()
     private var pointerTrackingArea: NSTrackingArea?
 
     override init(frame frameRect: NSRect) {
@@ -337,6 +338,7 @@ final class HunStyledScrollView: NSScrollView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         visibilityController.install(on: self)
+        installHorizontalScrollerIfNeeded()
     }
 
     override func updateTrackingAreas() {
@@ -355,18 +357,39 @@ final class HunStyledScrollView: NSScrollView {
 
     override func mouseEntered(with event: NSEvent) {
         visibilityController.setPointerInside(true)
+        horizontalVisibilityController.setPointerInside(true)
         super.mouseEntered(with: event)
     }
 
     override func mouseExited(with event: NSEvent) {
         visibilityController.setPointerInside(false)
+        horizontalVisibilityController.setPointerInside(false)
         super.mouseExited(with: event)
+    }
+
+    func enableHorizontalScroller() {
+        if !(horizontalScroller is HunOverlayScroller) {
+            horizontalScroller = HunOverlayScroller()
+        }
+        hasHorizontalScroller = true
+        autohidesScrollers = false
+        scrollerStyle = .overlay
+        installHorizontalScrollerIfNeeded()
     }
 
     private func configure() {
         scrollerStyle = .overlay
         autohidesScrollers = false
         visibilityController.install(on: self)
+    }
+
+    private func installHorizontalScrollerIfNeeded() {
+        guard hasHorizontalScroller, let horizontalScroller else { return }
+        horizontalVisibilityController.install(
+            scroller: horizontalScroller,
+            hostView: self,
+            focusView: self
+        )
     }
 }
 
@@ -405,16 +428,28 @@ final class HunOverlayScroller: NSScroller {
     override func drawKnob() {
         guard knobProportion < 0.999 else { return }
         let sourceRect = rect(for: .knob)
+        let isHorizontal = bounds.width > bounds.height
+        let availableLength = isHorizontal ? sourceRect.width : sourceRect.height
         let length = min(
-            sourceRect.height,
-            max(HunScrollStyleMetrics.minimumThumbLength, sourceRect.height - 6)
+            availableLength,
+            max(HunScrollStyleMetrics.minimumThumbLength, availableLength - 6)
         )
-        let thumbRect = NSRect(
-            x: sourceRect.midX - HunScrollStyleMetrics.thumbWidth / 2,
-            y: sourceRect.midY - length / 2,
-            width: HunScrollStyleMetrics.thumbWidth,
-            height: length
-        )
+        let thumbRect: NSRect
+        if isHorizontal {
+            thumbRect = NSRect(
+                x: sourceRect.midX - length / 2,
+                y: sourceRect.midY - HunScrollStyleMetrics.thumbWidth / 2,
+                width: length,
+                height: HunScrollStyleMetrics.thumbWidth
+            )
+        } else {
+            thumbRect = NSRect(
+                x: sourceRect.midX - HunScrollStyleMetrics.thumbWidth / 2,
+                y: sourceRect.midY - length / 2,
+                width: HunScrollStyleMetrics.thumbWidth,
+                height: length
+            )
+        }
         let thumb = NSBezierPath(
             roundedRect: thumbRect,
             xRadius: HunScrollStyleMetrics.thumbWidth / 2,

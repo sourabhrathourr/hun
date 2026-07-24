@@ -197,6 +197,40 @@ func TestGitActionsExposeDiffStageCommitAndBranchSwitching(t *testing.T) {
 	}
 }
 
+func TestCappedGitOutputRetainsOnlyItsLimitAndSignalsCancellation(t *testing.T) {
+	cancellations := 0
+	output := cappedGitOutput{
+		limit:   5,
+		onLimit: func() { cancellations++ },
+	}
+
+	written, err := output.Write([]byte("123456789"))
+	if err != nil {
+		t.Fatalf("write capped output: %v", err)
+	}
+	if written != 9 {
+		t.Fatalf("reported bytes written = %d, want 9", written)
+	}
+	if got := output.buffer.String(); got != "12345" {
+		t.Fatalf("captured output = %q, want %q", got, "12345")
+	}
+	if !output.truncated || cancellations != 1 {
+		t.Fatalf(
+			"truncated = %v, cancellations = %d, want true and 1",
+			output.truncated,
+			cancellations,
+		)
+	}
+
+	_, _ = output.Write([]byte("more"))
+	if got := output.buffer.String(); got != "12345" {
+		t.Fatalf("captured output after overflow = %q, want unchanged", got)
+	}
+	if cancellations != 1 {
+		t.Fatalf("cancellations after repeated overflow = %d, want 1", cancellations)
+	}
+}
+
 func TestGitRemoteActionsFetchPullAndPushThroughConfiguredRemote(t *testing.T) {
 	daemon, repository := newGitTestDaemon(t)
 	remote := t.TempDir()

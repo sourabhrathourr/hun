@@ -402,8 +402,10 @@ private struct HunGitBranchPopover: View {
     private var branchFooter: some View {
         HStack(spacing: 8) {
             Button {
-                model.isWorkspacePresented = true
-                model.isBranchPickerPresented = false
+                Task {
+                    await model.presentWorkspace()
+                    model.isBranchPickerPresented = false
+                }
             } label: {
                 Label("Open Git workspace", systemImage: "rectangle.split.2x1")
             }
@@ -525,6 +527,71 @@ private final class HunGitBranchMonitorView: NSView {
     }
 }
 
+struct HunProjectWorkspaceSwitcher: View {
+    @Bindable var model: HunGitWorkspaceModel
+
+    var body: some View {
+        HStack(spacing: 2) {
+            workspaceButton(
+                title: "Services",
+                systemImage: "square.stack.3d.up",
+                selected: !model.isWorkspacePresented
+            ) {
+                model.isWorkspacePresented = false
+            }
+
+            workspaceButton(
+                title: "Git",
+                systemImage: "arrow.triangle.branch",
+                selected: model.isWorkspacePresented,
+                badge: model.status?.changeCount
+            ) {
+                Task { await model.presentWorkspace() }
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 38)
+        .background(AppTheme.appBackground)
+    }
+
+    private func workspaceButton(
+        title: String,
+        systemImage: String,
+        selected: Bool,
+        badge: Int? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 10, weight: .medium))
+                Text(title)
+                    .font(.system(size: 11.5, weight: selected ? .semibold : .medium))
+                if let badge, badge > 0 {
+                    Text("\(badge)")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(selected ? AppTheme.warning : AppTheme.textTertiary)
+                        .monospacedDigit()
+                }
+            }
+            .foregroundStyle(selected ? AppTheme.textPrimary : AppTheme.textTertiary)
+            .padding(.horizontal, 10)
+            .frame(height: 38)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(selected ? AppTheme.textPrimary.opacity(0.72) : Color.clear)
+                    .frame(height: 1)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(title) workspace")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
 struct HunGitWorkspaceView: View {
     let project: HunProject
     @Bindable var model: HunGitWorkspaceModel
@@ -570,23 +637,6 @@ struct HunGitWorkspaceView: View {
 
     private var workspaceToolbar: some View {
         HStack(spacing: 8) {
-            Button {
-                model.isWorkspacePresented = false
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 9, weight: .bold))
-                    Text("Services")
-                }
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(AppTheme.textSecondary)
-
-            Rectangle()
-                .fill(AppTheme.divider)
-                .frame(width: 1, height: 16)
-                .padding(.horizontal, 4)
-
             Text("Changes")
                 .font(.system(size: 12.5, weight: .semibold))
                 .foregroundStyle(AppTheme.textPrimary)
@@ -970,6 +1020,15 @@ private struct HunGitChangeRow: View {
 
 private struct HunGitDiffPanel: View {
     @Bindable var model: HunGitWorkspaceModel
+    @AppStorage("hun.git.diff.presentation")
+    private var presentationRawValue = HunGitDiffPresentation.unified.rawValue
+    @AppStorage("hun.git.diff.showWhitespace")
+    private var showWhitespace = false
+
+    private var presentation: HunGitDiffPresentation {
+        get { HunGitDiffPresentation(rawValue: presentationRawValue) ?? .unified }
+        nonmutating set { presentationRawValue = newValue.rawValue }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -993,38 +1052,59 @@ private struct HunGitDiffPanel: View {
                         .foregroundStyle(AppTheme.textSecondary)
                 }
                 Spacer()
-                if model.selectedDiff?.truncated == true {
+                if model.selectedDiffMetadata?.truncated == true {
                     Text("TRUNCATED")
                         .font(.system(size: 8.5, weight: .semibold))
                         .tracking(0.45)
                         .foregroundStyle(AppTheme.warning)
                 }
+                HunGitDiffPresentationControl(selection: presentation) {
+                    presentation = $0
+                }
+                Menu {
+                    Toggle("Show whitespace characters", isOn: $showWhitespace)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(AppTheme.textSecondary)
+                        .frame(width: 24, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Diff display options")
             }
-            .padding(.horizontal, 14)
+            .padding(.leading, 12)
+            .padding(.trailing, 8)
             .frame(height: 38)
 
             Rectangle().fill(AppTheme.divider).frame(height: 1)
 
             Group {
-                if model.operation == .loadingDiff && model.selectedDiff == nil {
+                if model.operation == .loadingDiff && model.selectedDiffMetadata == nil {
                     ProgressView()
                         .controlSize(.small)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let diff = model.selectedDiff {
+                } else if let diff = model.selectedDiffMetadata {
                     if diff.binary {
                         diffEmptyState(
                             icon: "doc.badge.ellipsis",
                             title: "Binary file",
                             detail: "A textual diff is not available for this file."
                         )
-                    } else if diff.content.isEmpty {
+                    } else if model.selectedDiffDocument?.lines.isEmpty != false {
                         diffEmptyState(
                             icon: "checkmark",
                             title: "No textual changes",
                             detail: "The selected side of this file has no diff."
                         )
-                    } else {
-                        HunGitDiffContent(content: diff.content)
+                    } else if let document = model.selectedDiffDocument {
+                        HunGitDiffView(
+                            document: document,
+                            presentation: presentation,
+                            showWhitespace: showWhitespace
+                        )
                     }
                 } else {
                     diffEmptyState(
@@ -1054,62 +1134,38 @@ private struct HunGitDiffPanel: View {
     }
 }
 
-private struct HunGitDiffContent: View {
-    let content: String
-
-    private var lines: [String] {
-        content.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-    }
+private struct HunGitDiffPresentationControl: View {
+    let selection: HunGitDiffPresentation
+    let onSelect: (HunGitDiffPresentation) -> Void
 
     var body: some View {
-        ScrollView([.horizontal, .vertical]) {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                    HStack(spacing: 0) {
-                        Text(marker(for: line))
-                            .foregroundStyle(foreground(for: line))
-                            .frame(width: 20, alignment: .center)
-                        Text(displayContent(for: line))
-                            .foregroundStyle(foreground(for: line))
-                            .padding(.trailing, 18)
-                    }
-                    .font(.system(size: 11, design: .monospaced))
-                    .frame(minWidth: 720, minHeight: 19, alignment: .leading)
-                    .background(background(for: line))
+        HStack(spacing: 0) {
+            ForEach(HunGitDiffPresentation.allCases, id: \.rawValue) { presentation in
+                Button {
+                    onSelect(presentation)
+                } label: {
+                    Text(presentation.title)
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(
+                            selection == presentation ? AppTheme.textPrimary : AppTheme.textTertiary
+                        )
+                        .padding(.horizontal, 8)
+                        .frame(height: 22)
+                        .background(
+                            selection == presentation ? AppTheme.selection : Color.clear
+                        )
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selection == presentation ? .isSelected : [])
             }
-            .padding(.vertical, 8)
         }
-        .hunScrollStyle()
-        .textSelection(.enabled)
-    }
-
-    private func marker(for line: String) -> String {
-        if line.hasPrefix("+") && !line.hasPrefix("+++") { return "+" }
-        if line.hasPrefix("-") && !line.hasPrefix("---") { return "−" }
-        return ""
-    }
-
-    private func displayContent(for line: String) -> String {
-        marker(for: line).isEmpty ? line : String(line.dropFirst())
-    }
-
-    private func foreground(for line: String) -> Color {
-        if line.hasPrefix("+") && !line.hasPrefix("+++") { return AppTheme.success.opacity(0.9) }
-        if line.hasPrefix("-") && !line.hasPrefix("---") { return AppTheme.danger.opacity(0.9) }
-        if line.hasPrefix("@@") { return AppTheme.accent.opacity(0.95) }
-        if line.hasPrefix("diff ") || line.hasPrefix("index ") ||
-            line.hasPrefix("---") || line.hasPrefix("+++") {
-            return AppTheme.textSecondary
-        }
-        return AppTheme.logText
-    }
-
-    private func background(for line: String) -> Color {
-        if line.hasPrefix("+") && !line.hasPrefix("+++") { return AppTheme.success.opacity(0.055) }
-        if line.hasPrefix("-") && !line.hasPrefix("---") { return AppTheme.danger.opacity(0.055) }
-        if line.hasPrefix("@@") { return AppTheme.accent.opacity(0.045) }
-        return .clear
+        .background(AppTheme.buttonFill)
+        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .stroke(AppTheme.divider, lineWidth: 1)
+        )
     }
 }
 

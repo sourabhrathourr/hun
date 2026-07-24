@@ -516,10 +516,11 @@ nonisolated final class HunLogSubscription: HunLogSubscribing {
         task = Task.detached(priority: .utility) {
             do {
                 defer { socket.close() }
-                _ = try UnixSocket.readLine(socket: fd)
+                let lineReader = UnixSocketLineReader(socket: fd)
+                _ = try lineReader.readLine()
                 let decoder = JSONDecoder()
                 while !Task.isCancelled {
-                    let lineData = try UnixSocket.readLine(socket: fd)
+                    let lineData = try lineReader.readLine()
                     if lineData.isEmpty {
                         continue
                     }
@@ -745,7 +746,7 @@ nonisolated enum UnixSocket {
         let fd = try connect(path: socketPath, timeoutNanoseconds: timeoutNanoseconds)
         defer { Darwin.close(fd) }
         try writeAll(socket: fd, payload: payload + Data([0x0A]))
-        return try readLine(socket: fd)
+        return try UnixSocketLineReader(socket: fd).readLine()
     }
 
     static func connect(path: String, timeoutNanoseconds: UInt64?) throws -> Int32 {
@@ -804,24 +805,64 @@ nonisolated enum UnixSocket {
         }
     }
 
-    static func readLine(socket: Int32) throws -> Data {
-        var data = Data()
-        var byte: UInt8 = 0
+}
+
+nonisolated final class UnixSocketLineReader {
+    private let socket: Int32
+    private var buffered = Data()
+    private var consumed = 0
+    private var searchStart = 0
+    private var readBuffer = [UInt8](repeating: 0, count: 64 * 1024)
+
+    init(socket: Int32) {
+        self.socket = socket
+    }
+
+    func readLine() throws -> Data {
         while true {
-            let count = Darwin.read(socket, &byte, 1)
+            if let newline = buffered[searchStart...].firstIndex(of: 0x0A) {
+                let line = buffered.subdata(in: consumed..<newline)
+                consumed = newline + 1
+                searchStart = consumed
+                compactBufferIfNeeded()
+                return line
+            }
+            searchStart = buffered.count
+
+            let count = readBuffer.withUnsafeMutableBytes { bytes in
+                Darwin.read(socket, bytes.baseAddress, bytes.count)
+            }
             if count == 0 {
-                if data.isEmpty {
+                guard consumed < buffered.count else {
                     throw HunDaemonError.socket("connection closed")
                 }
-                return data
+                let line = buffered.subdata(in: consumed..<buffered.count)
+                buffered.removeAll(keepingCapacity: true)
+                consumed = 0
+                searchStart = 0
+                return line
             }
             if count < 0 {
+                if errno == EINTR {
+                    continue
+                }
                 throw HunDaemonError.socket(String(cString: strerror(errno)))
             }
-            if byte == 0x0A {
-                return data
-            }
-            data.append(byte)
+
+            buffered.append(contentsOf: readBuffer[..<count])
+        }
+    }
+
+    private func compactBufferIfNeeded() {
+        guard consumed > 0 else { return }
+        if consumed == buffered.count {
+            buffered.removeAll(keepingCapacity: true)
+            consumed = 0
+            searchStart = 0
+        } else if consumed >= 64 * 1024, consumed >= buffered.count / 2 {
+            buffered.removeSubrange(0..<consumed)
+            searchStart -= consumed
+            consumed = 0
         }
     }
 }

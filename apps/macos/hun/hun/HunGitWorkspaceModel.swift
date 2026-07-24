@@ -198,6 +198,20 @@ nonisolated struct HunGitDiff: Decodable, Equatable, Sendable {
     let truncated: Bool
 }
 
+nonisolated struct HunGitDiffMetadata: Equatable, Sendable {
+    let path: String
+    let staged: Bool
+    let binary: Bool
+    let truncated: Bool
+
+    init(_ diff: HunGitDiff) {
+        path = diff.path
+        staged = diff.staged
+        binary = diff.binary
+        truncated = diff.truncated
+    }
+}
+
 @MainActor
 @Observable
 final class HunGitWorkspaceModel {
@@ -217,7 +231,8 @@ final class HunGitWorkspaceModel {
 
     var status: HunGitStatus?
     var branches: [HunGitBranch] = []
-    var selectedDiff: HunGitDiff?
+    var selectedDiffMetadata: HunGitDiffMetadata?
+    var selectedDiffDocument: HunGitDiffDocument?
     var selectedPath: String?
     var selectedStaged = false
     var commitMessage = ""
@@ -231,6 +246,7 @@ final class HunGitWorkspaceModel {
     private let client: HunGitClientProtocol
     private var activeProjectID: String?
     private var diffGeneration = 0
+    private var diffParsingTask: Task<HunGitDiffDocument, Never>?
     private var statusGeneration = 0
     private var silentRefreshInFlight = false
 
@@ -257,11 +273,18 @@ final class HunGitWorkspaceModel {
     func load(projectID: String) async {
         if activeProjectID != projectID {
             statusGeneration += 1
+            diffGeneration += 1
+            diffParsingTask?.cancel()
+            diffParsingTask = nil
             silentRefreshInFlight = false
+            if operation == .loadingDiff {
+                operation = nil
+            }
             activeProjectID = projectID
             status = nil
             branches = []
-            selectedDiff = nil
+            selectedDiffMetadata = nil
+            selectedDiffDocument = nil
             selectedPath = nil
             selectedStaged = false
             branchSearch = ""
@@ -307,7 +330,6 @@ final class HunGitWorkspaceModel {
             guard activeProjectID == projectID, generation == statusGeneration else { return }
             status = newStatus
             if !newStatus.isRepository {
-                isWorkspacePresented = false
                 isBranchPickerPresented = false
             }
             if !silently {
@@ -331,30 +353,67 @@ final class HunGitWorkspaceModel {
         }
     }
 
+    func presentWorkspace() async {
+        isWorkspacePresented = true
+
+        guard selectedPath == nil else { return }
+        if let change = status?.unstagedFiles.first ?? status?.conflictedFiles.first {
+            await loadDiff(for: change, staged: false)
+        } else if let change = status?.stagedFiles.first {
+            await loadDiff(for: change, staged: true)
+        }
+    }
+
     func loadDiff(for change: HunGitFileChange, staged: Bool) async {
         guard let projectID = activeProjectID else { return }
         selectedPath = change.path
         selectedStaged = staged
+        selectedDiffMetadata = nil
+        selectedDiffDocument = nil
+        diffParsingTask?.cancel()
         diffGeneration += 1
         let generation = diffGeneration
         operation = .loadingDiff
+        defer {
+            if generation == diffGeneration {
+                diffParsingTask = nil
+                if operation == .loadingDiff {
+                    operation = nil
+                }
+            }
+        }
         do {
             let diff = try await client.gitDiff(project: projectID, path: change.path, staged: staged)
             guard generation == diffGeneration,
+                  activeProjectID == projectID,
                   selectedPath == change.path,
                   selectedStaged == staged
             else {
                 return
             }
-            selectedDiff = diff
+            let parsingTask = Task.detached(priority: .userInitiated) {
+                HunGitDiffDocument(
+                    patch: diff.content,
+                    shouldCancel: { Task.isCancelled }
+                )
+            }
+            diffParsingTask = parsingTask
+            let document = await parsingTask.value
+            guard generation == diffGeneration,
+                  activeProjectID == projectID,
+                  selectedPath == change.path,
+                  selectedStaged == staged
+            else {
+                return
+            }
+            selectedDiffMetadata = HunGitDiffMetadata(diff)
+            selectedDiffDocument = document
             errorMessage = nil
         } catch {
             guard generation == diffGeneration else { return }
-            selectedDiff = nil
+            selectedDiffMetadata = nil
+            selectedDiffDocument = nil
             errorMessage = error.localizedDescription
-        }
-        if generation == diffGeneration, operation == .loadingDiff {
-            operation = nil
         }
     }
 
@@ -394,7 +453,8 @@ final class HunGitWorkspaceModel {
         }
         if succeeded {
             commitMessage = ""
-            selectedDiff = nil
+            selectedDiffMetadata = nil
+            selectedDiffDocument = nil
             selectedPath = nil
         }
         return succeeded
@@ -421,7 +481,8 @@ final class HunGitWorkspaceModel {
         if succeeded {
             pendingBranchSwitch = nil
             branchSearch = ""
-            selectedDiff = nil
+            selectedDiffMetadata = nil
+            selectedDiffDocument = nil
             selectedPath = nil
             await loadBranches()
         } else if !stash, status?.clean == false {

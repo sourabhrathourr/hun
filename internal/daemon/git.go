@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const maximumGitDiffBytes = 512 * 1024
+const maximumGitDiffBytes = 32 * 1024 * 1024
 const gitCommandTimeout = 2 * time.Minute
 
 // GitStatus is a stable, UI-oriented snapshot of a registered project's
@@ -306,27 +306,38 @@ func readGitBranches(repository string) ([]GitBranch, error) {
 }
 
 func readGitDiff(repository, path string, staged bool) (GitDiff, error) {
-	arguments := []string{"-c", "core.quotepath=false", "diff", "--no-ext-diff"}
+	arguments := []string{
+		"-c", "core.quotepath=false",
+		"diff", "--no-ext-diff", "--unified=3",
+	}
 	if staged {
 		arguments = append(arguments, "--cached")
 	}
 	arguments = append(arguments, "--", literalGitPath(path))
-	output, err := runGit(repository, arguments...)
+	output, truncated, err := runGitWithOutputLimit(
+		repository,
+		maximumGitDiffBytes,
+		nil,
+		arguments...,
+	)
 	if err != nil {
 		return GitDiff{}, err
 	}
 
-	if len(output) == 0 && !staged {
+	if len(output) == 0 && !staged && !truncated {
 		status, statusErr := readGitStatus(repository)
 		if statusErr != nil {
 			return GitDiff{}, statusErr
 		}
 		for _, change := range status.Files {
 			if change.Path == path && change.Untracked {
-				output, err = runGitAllowingChanges(
+				output, truncated, err = runGitWithOutputLimit(
 					repository,
+					maximumGitDiffBytes,
+					map[int]bool{1: true},
 					"-c", "core.quotepath=false",
-					"diff", "--no-index", "--no-ext-diff", "--", "/dev/null", path,
+					"diff", "--no-index", "--no-ext-diff", "--unified=3",
+					"--", "/dev/null", path,
 				)
 				if err != nil {
 					return GitDiff{}, err
@@ -336,10 +347,6 @@ func readGitDiff(repository, path string, staged bool) (GitDiff, error) {
 		}
 	}
 
-	truncated := len(output) > maximumGitDiffBytes
-	if truncated {
-		output = output[:maximumGitDiffBytes]
-	}
 	content := string(output)
 	return GitDiff{
 		Path:      path,
@@ -348,6 +355,31 @@ func readGitDiff(repository, path string, staged bool) (GitDiff, error) {
 		Binary:    strings.Contains(content, "Binary files "),
 		Truncated: truncated,
 	}, nil
+}
+
+type cappedGitOutput struct {
+	buffer    bytes.Buffer
+	limit     int
+	truncated bool
+	onLimit   func()
+}
+
+func (output *cappedGitOutput) Write(data []byte) (int, error) {
+	originalLength := len(data)
+	remaining := output.limit - output.buffer.Len()
+	if remaining > 0 {
+		if len(data) > remaining {
+			data = data[:remaining]
+		}
+		_, _ = output.buffer.Write(data)
+	}
+	if originalLength > remaining && !output.truncated {
+		output.truncated = true
+		if output.onLimit != nil {
+			output.onLimit()
+		}
+	}
+	return originalLength, nil
 }
 
 func safeGitPath(path string) (string, error) {
@@ -588,10 +620,6 @@ func runGit(repository string, arguments ...string) ([]byte, error) {
 	return runGitWithAllowedExitCodes(repository, nil, arguments...)
 }
 
-func runGitAllowingChanges(repository string, arguments ...string) ([]byte, error) {
-	return runGitWithAllowedExitCodes(repository, map[int]bool{1: true}, arguments...)
-}
-
 func runGitWithAllowedExitCodes(
 	repository string,
 	allowedExitCodes map[int]bool,
@@ -611,6 +639,40 @@ func runGitWithAllowedExitCodes(
 		message = err.Error()
 	}
 	return nil, fmt.Errorf("git: %s", message)
+}
+
+func runGitWithOutputLimit(
+	repository string,
+	limit int,
+	allowedExitCodes map[int]bool,
+	arguments ...string,
+) ([]byte, bool, error) {
+	command, cancel := gitCommand(repository, arguments...)
+	defer cancel()
+
+	output := cappedGitOutput{limit: limit, onLimit: cancel}
+	stderr := cappedGitOutput{limit: 64 * 1024}
+	command.Stdout = &output
+	command.Stderr = &stderr
+	err := command.Run()
+
+	if output.truncated {
+		return output.buffer.Bytes(), true, nil
+	}
+	if err == nil {
+		return output.buffer.Bytes(), false, nil
+	}
+	if exitError, ok := err.(*exec.ExitError); ok && allowedExitCodes[exitError.ExitCode()] {
+		return output.buffer.Bytes(), false, nil
+	}
+	message := strings.TrimSpace(stderr.buffer.String())
+	if message == "" {
+		message = strings.TrimSpace(output.buffer.String())
+	}
+	if message == "" {
+		message = err.Error()
+	}
+	return nil, false, fmt.Errorf("git: %s", message)
 }
 
 func gitCommand(repository string, arguments ...string) (*exec.Cmd, context.CancelFunc) {

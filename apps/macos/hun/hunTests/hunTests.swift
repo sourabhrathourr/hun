@@ -6,6 +6,97 @@ import Testing
 
 @MainActor
 struct hunTests {
+    @Test func gitDiffDocumentHidesPatchMetadataAndTracksLineNumbers() {
+        let patch = """
+        diff --git a/Sample.swift b/Sample.swift
+        index 1111111..2222222 100644
+        --- a/Sample.swift
+        +++ b/Sample.swift
+        @@ -10,3 +10,4 @@ func render() {
+         let stable = true
+        -let oldValue = 1
+        +let newValue = 2
+        +let extraValue = 3
+         return stable
+        """
+
+        let document = HunGitDiffDocument(patch: patch)
+
+        #expect(document.lines.map(\.kind) == [.context, .deletion, .addition, .addition, .context])
+        #expect(document.lines.map(\.content) == [
+            "let stable = true",
+            "let oldValue = 1",
+            "let newValue = 2",
+            "let extraValue = 3",
+            "return stable"
+        ])
+        #expect(document.lines.map(\.oldLineNumber) == [10, 11, nil, nil, 12])
+        #expect(document.lines.map(\.newLineNumber) == [10, nil, 11, 12, 13])
+    }
+
+    @Test func gitDiffDocumentPairsChangesForSplitReview() throws {
+        let patch = """
+        @@ -1,3 +1,4 @@
+         unchanged
+        -old
+        +new
+        +extra
+         tail
+        """
+
+        let document = HunGitDiffDocument(patch: patch)
+        let rows = document.splitRows
+        let lines = document.lines
+
+        #expect(rows.count == 4)
+        #expect(rows[0].left(in: lines)?.content == "unchanged")
+        #expect(rows[0].right(in: lines)?.content == "unchanged")
+        #expect(rows[1].left(in: lines)?.content == "old")
+        #expect(rows[1].right(in: lines)?.content == "new")
+        #expect(rows[2].left(in: lines) == nil)
+        #expect(rows[2].right(in: lines)?.content == "extra")
+        #expect(rows[3].left(in: lines)?.oldLineNumber == 3)
+        #expect(rows[3].right(in: lines)?.newLineNumber == 4)
+    }
+
+    @Test func gitDiffDocumentHandlesOneHundredThousandChangedLines() {
+        let patch = "@@ -0,0 +1,100000 @@\n" + String(repeating: "+expanded line\n", count: 100_000)
+
+        let document = HunGitDiffDocument(patch: patch)
+
+        #expect(document.lines.count == 100_000)
+        #expect(document.splitRows.count == 100_000)
+        #expect(document.lines.last?.newLineNumber == 100_000)
+    }
+
+    @Test func unixSocketLineReaderPreservesCoalescedRecordsAfterLargeResponse() async throws {
+        var sockets = [Int32](repeating: 0, count: 2)
+        try #require(Darwin.socketpair(AF_UNIX, SOCK_STREAM, 0, &sockets) == 0)
+        let writeSocket = sockets[0]
+        let readSocket = sockets[1]
+        defer {
+            Darwin.close(writeSocket)
+            Darwin.close(readSocket)
+        }
+
+        let payload = Data(repeating: 0x41, count: 1_000_000)
+        let writer = Task.detached {
+            try UnixSocket.writeAll(
+                socket: writeSocket,
+                payload: payload + Data([0x0A]) + Data("next record\n".utf8)
+            )
+        }
+
+        let reader = UnixSocketLineReader(socket: readSocket)
+        let response = try reader.readLine()
+        let nextRecord = try reader.readLine()
+        try await writer.value
+
+        #expect(response.count == payload.count)
+        #expect(response == payload)
+        #expect(nextRecord == Data("next record".utf8))
+    }
+
     @Test func gitWorkspaceModelLoadsRepositoryAndCoordinatesFileActions() async throws {
         let client = MockGitClient()
         client.status = .fixture()
@@ -30,13 +121,58 @@ struct hunTests {
         #expect(model.status?.branch == "main")
         #expect(model.status?.changeCount == 1)
         #expect(model.branches.map(\.name) == ["main", "feature/ui"])
-        #expect(model.selectedDiff?.content.contains("+new") == true)
+        #expect(model.selectedDiffDocument?.lines.last?.content == "new")
 
         await model.stage(change)
 
         #expect(client.actions == ["stage:app:ContentView.swift"])
         #expect(model.status?.files.first?.staged == true)
         #expect(model.errorMessage == nil)
+    }
+
+    @Test func presentingGitWorkspaceSelectsTheFirstWorkingTreeChange() async {
+        let client = MockGitClient()
+        client.diff = HunGitDiff(
+            path: "ContentView.swift",
+            staged: false,
+            content: "@@ -1 +1 @@\n-old\n+new\n",
+            binary: false,
+            truncated: false
+        )
+        let model = HunGitWorkspaceModel(client: client)
+        await model.load(projectID: "app")
+
+        await model.presentWorkspace()
+
+        #expect(model.isWorkspacePresented)
+        #expect(model.selectedPath == "ContentView.swift")
+        #expect(model.selectedDiffDocument?.lines.count == 2)
+    }
+
+    @Test func switchingProjectsDuringDiffLoadDoesNotLeaveGitBusy() async throws {
+        let client = MockGitClient()
+        client.diffDelay = .milliseconds(80)
+        client.diff = HunGitDiff(
+            path: "ContentView.swift",
+            staged: false,
+            content: "@@ -1 +1 @@\n-old\n+new\n",
+            binary: false,
+            truncated: false
+        )
+        let model = HunGitWorkspaceModel(client: client)
+        await model.load(projectID: "first")
+        let change = try #require(model.status?.files.first)
+
+        let loadingDiff = Task {
+            await model.loadDiff(for: change, staged: false)
+        }
+        try await Task.sleep(for: .milliseconds(20))
+        await model.load(projectID: "second")
+        await loadingDiff.value
+
+        #expect(model.operation == nil)
+        #expect(model.status?.isRepository == true)
+        #expect(model.selectedDiffDocument == nil)
     }
 
     @Test func silentGitRefreshCannotOverwriteMutationOrDismissActionError() async throws {
@@ -775,20 +911,29 @@ struct hunTests {
             frame: NSRect(x: 0, y: 0, width: 240, height: 180)
         )
         scrollView.hasVerticalScroller = true
+        scrollView.enableHorizontalScroller()
         scrollView.documentView = NSView(
-            frame: NSRect(x: 0, y: 0, width: 240, height: 640)
+            frame: NSRect(x: 0, y: 0, width: 640, height: 640)
         )
         scrollView.layoutSubtreeIfNeeded()
 
         let scroller = try #require(scrollView.verticalScroller as? HunOverlayScroller)
+        let horizontalScroller = try #require(
+            scrollView.horizontalScroller as? HunOverlayScroller
+        )
         let restingWidth = scrollView.contentView.bounds.width
+        let restingHeight = scrollView.contentView.bounds.height
 
         scroller.setRevealed(true, animated: false)
+        horizontalScroller.setRevealed(true, animated: false)
         scrollView.tile()
         let revealedWidth = scrollView.contentView.bounds.width
+        let revealedHeight = scrollView.contentView.bounds.height
 
         #expect(scroller.alphaValue == 1)
+        #expect(horizontalScroller.alphaValue == 1)
         #expect(revealedWidth == restingWidth)
+        #expect(revealedHeight == restingHeight)
         #expect(scrollView.scrollerStyle == .overlay)
         #expect(HunScrollStyleMetrics.thumbWidth == 2)
         #expect(HunScrollStyleMetrics.thumbOpacity < 0.3)
@@ -798,7 +943,9 @@ struct hunTests {
         )
 
         scroller.setRevealed(false, animated: false)
+        horizontalScroller.setRevealed(false, animated: false)
         #expect(scroller.alphaValue == 0)
+        #expect(horizontalScroller.alphaValue == 0)
     }
 
     @Test func terminalDirectoryNormalizesShellFileURLs() {
@@ -979,6 +1126,7 @@ private final class MockGitClient: HunGitClientProtocol {
     var branches: [HunGitBranch] = []
     var diff = HunGitDiff(path: "", staged: false, content: "", binary: false, truncated: false)
     var statusDelay: Duration?
+    var diffDelay: Duration?
     var fetchError: Error?
     var stageError: Error?
     var branchRequests = 0
@@ -1000,7 +1148,11 @@ private final class MockGitClient: HunGitClientProtocol {
 
     func gitDiff(project: String, path: String, staged: Bool) async throws -> HunGitDiff {
         diffRequests += 1
-        return diff
+        let result = diff
+        if let diffDelay {
+            try? await Task.sleep(for: diffDelay)
+        }
+        return result
     }
 
     func gitStage(project: String, path: String) async throws -> HunGitStatus {

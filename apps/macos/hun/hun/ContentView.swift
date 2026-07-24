@@ -1076,6 +1076,10 @@ private struct ProjectDetailView: View {
 
             Rectangle().fill(AppTheme.divider).frame(height: 1)
 
+            HunProjectWorkspaceSwitcher(model: gitWorkspace)
+
+            Rectangle().fill(AppTheme.divider).frame(height: 1)
+
             if gitWorkspace.isWorkspacePresented {
                 HunGitWorkspaceView(project: project, model: gitWorkspace)
                     .transition(.opacity)
