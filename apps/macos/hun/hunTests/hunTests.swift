@@ -687,6 +687,35 @@ struct hunTests {
         #expect(HunTerminalPanelMetrics.clamp(280, availableHeight: 700) == 280)
     }
 
+    @Test func sleekScrollbarsOverlayContentWithoutChangingItsWidth() throws {
+        let scrollView = HunStyledScrollView(
+            frame: NSRect(x: 0, y: 0, width: 240, height: 180)
+        )
+        scrollView.hasVerticalScroller = true
+        scrollView.documentView = NSView(
+            frame: NSRect(x: 0, y: 0, width: 240, height: 640)
+        )
+        scrollView.layoutSubtreeIfNeeded()
+
+        let scroller = try #require(scrollView.verticalScroller as? HunOverlayScroller)
+        let restingWidth = scrollView.contentView.bounds.width
+
+        scroller.setRevealed(true, animated: false)
+        scrollView.tile()
+        let revealedWidth = scrollView.contentView.bounds.width
+
+        #expect(scroller.alphaValue == 1)
+        #expect(revealedWidth == restingWidth)
+        #expect(scrollView.scrollerStyle == .overlay)
+        #expect(
+            HunOverlayScroller.scrollerWidth(for: .regular, scrollerStyle: .overlay)
+                == HunScrollStyleMetrics.laneWidth
+        )
+
+        scroller.setRevealed(false, animated: false)
+        #expect(scroller.alphaValue == 0)
+    }
+
     @Test func terminalDirectoryNormalizesShellFileURLs() {
         #expect(
             HunTerminalSession.normalizedDirectory(

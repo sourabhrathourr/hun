@@ -20,6 +20,7 @@ struct HunSettingsSheet: View {
                 }
                 .padding(20)
             }
+            .hunScrollStyle()
         }
         .frame(width: 540, height: 580)
         .background(AppTheme.appBackground)

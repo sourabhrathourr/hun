@@ -435,25 +435,18 @@ private struct YamlScrollView: NSViewRepresentable {
 
     final class Coordinator {
         var lastText: String = ""
-        weak var scroller: ThinLogScroller?
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSScrollView()
+        let scroll = HunStyledScrollView()
         scroll.drawsBackground = false
         scroll.borderType = .noBorder
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = false
         scroll.autohidesScrollers = true
         scroll.scrollerStyle = .overlay
-
-        let scroller = ThinLogScroller()
-        scroll.verticalScroller = scroller
-        scroller.alphaValue = 0
-        scroller.setVisible(true, animated: false)
-        context.coordinator.scroller = scroller
 
         let textView = NSTextView()
         textView.minSize = NSSize(width: 0, height: 0)
@@ -509,4 +502,3 @@ private struct YamlScrollView: NSViewRepresentable {
         context.coordinator.lastText = text
     }
 }
-

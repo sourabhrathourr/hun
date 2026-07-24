@@ -469,6 +469,7 @@ private struct SidebarView: View {
                 .padding(.top, 4)
                 .padding(.bottom, 16)
             }
+            .hunScrollStyle()
 
             SidebarFooter(
                 runningCount: runningCount,
@@ -1460,6 +1461,7 @@ private struct ServicesPanelView: View {
                 .padding(.horizontal, 8)
                 .padding(.bottom, 12)
             }
+            .hunScrollStyle()
         }
     }
 }
@@ -1812,7 +1814,6 @@ private struct LogsTailContainer: View {
     @State private var newSincePause = 0
     @State private var lastSeenCount = 0
     @State private var scrollTrigger = 0
-    @State private var hovering = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -1820,7 +1821,6 @@ private struct LogsTailContainer: View {
                 logs: logs,
                 showService: showService,
                 highlight: highlight,
-                hovering: hovering,
                 isTailing: $isTailing,
                 scrollTrigger: scrollTrigger
             )
@@ -1844,7 +1844,6 @@ private struct LogsTailContainer: View {
             }
         }
         .animation(.spring(response: 0.34, dampingFraction: 0.82), value: isTailing)
-        .onHover { hovering = $0 }
         .onAppear { lastSeenCount = logs.count }
         .onChange(of: logs.count) { old, new in
             guard new != old else { return }
@@ -1904,7 +1903,6 @@ private struct LogsTextView: NSViewRepresentable {
     let logs: [HunLogLine]
     let showService: Bool
     let highlight: String
-    let hovering: Bool
     @Binding var isTailing: Bool
     let scrollTrigger: Int
 
@@ -1912,7 +1910,6 @@ private struct LogsTextView: NSViewRepresentable {
         var lastSignature: String = ""
         var lastTrigger: Int = .min
         weak var scrollView: NSScrollView?
-        weak var scroller: ThinLogScroller?
         weak var textView: LogsTextViewKit?
         var setTailing: ((Bool) -> Void)?
         var currentTailing: () -> Bool = { false }
@@ -1935,7 +1932,7 @@ private struct LogsTextView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSScrollView()
+        let scroll = HunStyledScrollView()
         scroll.drawsBackground = true
         scroll.backgroundColor = NSColor(AppTheme.appBackground)
         scroll.borderType = .noBorder
@@ -1943,10 +1940,6 @@ private struct LogsTextView: NSViewRepresentable {
         scroll.hasHorizontalScroller = false
         scroll.autohidesScrollers = true
         scroll.scrollerStyle = .overlay
-
-        let scroller = ThinLogScroller()
-        scroll.verticalScroller = scroller
-        scroller.alphaValue = 0
 
         let textView = LogsTextViewKit()
         textView.minSize = NSSize(width: 0, height: 0)
@@ -1961,7 +1954,6 @@ private struct LogsTextView: NSViewRepresentable {
         scroll.documentView = textView
 
         context.coordinator.scrollView = scroll
-        context.coordinator.scroller = scroller
         context.coordinator.textView = textView
         context.coordinator.setTailing = { value in
             DispatchQueue.main.async {
@@ -2027,10 +2019,6 @@ private struct LogsTextView: NSViewRepresentable {
             DispatchQueue.main.async {
                 if isTailing != value { self.isTailing = value }
             }
-        }
-
-        if let scroller = scroll.verticalScroller as? ThinLogScroller {
-            scroller.setVisible(hovering, animated: true)
         }
 
         if scrollTrigger != coord.lastTrigger {
@@ -2288,51 +2276,6 @@ final class LogsTextViewKit: NSTextView {
         rect.origin.x += textContainerInset.width
         rect.origin.y += textContainerInset.height
         return rect
-    }
-}
-
-// MARK: - Custom slim scroller for the log view
-
-final class ThinLogScroller: NSScroller {
-    private var currentVisible = false
-
-    override class var isCompatibleWithOverlayScrollers: Bool { true }
-
-    override class func scrollerWidth(for controlSize: NSControl.ControlSize, scrollerStyle: NSScroller.Style) -> CGFloat {
-        return 11
-    }
-
-    func setVisible(_ visible: Bool, animated: Bool) {
-        guard currentVisible != visible else { return }
-        currentVisible = visible
-        if animated {
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.18
-                ctx.allowsImplicitAnimation = true
-                self.animator().alphaValue = visible ? 1 : 0
-            }
-        } else {
-            self.alphaValue = visible ? 1 : 0
-        }
-    }
-
-    override func drawKnobSlot(in slotRect: NSRect, highlight flag: Bool) {
-        // intentionally no track
-    }
-
-    override func drawKnob() {
-        let knobRect = rect(for: .knob)
-        let pillWidth: CGFloat = 3.5
-        let pill = NSRect(
-            x: knobRect.midX - pillWidth / 2,
-            y: knobRect.minY + 3,
-            width: pillWidth,
-            height: max(24, knobRect.height - 6)
-        )
-        let path = NSBezierPath(roundedRect: pill, xRadius: pillWidth / 2, yRadius: pillWidth / 2)
-        let pressed = (NSEvent.pressedMouseButtons & 0x1) != 0
-        NSColor.white.withAlphaComponent(pressed ? 0.34 : 0.20).setFill()
-        path.fill()
     }
 }
 

@@ -68,11 +68,13 @@ final class SwiftTermTerminalEngine: NSObject, HunTerminalEngine, @preconcurrenc
     weak var delegate: (any HunTerminalEngineDelegate)?
 
     private let terminalView: LocalProcessTerminalView
+    private var scrollVisibilityController: HunTerminalScrollVisibilityController?
 
     override init() {
         terminalView = LocalProcessTerminalView(frame: .zero)
         super.init()
         configureTerminal()
+        scrollVisibilityController = HunTerminalScrollVisibilityController(terminalView: terminalView)
     }
 
     var view: NSView {
@@ -109,6 +111,7 @@ final class SwiftTermTerminalEngine: NSObject, HunTerminalEngine, @preconcurrenc
     func focus() {
         guard let window = terminalView.window else { return }
         window.makeFirstResponder(terminalView)
+        scrollVisibilityController?.refresh()
     }
 
     private func configureTerminal() {
@@ -135,5 +138,62 @@ final class SwiftTermTerminalEngine: NSObject, HunTerminalEngine, @preconcurrenc
 
     func processTerminated(source: TerminalView, exitCode: Int32?) {
         delegate?.terminalEngine(self, didTerminateWithExitCode: exitCode)
+    }
+}
+
+private final class HunTerminalScrollVisibilityController: NSResponder {
+    private weak var terminalView: LocalProcessTerminalView?
+    private weak var scroller: NSScroller?
+    private let visibilityController = HunScrollVisibilityController()
+
+    init(terminalView: LocalProcessTerminalView) {
+        self.terminalView = terminalView
+        scroller = terminalView.subviews.first { $0 is NSScroller } as? NSScroller
+        super.init()
+
+        let trackingArea = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self
+        )
+        terminalView.addTrackingArea(trackingArea)
+        styleScroller()
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        styleScroller()
+        visibilityController.setPointerInside(true)
+        super.mouseEntered(with: event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        visibilityController.setPointerInside(false)
+        super.mouseExited(with: event)
+    }
+
+    func refresh() {
+        styleScroller()
+        visibilityController.refresh()
+    }
+
+    private func styleScroller() {
+        if scroller == nil {
+            scroller = terminalView?.subviews.first { $0 is NSScroller } as? NSScroller
+        }
+        guard let scroller else { return }
+        scroller.scrollerStyle = .overlay
+        scroller.controlSize = .mini
+        scroller.knobStyle = .light
+        if let terminalView {
+            visibilityController.install(
+                scroller: scroller,
+                hostView: terminalView,
+                focusView: terminalView
+            )
+        }
     }
 }
