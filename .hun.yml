@@ -5,6 +5,10 @@ services:
         cwd: ./website
         port: 3000
         ready: Ready in
+    macos:
+        cmd: make dev-macos
+        cwd: .
+        ready: Launched hun Dev. Watching for changes
 detect:
     version: v2
     profile: hybrid

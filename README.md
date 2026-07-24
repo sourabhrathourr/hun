@@ -211,10 +211,10 @@ In an interactive terminal, `hun init` shows the detected services and asks befo
 ## Development
 
 ```sh
-# Build
+# Build the CLI
 make build
 
-# Install to $GOPATH/bin
+# Install the CLI to $GOPATH/bin
 make install
 
 # Run tests
@@ -222,7 +222,16 @@ make test
 
 # Lint
 make lint
+
+# Rebuild and relaunch the macOS app whenever its source changes
+make dev-macos
 ```
+
+For UI-only macOS changes, Xcode's SwiftUI Canvas is faster: open
+`ContentView.swift` or `MenuBarView.swift`, show the Canvas with
+Option-Command-Return, and start the existing preview once. Xcode refreshes it
+as you edit. Use `make dev-macos` when you need to exercise the complete app,
+daemon connection, menu-bar item, or window behavior.
 
 ## Release
 

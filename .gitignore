@@ -1,5 +1,6 @@
 /hun
 build/
+.build/
 dist/
 .DS_Store
 *.log

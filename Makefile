@@ -3,7 +3,7 @@ COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "none")
 LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 RELEASE_VERSION ?=
 
-.PHONY: build install test lint clean release release-dry-run
+.PHONY: build install test lint clean dev-macos release release-dry-run
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o hun ./cmd/hun
@@ -19,6 +19,9 @@ lint:
 
 clean:
 	rm -f hun
+
+dev-macos:
+	./scripts/dev-macos.sh
 
 release:
 	./scripts/release.sh --version "$(RELEASE_VERSION)"
