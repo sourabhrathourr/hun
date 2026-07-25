@@ -20,23 +20,6 @@ private extension HunGitSyncState {
         }
     }
 
-    var compactLabel: String {
-        switch self {
-        case .upToDate:
-            "Up to date"
-        case let .ahead(count, _):
-            "\(count) to push"
-        case let .behind(count, _):
-            "\(count) to update"
-        case .diverged:
-            "Diverged"
-        case .unpublished:
-            "Not published"
-        case .detached:
-            "Detached"
-        }
-    }
-
     var icon: String {
         switch self {
         case .upToDate:
@@ -83,22 +66,6 @@ private extension HunGitSyncState {
         return headline
     }
 
-    func compactLabel(remoteCheckAge: HunGitRemoteCheckAge) -> String {
-        if case .upToDate = self {
-            switch remoteCheckAge {
-            case .never:
-                return "Fetch to check"
-            case .justNow:
-                return compactLabel
-            case let .minutes(count):
-                return "Up to date · \(count)m"
-            case .hours, .days:
-                return "Fetch to refresh"
-            }
-        }
-        return compactLabel
-    }
-
     func icon(remoteCheckAge: HunGitRemoteCheckAge) -> String {
         isUnverified(remoteCheckAge) ? "arrow.clockwise" : icon
     }
@@ -136,6 +103,31 @@ private extension HunGitRemoteCheckAge {
     }
 }
 
+nonisolated struct HunRepositoryStatusCapsuleContent: Equatable, Sendable {
+    let branchName: String
+    let localDetail: String?
+
+    init(projectBranch: String?, status: HunGitStatus?) {
+        if status?.detached == true {
+            branchName = "detached"
+        } else if let branch = status?.branch, !branch.isEmpty {
+            branchName = branch
+        } else {
+            branchName = projectBranch ?? "Repository"
+        }
+
+        let conflicts = status?.conflictedFiles.count ?? 0
+        let changes = status?.changeCount ?? 0
+        if conflicts > 0 {
+            localDetail = "\(conflicts) \(conflicts == 1 ? "conflict" : "conflicts")"
+        } else if changes > 0 {
+            localDetail = "\(changes) \(changes == 1 ? "change" : "changes")"
+        } else {
+            localDetail = nil
+        }
+    }
+}
+
 struct HunRepositoryStatusCapsule: View {
     let project: HunProject
     @Bindable var model: HunGitWorkspaceModel
@@ -145,81 +137,56 @@ struct HunRepositoryStatusCapsule: View {
         model.status?.isRepository == true ? model.status : nil
     }
 
-    private var branchName: String {
-        if let status {
-            if status.detached {
-                return "detached"
-            }
-            if !status.branch.isEmpty {
-                return status.branch
-            }
-        }
-        return project.branch ?? "Repository"
+    private var content: HunRepositoryStatusCapsuleContent {
+        HunRepositoryStatusCapsuleContent(projectBranch: project.branch, status: status)
     }
 
     var body: some View {
         Button {
             model.isBranchPickerPresented = true
         } label: {
-            TimelineView(.periodic(from: .now, by: 60)) { context in
-                let remoteCheckAge = HunGitRemoteCheckAge(
-                    checkedAt: model.lastRemoteCheckAt,
-                    relativeTo: context.date
-                )
-                let tone = capsuleTone(remoteCheckAge: remoteCheckAge)
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: 9.5, weight: .semibold))
 
-                HStack(spacing: 5) {
-                    Image(systemName: "arrow.triangle.branch")
-                        .font(.system(size: 9.5, weight: .semibold))
+                Text(content.branchName)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
 
-                    Text(branchName)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-
-                    if let status {
-                        if !status.conflictedFiles.isEmpty {
-                            Text("· \(status.conflictedFiles.count) conflicts")
-                        } else if status.changeCount > 0 {
-                            Text("· \(status.changeCount) changes")
-                        }
-                        Text("· \(status.syncState.compactLabel(remoteCheckAge: remoteCheckAge))")
-                            .monospacedDigit()
-                    } else if model.operation == .refreshing {
-                        ProgressView()
-                            .controlSize(.mini)
-                            .scaleEffect(0.55)
-                            .frame(width: 9, height: 9)
-                    }
-
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 7.5, weight: .bold))
-                        .opacity(0.7)
+                if let detail = content.localDetail {
+                    Text("· \(detail)")
+                        .monospacedDigit()
+                } else if status == nil, model.operation == .refreshing {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .scaleEffect(0.55)
+                        .frame(width: 9, height: 9)
                 }
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(tone)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 4)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(hovering ? tone.opacity(0.10) : AppTheme.chipFill)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(hovering ? tone.opacity(0.24) : AppTheme.divider, lineWidth: 1)
-                )
-                .contentShape(Rectangle())
+
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 7.5, weight: .bold))
+                    .opacity(0.65)
             }
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(AppTheme.textSecondary)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(hovering ? AppTheme.hover : AppTheme.chipFill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(
+                        hovering ? AppTheme.textTertiary.opacity(0.32) : AppTheme.divider,
+                        lineWidth: 1
+                    )
+            )
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help("Open branch switcher and Git sync status")
-    }
-
-    private func capsuleTone(remoteCheckAge: HunGitRemoteCheckAge) -> Color {
-        guard let status else { return AppTheme.textTertiary }
-        if !status.conflictedFiles.isEmpty { return AppTheme.danger }
-        if status.operation != nil || !status.clean { return AppTheme.warning }
-        return status.syncState.tone(remoteCheckAge: remoteCheckAge)
+        .help("Open branch switcher")
     }
 }
 

@@ -18,6 +18,26 @@ struct hunTests {
         #expect(HunGitStatus.fixture(detached: true).syncState == .detached)
     }
 
+    @Test func repositoryCapsuleIgnoresRemoteSyncState() {
+        let upToDate = HunRepositoryStatusCapsuleContent(
+            projectBranch: "fallback",
+            status: HunGitStatus.fixture(ahead: 0, behind: 0)
+        )
+        let ahead = HunRepositoryStatusCapsuleContent(
+            projectBranch: "fallback",
+            status: HunGitStatus.fixture(ahead: 4, behind: 0)
+        )
+        let behind = HunRepositoryStatusCapsuleContent(
+            projectBranch: "fallback",
+            status: HunGitStatus.fixture(ahead: 0, behind: 7)
+        )
+
+        #expect(upToDate == ahead)
+        #expect(ahead == behind)
+        #expect(upToDate.branchName == "main")
+        #expect(upToDate.localDetail == "1 change")
+    }
+
     @Test func remoteCheckAgeDoesNotStayJustNow() {
         let now = Date(timeIntervalSince1970: 100_000)
 
