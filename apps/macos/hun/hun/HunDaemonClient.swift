@@ -43,6 +43,7 @@ nonisolated protocol HunGitClientProtocol: AnyObject {
     func gitSwitchBranch(project: String, branch: String, stash: Bool) async throws -> HunGitStatus
     func gitFetch(project: String) async throws -> HunGitStatus
     func gitPull(project: String) async throws -> HunGitStatus
+    func gitUpdateBranch(project: String, protectLocalChanges: Bool) async throws -> HunGitUpdateResult
     func gitPush(project: String) async throws -> HunGitStatus
 }
 
@@ -250,7 +251,7 @@ nonisolated struct HunDaemonLogLine: Decodable, Equatable {
 }
 
 nonisolated final class HunDaemonClient: HunDaemonClientProtocol, HunGitClientProtocol {
-    private static let requiredProtocol = 13
+    private static let requiredProtocol = 14
     private let socketPath: String
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -367,6 +368,17 @@ nonisolated final class HunDaemonClient: HunDaemonClientProtocol, HunGitClientPr
 
     func gitPull(project: String) async throws -> HunGitStatus {
         try await request(HunDaemonRequest(action: "git_pull", project: project))
+    }
+
+    func gitUpdateBranch(
+        project: String,
+        protectLocalChanges: Bool
+    ) async throws -> HunGitUpdateResult {
+        try await request(HunDaemonRequest(
+            action: "git_update_branch",
+            project: project,
+            stash: protectLocalChanges
+        ))
     }
 
     func gitPush(project: String) async throws -> HunGitStatus {

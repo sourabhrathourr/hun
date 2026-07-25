@@ -135,6 +135,24 @@ nonisolated struct HunGitStatus: Decodable, Equatable, Sendable {
     }
 }
 
+nonisolated struct HunGitUpdateResult: Decodable, Equatable, Sendable {
+    let status: HunGitStatus
+    let updatedCommits: Int
+    let protectedChanges: Bool
+    let restoredChanges: Bool
+    let recoveryRequired: Bool
+    let recoveryMessage: String?
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case updatedCommits = "updated_commits"
+        case protectedChanges = "protected_changes"
+        case restoredChanges = "restored_changes"
+        case recoveryRequired = "recovery_required"
+        case recoveryMessage = "recovery_message"
+    }
+}
+
 nonisolated enum HunGitFileStatus: Equatable, Sendable {
     case unchanged
     case untracked
@@ -280,6 +298,7 @@ final class HunGitWorkspaceModel {
         case creatingBranch
         case fetching
         case pulling
+        case updatingBranch
         case pushing
     }
 
@@ -295,8 +314,11 @@ final class HunGitWorkspaceModel {
     var pendingBranchSwitch: String?
     var isWorkspacePresented = false
     var isBranchPickerPresented = false
+    var isUpdateBranchPresented = false
     private(set) var isCommitAndPushInFlight = false
     private(set) var lastRemoteCheckAt: Date?
+    private(set) var lastUpdateResult: HunGitUpdateResult?
+    private(set) var updateBranchPreflightStatus: HunGitStatus?
     private(set) var operation: Operation?
 
     private let client: HunGitClientProtocol
@@ -333,7 +355,7 @@ final class HunGitWorkspaceModel {
             diffParsingTask?.cancel()
             diffParsingTask = nil
             silentRefreshInFlight = false
-            if operation == .loadingDiff {
+            if operation == .loadingDiff || operation == .updatingBranch {
                 operation = nil
             }
             activeProjectID = projectID
@@ -347,8 +369,11 @@ final class HunGitWorkspaceModel {
             pendingBranchSwitch = nil
             errorMessage = nil
             isBranchPickerPresented = false
+            isUpdateBranchPresented = false
             isCommitAndPushInFlight = false
             lastRemoteCheckAt = nil
+            lastUpdateResult = nil
+            updateBranchPreflightStatus = nil
         }
         await refresh()
     }
@@ -586,6 +611,59 @@ final class HunGitWorkspaceModel {
             lastRemoteCheckAt = Date()
         }
         return succeeded
+    }
+
+    func presentUpdateBranch() {
+        lastUpdateResult = nil
+        errorMessage = nil
+        updateBranchPreflightStatus = status
+        isUpdateBranchPresented = true
+    }
+
+    func dismissUpdateBranch() {
+        guard operation != .updatingBranch else { return }
+        isUpdateBranchPresented = false
+        lastUpdateResult = nil
+        updateBranchPreflightStatus = nil
+    }
+
+    @discardableResult
+    func updateBranch(protectLocalChanges: Bool) async -> Bool {
+        guard let projectID = activeProjectID, operation == nil else { return false }
+        statusGeneration += 1
+        let generation = statusGeneration
+        silentRefreshInFlight = false
+        operation = .updatingBranch
+        defer {
+            if generation == statusGeneration, operation == .updatingBranch {
+                operation = nil
+            }
+        }
+
+        do {
+            let result = try await client.gitUpdateBranch(
+                project: projectID,
+                protectLocalChanges: protectLocalChanges
+            )
+            guard activeProjectID == projectID, generation == statusGeneration else {
+                return false
+            }
+            status = result.status
+            lastUpdateResult = result
+            lastRemoteCheckAt = Date()
+            errorMessage = nil
+            if !result.recoveryRequired {
+                isUpdateBranchPresented = false
+                updateBranchPreflightStatus = nil
+            }
+            return true
+        } catch {
+            guard activeProjectID == projectID, generation == statusGeneration else {
+                return false
+            }
+            errorMessage = error.localizedDescription
+            return false
+        }
     }
 
     @discardableResult

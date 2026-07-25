@@ -117,6 +117,8 @@ func (d *Daemon) HandleRequest(req Request) Response {
 		return d.handleGitFetch(req)
 	case "git_pull":
 		return d.handleGitPull(req)
+	case "git_update_branch":
+		return d.handleGitUpdateBranch(req)
 	case "git_push":
 		return d.handleGitPush(req)
 	case "ports":
@@ -134,7 +136,7 @@ func (d *Daemon) HandleRequest(req Request) Response {
 func serializesGitMutation(action string) bool {
 	switch action {
 	case "git_stage", "git_unstage", "git_commit", "git_create_branch", "git_switch_branch",
-		"git_fetch", "git_pull", "git_push":
+		"git_fetch", "git_pull", "git_update_branch", "git_push":
 		return true
 	default:
 		return false

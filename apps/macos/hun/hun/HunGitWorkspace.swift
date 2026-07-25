@@ -10,7 +10,7 @@ private extension HunGitSyncState {
         case let .ahead(count, _):
             "\(count) \(count == 1 ? "commit" : "commits") ready to push"
         case let .behind(count, _):
-            "\(count) remote \(count == 1 ? "commit" : "commits") ready to pull"
+            "\(count) remote \(count == 1 ? "commit" : "commits") ready to update"
         case let .diverged(ahead, behind, _):
             "Diverged · \(ahead) local, \(behind) remote"
         case let .unpublished(branch):
@@ -27,7 +27,7 @@ private extension HunGitSyncState {
         case let .ahead(count, _):
             "\(count) to push"
         case let .behind(count, _):
-            "\(count) to pull"
+            "\(count) to update"
         case .diverged:
             "Diverged"
         case .unpublished:
@@ -240,6 +240,369 @@ struct HunGitBranchDialogOverlay: View {
         .ignoresSafeArea()
         .transition(.opacity)
         .accessibilityAddTraits(.isModal)
+    }
+}
+
+struct HunGitUpdateBranchDialogOverlay: View {
+    @Bindable var model: HunGitWorkspaceModel
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.56)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    model.dismissUpdateBranch()
+                }
+
+            if let status = model.updateBranchPreflightStatus ?? model.status {
+                HunGitUpdateBranchDialog(model: model, status: status)
+                    .padding(28)
+            }
+        }
+        .ignoresSafeArea()
+        .transition(.opacity)
+        .accessibilityAddTraits(.isModal)
+    }
+}
+
+private struct HunGitUpdateBranchDialog: View {
+    @Bindable var model: HunGitWorkspaceModel
+    let status: HunGitStatus
+
+    private var shouldProtectLocalChanges: Bool {
+        !status.clean
+    }
+
+    private var isUpdating: Bool {
+        model.operation == .updatingBranch
+    }
+
+    private var commitLabel: String {
+        "\(status.behind) \(status.behind == 1 ? "commit" : "commits")"
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            dialogHeader
+
+            Rectangle()
+                .fill(AppTheme.divider)
+                .frame(height: 1)
+
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Bring \(commitLabel) from \(status.upstream) into \(status.branch).")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(AppTheme.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                VStack(spacing: 0) {
+                    updateDetailRow(
+                        label: "Remote update",
+                        value: "\(status.upstream) → \(status.branch)",
+                        systemImage: "arrow.down.to.line"
+                    )
+                    Rectangle().fill(AppTheme.divider).frame(height: 1)
+                    updateDetailRow(
+                        label: "Local work",
+                        value: status.clean
+                            ? "Working tree clean"
+                            : "\(status.changeCount) changed \(status.changeCount == 1 ? "file" : "files")",
+                        systemImage: status.clean ? "checkmark.circle" : "doc.badge.ellipsis"
+                    )
+                    Rectangle().fill(AppTheme.divider).frame(height: 1)
+                    updateDetailRow(
+                        label: "Strategy",
+                        value: shouldProtectLocalChanges
+                            ? "Protect work, fast-forward, then restore"
+                            : "Fast-forward only",
+                        systemImage: "shield.checkered"
+                    )
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(AppTheme.searchField)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(AppTheme.divider, lineWidth: 1)
+                )
+
+                if shouldProtectLocalChanges {
+                    statusCallout(
+                        systemImage: "shield.fill",
+                        title: "Your local work will be protected",
+                        detail: "Hun will preserve staged, unstaged, and untracked changes, update the branch, then restore the same working state.",
+                        tone: AppTheme.warning
+                    )
+                }
+
+                if let result = model.lastUpdateResult, result.recoveryRequired {
+                    statusCallout(
+                        systemImage: "exclamationmark.triangle.fill",
+                        title: "Local changes need attention",
+                        detail: result.recoveryMessage ??
+                            "The remote update completed and the safety stash was kept.",
+                        tone: AppTheme.warning
+                    )
+                } else if let error = model.errorMessage {
+                    statusCallout(
+                        systemImage: "xmark.circle.fill",
+                        title: "Branch was not updated",
+                        detail: error,
+                        tone: AppTheme.danger
+                    )
+                }
+            }
+            .padding(18)
+
+            Rectangle()
+                .fill(AppTheme.divider)
+                .frame(height: 1)
+
+            dialogFooter
+        }
+        .frame(width: 500)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(AppTheme.elevated)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(0.11), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(alignment: .topLeading) {
+            HunGitEscapeKeyMonitor {
+                model.dismissUpdateBranch()
+            }
+            .frame(width: 0, height: 0)
+        }
+        .onExitCommand {
+            model.dismissUpdateBranch()
+        }
+    }
+
+    private var dialogHeader: some View {
+        HStack(spacing: 11) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(AppTheme.warning.opacity(0.11))
+                    .frame(width: 32, height: 32)
+                Image(systemName: "arrow.down.to.line")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(AppTheme.warning)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Update \(status.branch)")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(AppTheme.textPrimary)
+                Text("Safe fast-forward from the tracked remote branch")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(AppTheme.textTertiary)
+            }
+
+            Spacer()
+
+            Text(status.upstream)
+                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                .foregroundStyle(AppTheme.textSecondary)
+                .padding(.horizontal, 8)
+                .frame(height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(AppTheme.chipFill)
+                )
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 58)
+        .background(AppTheme.appBackground.opacity(0.42))
+    }
+
+    private var dialogFooter: some View {
+        HStack(spacing: 8) {
+            Text("Hun fetches again before updating")
+                .font(.system(size: 10))
+                .foregroundStyle(AppTheme.textTertiary)
+
+            Spacer()
+
+            Button("Cancel") {
+                model.dismissUpdateBranch()
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 11.5, weight: .medium))
+            .foregroundStyle(AppTheme.textSecondary)
+            .padding(.horizontal, 12)
+            .frame(height: 30)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(AppTheme.chipFill)
+            )
+            .disabled(isUpdating)
+
+            Button {
+                if model.lastUpdateResult?.recoveryRequired == true {
+                    model.dismissUpdateBranch()
+                } else {
+                    Task {
+                        await model.updateBranch(
+                            protectLocalChanges: shouldProtectLocalChanges
+                        )
+                    }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    if isUpdating {
+                        ProgressView()
+                            .controlSize(.mini)
+                    } else {
+                        Image(systemName: model.lastUpdateResult?.recoveryRequired == true
+                            ? "checkmark"
+                            : "shield.checkered")
+                            .font(.system(size: 9, weight: .bold))
+                    }
+                    Text(primaryActionTitle)
+                }
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .frame(height: 30)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(AppTheme.accent.opacity(isUpdating ? 0.62 : 0.92))
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(isUpdating)
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 50)
+        .background(AppTheme.buttonFill)
+    }
+
+    private var primaryActionTitle: String {
+        if model.lastUpdateResult?.recoveryRequired == true {
+            return "Close"
+        }
+        return shouldProtectLocalChanges ? "Protect & update" : "Update branch"
+    }
+
+    private func updateDetailRow(
+        label: String,
+        value: String,
+        systemImage: String
+    ) -> some View {
+        HStack(spacing: 9) {
+            Image(systemName: systemImage)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(AppTheme.textTertiary)
+                .frame(width: 16)
+            Text(label)
+                .font(.system(size: 10.5))
+                .foregroundStyle(AppTheme.textTertiary)
+            Spacer()
+            Text(value)
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(AppTheme.textSecondary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 11)
+        .frame(height: 36)
+    }
+
+    private func statusCallout(
+        systemImage: String,
+        title: String,
+        detail: String,
+        tone: Color
+    ) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: systemImage)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(tone)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(AppTheme.textPrimary)
+                Text(detail)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(tone.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(tone.opacity(0.16), lineWidth: 1)
+        )
+    }
+}
+
+private struct HunGitEscapeKeyMonitor: NSViewRepresentable {
+    let onDismiss: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onDismiss: onDismiss)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            context.coordinator.install(for: view.window)
+        }
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        context.coordinator.onDismiss = onDismiss
+        context.coordinator.install(for: view.window)
+    }
+
+    static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
+        coordinator.uninstall()
+    }
+
+    final class Coordinator {
+        var onDismiss: () -> Void
+        private weak var window: NSWindow?
+        private var eventMonitor: Any?
+
+        init(onDismiss: @escaping () -> Void) {
+            self.onDismiss = onDismiss
+        }
+
+        func install(for window: NSWindow?) {
+            guard let window, self.window !== window else { return }
+            uninstall()
+            self.window = window
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
+                [weak self, weak window] event in
+                guard let self, event.window === window, event.keyCode == 53 else {
+                    return event
+                }
+                onDismiss()
+                return nil
+            }
+        }
+
+        func uninstall() {
+            if let eventMonitor {
+                NSEvent.removeMonitor(eventMonitor)
+            }
+            eventMonitor = nil
+            window = nil
+        }
+
+        deinit {
+            uninstall()
+        }
     }
 }
 
@@ -908,7 +1271,7 @@ struct HunGitWorkspaceView: View {
             }
 
             if let status = model.status {
-                syncAction(status.syncState)
+                syncAction(status)
             }
 
             HunGitToolbarButton(
@@ -967,6 +1330,10 @@ struct HunGitWorkspaceView: View {
             return "Checking the remote without changing local files…"
         case .pulling:
             return "Fast-forwarding to the remote branch…"
+        case .updatingBranch:
+            return status.clean
+                ? "Fast-forwarding to the remote branch…"
+                : "Protecting local work and updating the branch…"
         case .pushing:
             return "Sending local commits to the remote…"
         default:
@@ -989,8 +1356,8 @@ struct HunGitWorkspaceView: View {
     }
 
     @ViewBuilder
-    private func syncAction(_ state: HunGitSyncState) -> some View {
-        switch state {
+    private func syncAction(_ status: HunGitStatus) -> some View {
+        switch status.syncState {
         case let .ahead(count, _):
             HunGitToolbarButton(
                 title: "Push \(count)",
@@ -1003,13 +1370,13 @@ struct HunGitWorkspaceView: View {
             }
         case let .behind(count, _):
             HunGitToolbarButton(
-                title: "Pull \(count)",
+                title: "Update branch",
                 systemImage: "arrow.down.to.line",
-                loading: model.operation == .pulling,
-                disabled: model.isBusy,
-                help: "Fast-forward to \(count) remote \(count == 1 ? "commit" : "commits")"
+                loading: model.operation == .updatingBranch,
+                disabled: model.isBusy || !status.conflictedFiles.isEmpty,
+                help: "Safely bring \(count) remote \(count == 1 ? "commit" : "commits") into this branch"
             ) {
-                Task { await model.pull() }
+                model.presentUpdateBranch()
             }
         case .unpublished:
             HunGitToolbarButton(

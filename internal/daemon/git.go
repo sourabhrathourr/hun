@@ -59,6 +59,15 @@ type GitDiff struct {
 	Truncated bool   `json:"truncated"`
 }
 
+type GitUpdateResult struct {
+	Status           GitStatus `json:"status"`
+	UpdatedCommits   int       `json:"updated_commits"`
+	ProtectedChanges bool      `json:"protected_changes"`
+	RestoredChanges  bool      `json:"restored_changes"`
+	RecoveryRequired bool      `json:"recovery_required"`
+	RecoveryMessage  string    `json:"recovery_message,omitempty"`
+}
+
 func (d *Daemon) handleGitStatus(req Request) Response {
 	path, response := d.gitProjectPath(req)
 	if !response.OK {
@@ -214,6 +223,160 @@ func (d *Daemon) handleGitPull(req Request) Response {
 		return errorResponse(err.Error())
 	}
 	return d.gitStatusResponse(repository)
+}
+
+func (d *Daemon) handleGitUpdateBranch(req Request) Response {
+	repository, response := d.gitProjectPath(req)
+	if !response.OK {
+		return response
+	}
+	if _, err := runGit(repository, "fetch", "--prune"); err != nil {
+		return errorResponse(err.Error())
+	}
+
+	status, err := readGitStatus(repository)
+	if err != nil {
+		return errorResponse(err.Error())
+	}
+	if status.Detached || status.Branch == "" {
+		return errorResponse("check out a branch before updating")
+	}
+	if status.Upstream == "" {
+		return errorResponse("current branch has no upstream remote branch")
+	}
+	if status.Operation != "" || gitStatusHasConflicts(status) {
+		return errorResponse("resolve the current Git operation and conflicts before updating")
+	}
+	if status.Ahead > 0 && status.Behind > 0 {
+		return errorResponse("local and remote both changed; rebase or merge before updating")
+	}
+	if status.Behind == 0 {
+		return successResponse(GitUpdateResult{Status: status})
+	}
+
+	updatedCommits := status.Behind
+	safetyStash := ""
+	if !status.Clean {
+		if !req.Stash {
+			return errorResponse("local changes must be protected before updating")
+		}
+		safetyStash, err = createGitSafetyStash(repository, "Hun: update "+status.Branch)
+		if err != nil {
+			return errorResponse("could not protect local changes: " + err.Error())
+		}
+	}
+
+	if _, err := runGit(repository, "merge", "--ff-only", status.Upstream); err != nil {
+		if safetyStash != "" {
+			restored, stashKept, restoreErr := restoreGitSafetyStash(repository, safetyStash)
+			if restoreErr != nil {
+				recovery := "local changes remain in the Hun safety stash"
+				if restored {
+					recovery = "local changes were restored, but the Hun safety stash was kept"
+				} else if !stashKept {
+					recovery = "local changes could not be restored"
+				}
+				return errorResponse(
+					"branch update stopped; " + recovery + ": " + restoreErr.Error(),
+				)
+			}
+		}
+		return errorResponse("branch could not be fast-forwarded: " + err.Error())
+	}
+
+	restoredChanges := false
+	recoveryRequired := false
+	recoveryMessage := ""
+	if safetyStash != "" {
+		var stashKept bool
+		var restoreErr error
+		restoredChanges, stashKept, restoreErr = restoreGitSafetyStash(repository, safetyStash)
+		if restoreErr != nil {
+			recoveryRequired = true
+			if restoredChanges && stashKept {
+				recoveryMessage = "Local changes were restored, but the Hun safety stash was kept and can be removed after review."
+			} else {
+				recoveryMessage = "Remote commits were applied, but local changes need attention. The Hun safety stash was kept."
+			}
+		}
+	}
+
+	updatedStatus, err := readGitStatus(repository)
+	if err != nil {
+		return errorResponse(err.Error())
+	}
+	return successResponse(GitUpdateResult{
+		Status:           updatedStatus,
+		UpdatedCommits:   updatedCommits,
+		ProtectedChanges: safetyStash != "",
+		RestoredChanges:  restoredChanges,
+		RecoveryRequired: recoveryRequired,
+		RecoveryMessage:  recoveryMessage,
+	})
+}
+
+func createGitSafetyStash(repository, message string) (string, error) {
+	previousStash := currentGitStashOID(repository)
+	if _, err := runGit(
+		repository,
+		"stash", "push", "--include-untracked", "-m", message,
+	); err != nil {
+		return "", err
+	}
+	createdStash := currentGitStashOID(repository)
+	if createdStash == "" || createdStash == previousStash {
+		return "", fmt.Errorf("Git did not create a safety stash for every local change")
+	}
+	return createdStash, nil
+}
+
+func restoreGitSafetyStash(repository, stashOID string) (restored, stashKept bool, err error) {
+	if _, err := runGit(repository, "stash", "apply", "--index", stashOID); err != nil {
+		return false, true, err
+	}
+	if err := dropGitSafetyStash(repository, stashOID); err != nil {
+		return true, true, err
+	}
+	return true, false, nil
+}
+
+func dropGitSafetyStash(repository, stashOID string) error {
+	output, err := runGit(repository, "stash", "list", "--format=%H%x09%gd")
+	if err != nil {
+		return err
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		fields := strings.SplitN(line, "\t", 2)
+		if len(fields) != 2 || fields[0] != stashOID {
+			continue
+		}
+		resolved, err := runGit(repository, "rev-parse", "--verify", fields[1])
+		if err != nil || strings.TrimSpace(string(resolved)) != stashOID {
+			continue
+		}
+		if _, err := runGit(repository, "stash", "drop", fields[1]); err != nil {
+			return err
+		}
+		return nil
+	}
+	return fmt.Errorf("Hun safety stash %s was not found", stashOID)
+}
+
+func currentGitStashOID(repository string) string {
+	output, err := runGit(repository, "rev-parse", "--verify", "refs/stash")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
+}
+
+func gitStatusHasConflicts(status GitStatus) bool {
+	for _, file := range status.Files {
+		if file.Conflicted {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *Daemon) handleGitPush(req Request) Response {

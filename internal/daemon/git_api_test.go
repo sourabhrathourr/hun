@@ -288,6 +288,162 @@ func TestGitRemoteActionsFetchPullAndPushThroughConfiguredRemote(t *testing.T) {
 	}
 }
 
+func TestGitUpdateBranchProtectsAndRestoresLocalChanges(t *testing.T) {
+	daemon, repository := newGitTestDaemon(t)
+	remote := t.TempDir()
+	runGitTest(t, remote, "init", "--bare")
+	runGitTest(t, repository, "remote", "add", "origin", remote)
+	runGitTest(t, repository, "push", "-u", "origin", "main")
+	runGitTest(t, remote, "symbolic-ref", "HEAD", "refs/heads/main")
+
+	clone := t.TempDir()
+	runGitTest(t, clone, "clone", remote, ".")
+	runGitTest(t, clone, "config", "user.name", "Hun Remote")
+	runGitTest(t, clone, "config", "user.email", "remote@example.test")
+	writeGitTestFile(t, clone, "remote.txt", "from remote\n")
+	runGitTest(t, clone, "add", "remote.txt")
+	runGitTest(t, clone, "commit", "-m", "Remote change")
+	runGitTest(t, clone, "push", "origin", "main")
+
+	writeGitTestFile(t, repository, "tracked.txt", "older saved work\n")
+	runGitTest(t, repository, "stash", "push", "-m", "Existing user stash")
+	existingStash := strings.TrimSpace(runGitTest(t, repository, "rev-parse", "refs/stash"))
+
+	writeGitTestFile(t, repository, "tracked.txt", "local staged\n")
+	runGitTest(t, repository, "add", "tracked.txt")
+	writeGitTestFile(t, repository, "tracked.txt", "local unstaged\n")
+	writeGitTestFile(t, repository, "untracked.txt", "keep me\n")
+
+	response := daemon.HandleRequest(Request{
+		Action:  "git_update_branch",
+		Project: "repo",
+		Stash:   true,
+	})
+	if !response.OK {
+		t.Fatalf("git_update_branch response error: %s", response.Error)
+	}
+
+	var result GitUpdateResult
+	if err := json.Unmarshal(response.Data, &result); err != nil {
+		t.Fatalf("unmarshal update result: %v", err)
+	}
+	if result.UpdatedCommits != 1 || !result.ProtectedChanges || !result.RestoredChanges {
+		t.Fatalf("update result = %+v, want one commit with protected and restored changes", result)
+	}
+	if contents, err := os.ReadFile(filepath.Join(repository, "remote.txt")); err != nil ||
+		string(contents) != "from remote\n" {
+		t.Fatalf("updated remote file = %q, %v", contents, err)
+	}
+	if contents, err := os.ReadFile(filepath.Join(repository, "tracked.txt")); err != nil ||
+		string(contents) != "local unstaged\n" {
+		t.Fatalf("restored tracked file = %q, %v", contents, err)
+	}
+	if contents, err := os.ReadFile(filepath.Join(repository, "untracked.txt")); err != nil ||
+		string(contents) != "keep me\n" {
+		t.Fatalf("restored untracked file = %q, %v", contents, err)
+	}
+	if diff := runGitTest(t, repository, "diff", "--cached", "--", "tracked.txt"); !strings.Contains(diff, "+local staged") {
+		t.Fatalf("staged state was not restored:\n%s", diff)
+	}
+	if diff := runGitTest(t, repository, "diff", "--", "tracked.txt"); !strings.Contains(diff, "+local unstaged") {
+		t.Fatalf("unstaged state was not restored:\n%s", diff)
+	}
+	if remainingStash := strings.TrimSpace(runGitTest(t, repository, "rev-parse", "refs/stash")); remainingStash != existingStash {
+		t.Fatalf("existing stash changed from %q to %q", existingStash, remainingStash)
+	}
+	if stashList := runGitTest(t, repository, "stash", "list"); strings.Count(strings.TrimSpace(stashList), "\n") != 0 {
+		t.Fatalf("successful update changed the existing stash list: %q", stashList)
+	}
+}
+
+func TestGitUpdateBranchRefusesToGuessWhenHistoryDiverged(t *testing.T) {
+	daemon, repository := newGitTestDaemon(t)
+	remote := t.TempDir()
+	runGitTest(t, remote, "init", "--bare")
+	runGitTest(t, repository, "remote", "add", "origin", remote)
+	runGitTest(t, repository, "push", "-u", "origin", "main")
+	runGitTest(t, remote, "symbolic-ref", "HEAD", "refs/heads/main")
+
+	writeGitTestFile(t, repository, "local.txt", "local commit\n")
+	runGitTest(t, repository, "add", "local.txt")
+	runGitTest(t, repository, "commit", "-m", "Local change")
+	localHead := runGitTest(t, repository, "rev-parse", "HEAD")
+
+	clone := t.TempDir()
+	runGitTest(t, clone, "clone", remote, ".")
+	runGitTest(t, clone, "config", "user.name", "Hun Remote")
+	runGitTest(t, clone, "config", "user.email", "remote@example.test")
+	writeGitTestFile(t, clone, "remote.txt", "remote commit\n")
+	runGitTest(t, clone, "add", "remote.txt")
+	runGitTest(t, clone, "commit", "-m", "Remote change")
+	runGitTest(t, clone, "push", "origin", "main")
+
+	response := daemon.HandleRequest(Request{
+		Action:  "git_update_branch",
+		Project: "repo",
+		Stash:   true,
+	})
+	if response.OK || !strings.Contains(response.Error, "rebase or merge") {
+		t.Fatalf("git_update_branch response = %+v, want diverged-history guidance", response)
+	}
+	if head := runGitTest(t, repository, "rev-parse", "HEAD"); head != localHead {
+		t.Fatalf("local HEAD changed from %q to %q", localHead, head)
+	}
+	if _, err := os.Stat(filepath.Join(repository, "remote.txt")); !os.IsNotExist(err) {
+		t.Fatalf("diverged update modified the working tree: %v", err)
+	}
+}
+
+func TestGitUpdateBranchStopsWhenSubmoduleChangesCannotBeStashed(t *testing.T) {
+	daemon, repository := newGitTestDaemon(t)
+	submodule := t.TempDir()
+	runGitTest(t, submodule, "init", "-b", "main")
+	runGitTest(t, submodule, "config", "user.name", "Hun Dependency")
+	runGitTest(t, submodule, "config", "user.email", "dependency@example.test")
+	writeGitTestFile(t, submodule, "dependency.txt", "committed\n")
+	runGitTest(t, submodule, "add", "dependency.txt")
+	runGitTest(t, submodule, "commit", "-m", "Dependency")
+	runGitTest(t, repository, "-c", "protocol.file.allow=always", "submodule", "add", submodule, "dependency")
+	runGitTest(t, repository, "commit", "-m", "Add dependency")
+
+	remote := t.TempDir()
+	runGitTest(t, remote, "init", "--bare")
+	runGitTest(t, repository, "remote", "add", "origin", remote)
+	runGitTest(t, repository, "push", "-u", "origin", "main")
+	runGitTest(t, remote, "symbolic-ref", "HEAD", "refs/heads/main")
+
+	clone := t.TempDir()
+	runGitTest(t, clone, "clone", remote, ".")
+	runGitTest(t, clone, "config", "user.name", "Hun Remote")
+	runGitTest(t, clone, "config", "user.email", "remote@example.test")
+	writeGitTestFile(t, clone, "remote.txt", "remote commit\n")
+	runGitTest(t, clone, "add", "remote.txt")
+	runGitTest(t, clone, "commit", "-m", "Remote change")
+	runGitTest(t, clone, "push", "origin", "main")
+
+	writeGitTestFile(t, repository, "dependency/dependency.txt", "uncommitted dependency work\n")
+	localHead := runGitTest(t, repository, "rev-parse", "HEAD")
+	response := daemon.HandleRequest(Request{
+		Action:  "git_update_branch",
+		Project: "repo",
+		Stash:   true,
+	})
+
+	if response.OK || !strings.Contains(response.Error, "did not create a safety stash") {
+		t.Fatalf("git_update_branch response = %+v, want unstashable-work error", response)
+	}
+	if head := runGitTest(t, repository, "rev-parse", "HEAD"); head != localHead {
+		t.Fatalf("local HEAD changed from %q to %q", localHead, head)
+	}
+	if contents, err := os.ReadFile(filepath.Join(repository, "dependency", "dependency.txt")); err != nil ||
+		string(contents) != "uncommitted dependency work\n" {
+		t.Fatalf("submodule work changed = %q, %v", contents, err)
+	}
+	if _, err := os.Stat(filepath.Join(repository, "remote.txt")); !os.IsNotExist(err) {
+		t.Fatalf("blocked update modified the working tree: %v", err)
+	}
+}
+
 func TestSwitchGitBranchRejectsAmbiguousLocalBranchFromAnotherRemote(t *testing.T) {
 	_, repository := newGitTestDaemon(t)
 	runGitTest(t, repository, "remote", "add", "origin", repository)

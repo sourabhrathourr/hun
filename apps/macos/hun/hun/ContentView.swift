@@ -82,6 +82,11 @@ struct ContentView: View {
                 HunGitBranchDialogOverlay(model: gitWorkspace)
                     .zIndex(20)
             }
+
+            if gitWorkspace.isUpdateBranchPresented {
+                HunGitUpdateBranchDialogOverlay(model: gitWorkspace)
+                    .zIndex(21)
+            }
         }
         .preferredColorScheme(.dark)
         .background(AppTheme.appBackground)
@@ -98,6 +103,7 @@ struct ContentView: View {
         .animation(.spring(response: 0.34, dampingFraction: 0.86), value: sidebarDocked)
         .animation(.spring(response: 0.32, dampingFraction: 0.88), value: sidebarRevealed)
         .animation(.easeOut(duration: 0.14), value: gitWorkspace.isBranchPickerPresented)
+        .animation(.easeOut(duration: 0.14), value: gitWorkspace.isUpdateBranchPresented)
         .focusedSceneValue(
             \.hunTerminalCommand,
             HunTerminalCommandAction(

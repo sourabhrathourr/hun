@@ -265,6 +265,81 @@ struct hunTests {
         #expect(pushClient.actions == ["push:push-app"])
     }
 
+    @Test func updatingBranchProtectsLocalChangesAndRefreshesRemoteState() async {
+        let client = MockGitClient()
+        client.status = HunGitStatus.fixture(behind: 3)
+        client.updateResult = HunGitUpdateResult(
+            status: HunGitStatus.fixture(),
+            updatedCommits: 3,
+            protectedChanges: true,
+            restoredChanges: true,
+            recoveryRequired: false,
+            recoveryMessage: nil
+        )
+        let model = HunGitWorkspaceModel(client: client)
+        await model.load(projectID: "app")
+        model.isUpdateBranchPresented = true
+
+        let succeeded = await model.updateBranch(protectLocalChanges: true)
+
+        #expect(succeeded)
+        #expect(client.actions == ["update:app:true"])
+        #expect(model.status?.behind == 0)
+        #expect(model.lastRemoteCheckAt != nil)
+        #expect(model.lastUpdateResult?.updatedCommits == 3)
+        #expect(!model.isUpdateBranchPresented)
+    }
+
+    @Test func switchingProjectsDuringBranchUpdateIgnoresTheOldResult() async {
+        let client = MockGitClient()
+        client.status = HunGitStatus.fixture(upstream: "origin/old", behind: 2)
+        client.updateDelay = .milliseconds(100)
+        client.updateResult = HunGitUpdateResult(
+            status: HunGitStatus.fixture(upstream: "origin/old"),
+            updatedCommits: 2,
+            protectedChanges: false,
+            restoredChanges: false,
+            recoveryRequired: false,
+            recoveryMessage: nil
+        )
+        let model = HunGitWorkspaceModel(client: client)
+        await model.load(projectID: "old")
+        model.presentUpdateBranch()
+
+        let update = Task {
+            await model.updateBranch(protectLocalChanges: false)
+        }
+        try? await Task.sleep(for: .milliseconds(20))
+        client.status = HunGitStatus.fixture(upstream: "origin/new")
+        await model.load(projectID: "new")
+        _ = await update.value
+
+        #expect(model.status?.upstream == "origin/new")
+        #expect(!model.isUpdateBranchPresented)
+    }
+
+    @Test func updateRecoveryKeepsTheOriginalPreflightVisible() async {
+        let client = MockGitClient()
+        client.status = HunGitStatus.fixture(behind: 2)
+        client.updateResult = HunGitUpdateResult(
+            status: HunGitStatus.fixture(),
+            updatedCommits: 2,
+            protectedChanges: true,
+            restoredChanges: false,
+            recoveryRequired: true,
+            recoveryMessage: "Safety stash kept"
+        )
+        let model = HunGitWorkspaceModel(client: client)
+        await model.load(projectID: "app")
+        model.presentUpdateBranch()
+
+        _ = await model.updateBranch(protectLocalChanges: true)
+
+        #expect(model.status?.behind == 0)
+        #expect(model.updateBranchPreflightStatus?.behind == 2)
+        #expect(model.isUpdateBranchPresented)
+    }
+
     @Test func commitAndPushRunsTheTwoGitActionsInOrder() async {
         let client = MockGitClient()
         let model = HunGitWorkspaceModel(client: client)
@@ -1205,6 +1280,8 @@ private final class MockGitClient: HunGitClientProtocol {
     var statusDelay: Duration?
     var diffDelay: Duration?
     var fetchError: Error?
+    var updateResult: HunGitUpdateResult?
+    var updateDelay: Duration?
     var stageError: Error?
     var branchRequests = 0
     var diffRequests = 0
@@ -1279,6 +1356,24 @@ private final class MockGitClient: HunGitClientProtocol {
     func gitPull(project: String) async throws -> HunGitStatus {
         actions.append("pull:\(project)")
         return status
+    }
+
+    func gitUpdateBranch(
+        project: String,
+        protectLocalChanges: Bool
+    ) async throws -> HunGitUpdateResult {
+        actions.append("update:\(project):\(protectLocalChanges)")
+        if let updateDelay {
+            try? await Task.sleep(for: updateDelay)
+        }
+        return updateResult ?? HunGitUpdateResult(
+            status: status,
+            updatedCommits: status.behind,
+            protectedChanges: protectLocalChanges,
+            restoredChanges: protectLocalChanges,
+            recoveryRequired: false,
+            recoveryMessage: nil
+        )
     }
 
     func gitPush(project: String) async throws -> HunGitStatus {
