@@ -1248,6 +1248,52 @@ struct hunTests {
         #expect(HunTerminalPanelMetrics.clamp(280, availableHeight: 700) == 280)
     }
 
+    @Test func terminalResizeSurfaceOwnsMouseDragsInsteadOfMovingWindow() throws {
+        let surface = HunTerminalResizeSurfaceView(frame: .zero)
+        var resizedHeight: CGFloat?
+        surface.configure(
+            preferredHeight: 900,
+            availableHeight: 700,
+            onResize: { resizedHeight = $0 }
+        )
+
+        let mouseDown = try #require(
+            NSEvent.mouseEvent(
+                with: .leftMouseDown,
+                location: NSPoint(x: 20, y: 100),
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                eventNumber: 1,
+                clickCount: 1,
+                pressure: 1
+            )
+        )
+        let mouseDrag = try #require(
+            NSEvent.mouseEvent(
+                with: .leftMouseDragged,
+                location: NSPoint(x: 20, y: 50),
+                modifierFlags: [],
+                timestamp: 0.1,
+                windowNumber: 0,
+                context: nil,
+                eventNumber: 2,
+                clickCount: 1,
+                pressure: 1
+            )
+        )
+
+        #expect(surface.mouseDownCanMoveWindow == false)
+        #expect(surface.currentHeight == 530)
+        surface.mouseDown(with: mouseDown)
+        surface.mouseDragged(with: mouseDrag)
+        #expect(resizedHeight == 480)
+
+        #expect(surface.accessibilityPerformDecrement())
+        #expect(resizedHeight == 456)
+    }
+
     @Test func sleekScrollbarsOverlayContentWithoutChangingItsWidth() throws {
         let scrollView = HunStyledScrollView(
             frame: NSRect(x: 0, y: 0, width: 240, height: 180)

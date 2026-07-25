@@ -45,7 +45,6 @@ struct HunTerminalPanel: View {
     let availableHeight: CGFloat
     let onClose: () -> Void
 
-    @State private var dragOrigin: CGFloat?
     @State private var resizeHovering = false
 
     var body: some View {
@@ -72,47 +71,27 @@ struct HunTerminalPanel: View {
             focusTerminal(after: .milliseconds(90))
         }
         .onDisappear {
-            if resizeHovering {
-                NSCursor.pop()
-                resizeHovering = false
-            }
+            resizeHovering = false
         }
     }
 
     private var resizeHandle: some View {
         ZStack {
-            Color.clear
+            HunTerminalResizeSurface(
+                preferredHeight: $preferredHeight,
+                availableHeight: availableHeight
+            )
             Capsule()
                 .fill(resizeHovering ? AppTheme.textTertiary : AppTheme.dividerStrong)
                 .frame(width: 34, height: 2)
+                .allowsHitTesting(false)
         }
-        .frame(height: 7)
+        .frame(height: 11)
         .contentShape(Rectangle())
         .onHover { hovering in
             guard hovering != resizeHovering else { return }
             resizeHovering = hovering
-            if hovering {
-                NSCursor.resizeUpDown.push()
-            } else {
-                NSCursor.pop()
-            }
         }
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { value in
-                    if dragOrigin == nil {
-                        dragOrigin = preferredHeight
-                    }
-                    guard let dragOrigin else { return }
-                    preferredHeight = HunTerminalPanelMetrics.clamp(
-                        dragOrigin - value.translation.height,
-                        availableHeight: availableHeight
-                    )
-                }
-                .onEnded { _ in
-                    dragOrigin = nil
-                }
-        )
         .accessibilityLabel("Resize terminal")
     }
 
@@ -205,6 +184,116 @@ struct HunTerminalPanel: View {
             try? await Task.sleep(for: delay)
             session.focus()
         }
+    }
+}
+
+private struct HunTerminalResizeSurface: NSViewRepresentable {
+    @Binding var preferredHeight: CGFloat
+    let availableHeight: CGFloat
+
+    func makeNSView(context: Context) -> HunTerminalResizeSurfaceView {
+        let view = HunTerminalResizeSurfaceView(frame: .zero)
+        view.setAccessibilityElement(true)
+        view.setAccessibilityRole(.splitter)
+        view.setAccessibilityLabel("Resize terminal")
+        configure(view)
+        return view
+    }
+
+    func updateNSView(_ view: HunTerminalResizeSurfaceView, context: Context) {
+        configure(view)
+    }
+
+    private func configure(_ view: HunTerminalResizeSurfaceView) {
+        view.configure(
+            preferredHeight: preferredHeight,
+            availableHeight: availableHeight,
+            onResize: { preferredHeight = $0 }
+        )
+    }
+}
+
+final class HunTerminalResizeSurfaceView: NSView {
+    private(set) var currentHeight: CGFloat = 0
+    private var availableHeight: CGFloat = 0
+    private var onResize: ((CGFloat) -> Void)?
+
+    private var dragStartHeight: CGFloat?
+    private var dragStartWindowY: CGFloat?
+
+    override var mouseDownCanMoveWindow: Bool {
+        false
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .resizeUpDown)
+    }
+
+    func configure(
+        preferredHeight: CGFloat,
+        availableHeight: CGFloat,
+        onResize: @escaping (CGFloat) -> Void
+    ) {
+        self.availableHeight = availableHeight
+        self.onResize = onResize
+        currentHeight = HunTerminalPanelMetrics.clamp(
+            preferredHeight,
+            availableHeight: availableHeight
+        )
+        updateAccessibilityValues()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        dragStartHeight = currentHeight
+        dragStartWindowY = event.locationInWindow.y
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let dragStartHeight, let dragStartWindowY else { return }
+        let translation = event.locationInWindow.y - dragStartWindowY
+        resize(to: dragStartHeight + translation)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        dragStartHeight = nil
+        dragStartWindowY = nil
+    }
+
+    override func accessibilityPerformIncrement() -> Bool {
+        resize(to: currentHeight + HunTerminalPanelMetrics.accessibilityAdjustment)
+        return true
+    }
+
+    override func accessibilityPerformDecrement() -> Bool {
+        resize(to: currentHeight - HunTerminalPanelMetrics.accessibilityAdjustment)
+        return true
+    }
+
+    private func resize(to requestedHeight: CGFloat) {
+        let height = HunTerminalPanelMetrics.clamp(
+            requestedHeight,
+            availableHeight: availableHeight
+        )
+        guard height != currentHeight else { return }
+        currentHeight = height
+        onResize?(height)
+        updateAccessibilityValues()
+    }
+
+    private func updateAccessibilityValues() {
+        let maximumHeight = HunTerminalPanelMetrics.clamp(
+            .greatestFiniteMagnitude,
+            availableHeight: availableHeight
+        )
+        setAccessibilityValue(currentHeight)
+        setAccessibilityMinValue(HunTerminalPanelMetrics.minimumHeight)
+        setAccessibilityMaxValue(maximumHeight)
+        setAccessibilityValueDescription("\(Int(currentHeight)) points")
     }
 }
 
