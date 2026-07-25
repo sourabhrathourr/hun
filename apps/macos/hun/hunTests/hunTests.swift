@@ -6,6 +6,151 @@ import Testing
 
 @MainActor
 struct hunTests {
+    @Test func conventionalCommitFormatterNormalizesGeneratedFields() {
+        let suggestion = HunCommitMessageSuggestion(
+            type: "Feature",
+            scope: "Git Workspace",
+            subject: "fix: Add stage all."
+        )
+
+        #expect(
+            HunConventionalCommitFormatter.message(from: suggestion) ==
+                "feat(git-workspace): add stage all"
+        )
+    }
+
+    @Test func conventionalCommitFormatterKeepsTheMessageWithinSeventyTwoCharacters() {
+        let suggestion = HunCommitMessageSuggestion(
+            type: "performance",
+            scope: "",
+            subject: "improve rendering performance for extremely large staged source code changes"
+        )
+
+        let message = HunConventionalCommitFormatter.message(from: suggestion)
+
+        #expect(message.hasPrefix("perf: "))
+        #expect(message.count <= 72)
+        #expect(!message.hasSuffix("."))
+    }
+
+    @Test func commitMessageContextContainsOnlyStagedDiffsAndHonorsItsBudget() {
+        let staged = [
+            HunGitFileChange(
+                path: "Sources/GitWorkspace.swift",
+                originalPath: nil,
+                indexStatus: "M",
+                worktreeStatus: ".",
+                untracked: false,
+                conflicted: false
+            ),
+            HunGitFileChange(
+                path: "Tests/GitWorkspaceTests.swift",
+                originalPath: nil,
+                indexStatus: "A",
+                worktreeStatus: ".",
+                untracked: false,
+                conflicted: false
+            )
+        ]
+        let diffs = [
+            HunGitDiff(
+                path: staged[0].path,
+                staged: true,
+                content: "@@ -1 +1 @@\n-old\n+new\n" + String(repeating: "+detail\n", count: 100),
+                binary: false,
+                truncated: false
+            ),
+            HunGitDiff(
+                path: staged[1].path,
+                staged: true,
+                content: "@@ -0,0 +1 @@\n+test\n",
+                binary: false,
+                truncated: false
+            ),
+            HunGitDiff(
+                path: "README.md",
+                staged: false,
+                content: "+unstaged secret",
+                binary: false,
+                truncated: false
+            )
+        ]
+
+        let context = HunCommitMessageContext.build(
+            stagedChanges: staged,
+            diffs: diffs,
+            characterLimit: 420
+        )
+
+        #expect(context.stagedFileCount == 2)
+        #expect(context.prompt.count <= 420)
+        #expect(context.prompt.contains("Sources/GitWorkspace.swift"))
+        #expect(context.prompt.contains("Tests/GitWorkspaceTests.swift"))
+        #expect(!context.prompt.contains("unstaged secret"))
+        #expect(context.wasTruncated)
+    }
+
+    @Test func commitMessageGenerationUsesStagedDiffsAndFillsTheComposer() async {
+        let client = MockGitClient()
+        client.status = HunGitStatus(
+            isRepository: true,
+            branch: "main",
+            head: "abc123",
+            upstream: "origin/main",
+            ahead: 0,
+            behind: 0,
+            detached: false,
+            clean: false,
+            operation: nil,
+            files: [
+                HunGitFileChange(
+                    path: "Sources/GitWorkspace.swift",
+                    originalPath: nil,
+                    indexStatus: "M",
+                    worktreeStatus: ".",
+                    untracked: false,
+                    conflicted: false
+                )
+            ]
+        )
+        client.diff = HunGitDiff(
+            path: "Sources/GitWorkspace.swift",
+            staged: true,
+            content: "@@ -1 +1 @@\n-old\n+new\n",
+            binary: false,
+            truncated: false
+        )
+        let generator = MockCommitMessageGenerator(
+            result: "feat(git): generate commit messages"
+        )
+        let model = HunGitWorkspaceModel(client: client, commitMessageGenerator: generator)
+        await model.load(projectID: "app")
+
+        await model.generateCommitMessage()
+
+        #expect(model.commitMessage == "feat(git): generate commit messages")
+        #expect(client.diffRequests == 1)
+        #expect(generator.contexts.count == 1)
+        #expect(generator.contexts[0].prompt.contains("Sources/GitWorkspace.swift"))
+        #expect(!model.isGeneratingCommitMessage)
+        #expect(model.commitMessageGenerationNotice == "Generated on this Mac. Review before committing.")
+    }
+
+    @Test func unavailableCommitMessageGenerationDoesNotLoadDiffs() async {
+        let client = MockGitClient()
+        let generator = MockCommitMessageGenerator(
+            availability: .unavailable("Turn on Apple Intelligence in System Settings."),
+            result: ""
+        )
+        let model = HunGitWorkspaceModel(client: client, commitMessageGenerator: generator)
+        await model.load(projectID: "app")
+
+        await model.generateCommitMessage()
+
+        #expect(client.diffRequests == 0)
+        #expect(model.commitMessageGenerationNotice == "Turn on Apple Intelligence in System Settings.")
+    }
+
     @Test func untrackedGitFilesUseFriendlyStatusLetter() {
         #expect(HunGitFileStatus(code: "?").displayLetter == "U")
     }
@@ -1603,6 +1748,25 @@ private final class MockSupervisor: HunDaemonSupervisorProtocol {
 
     func restartDaemon() async throws {
         restartCount += 1
+    }
+}
+
+private final class MockCommitMessageGenerator: HunCommitMessageGenerating, @unchecked Sendable {
+    let availability: HunCommitMessageGenerationAvailability
+    let result: String
+    var contexts: [HunCommitMessageContext] = []
+
+    init(
+        availability: HunCommitMessageGenerationAvailability = .available,
+        result: String
+    ) {
+        self.availability = availability
+        self.result = result
+    }
+
+    func generate(from context: HunCommitMessageContext) async throws -> String {
+        contexts.append(context)
+        return result
     }
 }
 

@@ -1662,6 +1662,54 @@ private struct HunGitChangesPanel: View {
 
     private var commitComposer: some View {
         VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Text("COMMIT")
+                    .font(.system(size: 9, weight: .semibold))
+                    .tracking(0.7)
+                    .foregroundStyle(AppTheme.textTertiary)
+
+                Spacer(minLength: 8)
+
+                Button {
+                    Task { await model.generateCommitMessage() }
+                } label: {
+                    HStack(spacing: 5) {
+                        if model.isGeneratingCommitMessage {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .frame(width: 11, height: 11)
+                        } else {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 9.5, weight: .semibold))
+                        }
+
+                        Text(model.isGeneratingCommitMessage ? "Generating…" : "Generate")
+                            .font(.system(size: 10.5, weight: .medium))
+                    }
+                    .foregroundStyle(
+                        commitMessageGenerationDisabled
+                            ? AppTheme.textTertiary
+                            : AppTheme.textSecondary
+                    )
+                    .padding(.horizontal, 8)
+                    .frame(height: 22)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(AppTheme.buttonFill)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .stroke(AppTheme.divider, lineWidth: 1)
+                    )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(commitMessageGenerationDisabled)
+                .help(commitMessageGenerationHelp)
+                .accessibilityLabel("Generate commit message")
+            }
+            .frame(height: 22)
+
             TextEditor(text: $model.commitMessage)
                 .font(.system(size: 11.5))
                 .foregroundStyle(AppTheme.textPrimary)
@@ -1691,6 +1739,17 @@ private struct HunGitChangesPanel: View {
                             .allowsHitTesting(false)
                     }
                 }
+
+            HStack(spacing: 5) {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 8))
+                Text(commitMessageGenerationStatus)
+                    .font(.system(size: 9.5))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(AppTheme.textTertiary)
+            .frame(height: 12)
 
             HStack(spacing: 6) {
                 commitButton(
@@ -1739,8 +1798,37 @@ private struct HunGitChangesPanel: View {
     private var commitDisabled: Bool {
         staged.isEmpty ||
             model.isCommitAndPushInFlight ||
+            model.isGeneratingCommitMessage ||
             model.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
             model.isBusy
+    }
+
+    private var commitMessageGenerationDisabled: Bool {
+        staged.isEmpty ||
+            model.isBusy ||
+            model.isGeneratingCommitMessage ||
+            model.commitMessageGenerationAvailability != .available
+    }
+
+    private var commitMessageGenerationStatus: String {
+        if let notice = model.commitMessageGenerationNotice {
+            return notice
+        }
+        switch model.commitMessageGenerationAvailability {
+        case .available:
+            return "On-device · staged changes only"
+        case let .unavailable(reason):
+            return reason
+        }
+    }
+
+    private var commitMessageGenerationHelp: String {
+        switch model.commitMessageGenerationAvailability {
+        case .available:
+            return "Generate a Conventional Commit message from staged changes on this Mac"
+        case let .unavailable(reason):
+            return reason
+        }
     }
 
     private var primaryCommitTitle: String {

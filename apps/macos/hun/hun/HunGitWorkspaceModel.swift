@@ -330,24 +330,37 @@ final class HunGitWorkspaceModel {
     var isBranchPickerPresented = false
     var isUpdateBranchPresented = false
     private(set) var isCommitAndPushInFlight = false
+    private(set) var isGeneratingCommitMessage = false
+    private(set) var commitMessageGenerationNotice: String?
     private(set) var lastRemoteCheckAt: Date?
     private(set) var lastUpdateResult: HunGitUpdateResult?
     private(set) var updateBranchPreflightStatus: HunGitStatus?
     private(set) var operation: Operation?
 
     private let client: HunGitClientProtocol
+    private let commitMessageGenerator: any HunCommitMessageGenerating
     private var activeProjectID: String?
+    private var commitMessageGeneration = 0
     private var diffGeneration = 0
     private var diffParsingTask: Task<HunGitDiffDocument, Never>?
     private var statusGeneration = 0
     private var silentRefreshInFlight = false
 
-    init(client: HunGitClientProtocol = HunDaemonClient()) {
+    init(
+        client: HunGitClientProtocol = HunDaemonClient(),
+        commitMessageGenerator: any HunCommitMessageGenerating =
+            HunCommitMessageGeneratorFactory.makeDefault()
+    ) {
         self.client = client
+        self.commitMessageGenerator = commitMessageGenerator
     }
 
     var isBusy: Bool {
         operation != nil
+    }
+
+    var commitMessageGenerationAvailability: HunCommitMessageGenerationAvailability {
+        commitMessageGenerator.availability
     }
 
     var filteredBranches: [HunGitBranch] {
@@ -366,6 +379,7 @@ final class HunGitWorkspaceModel {
         if activeProjectID != projectID {
             statusGeneration += 1
             diffGeneration += 1
+            commitMessageGeneration += 1
             diffParsingTask?.cancel()
             diffParsingTask = nil
             silentRefreshInFlight = false
@@ -385,6 +399,8 @@ final class HunGitWorkspaceModel {
             isBranchPickerPresented = false
             isUpdateBranchPresented = false
             isCommitAndPushInFlight = false
+            isGeneratingCommitMessage = false
+            commitMessageGenerationNotice = nil
             lastRemoteCheckAt = nil
             lastUpdateResult = nil
             updateBranchPreflightStatus = nil
@@ -521,6 +537,9 @@ final class HunGitWorkspaceModel {
         let succeeded = await applyStatusOperation(.staging) {
             try await client.gitStage(project: projectID, path: change.path)
         }
+        if succeeded {
+            commitMessageGenerationNotice = nil
+        }
         if succeeded,
            status?.files.contains(where: { $0.path == change.path && $0.staged }) == true,
            let updated = status?.files.first(where: { $0.path == change.path }) {
@@ -539,6 +558,9 @@ final class HunGitWorkspaceModel {
         let succeeded = await applyStatusOperation(.staging) {
             try await client.gitStageAll(project: projectID)
         }
+        if succeeded {
+            commitMessageGenerationNotice = nil
+        }
         if succeeded,
            let selectedPathBeforeStaging,
            let updated = status?.files.first(where: {
@@ -553,10 +575,87 @@ final class HunGitWorkspaceModel {
         let succeeded = await applyStatusOperation(.unstaging) {
             try await client.gitUnstage(project: projectID, path: change.path)
         }
+        if succeeded {
+            commitMessageGenerationNotice = nil
+        }
         if succeeded,
            status?.files.contains(where: { $0.path == change.path && $0.unstaged }) == true,
            let updated = status?.files.first(where: { $0.path == change.path }) {
             await loadDiff(for: updated, staged: false)
+        }
+    }
+
+    func generateCommitMessage() async {
+        guard !isGeneratingCommitMessage else { return }
+        guard case .available = commitMessageGenerator.availability else {
+            commitMessageGenerationNotice =
+                commitMessageGenerator.availability.unavailableReason ??
+                "Apple Intelligence is unavailable."
+            return
+        }
+        guard let projectID = activeProjectID,
+              let stagedChanges = status?.stagedFiles,
+              !stagedChanges.isEmpty
+        else {
+            commitMessageGenerationNotice = "Stage changes before generating a commit message."
+            return
+        }
+
+        commitMessageGeneration += 1
+        let generation = commitMessageGeneration
+        isGeneratingCommitMessage = true
+        commitMessageGenerationNotice = nil
+        defer {
+            if generation == commitMessageGeneration {
+                isGeneratingCommitMessage = false
+            }
+        }
+
+        do {
+            var diffs: [HunGitDiff] = []
+            var collectedCharacters = 0
+            let diffBudget = 10_000
+
+            for change in stagedChanges.prefix(12) where collectedCharacters < diffBudget {
+                let diff = try await client.gitDiff(
+                    project: projectID,
+                    path: change.path,
+                    staged: true
+                )
+                let remaining = max(0, diffBudget - collectedCharacters)
+                let excerpt = String(diff.content.prefix(remaining))
+                diffs.append(
+                    HunGitDiff(
+                        path: diff.path,
+                        staged: true,
+                        content: excerpt,
+                        binary: diff.binary,
+                        truncated: diff.truncated || excerpt.count < diff.content.count
+                    )
+                )
+                collectedCharacters += excerpt.count
+            }
+
+            let context = HunCommitMessageContext.build(
+                stagedChanges: stagedChanges,
+                diffs: diffs
+            )
+            let message = try await commitMessageGenerator.generate(from: context)
+            guard generation == commitMessageGeneration,
+                  activeProjectID == projectID,
+                  status?.stagedFiles == stagedChanges
+            else {
+                return
+            }
+            commitMessage = message
+            commitMessageGenerationNotice = "Generated on this Mac. Review before committing."
+        } catch {
+            guard generation == commitMessageGeneration,
+                  activeProjectID == projectID
+            else {
+                return
+            }
+            commitMessageGenerationNotice = error.localizedDescription
         }
     }
 
@@ -576,6 +675,7 @@ final class HunGitWorkspaceModel {
         }
         if succeeded {
             commitMessage = ""
+            commitMessageGenerationNotice = nil
             selectedDiffMetadata = nil
             selectedDiffDocument = nil
             selectedPath = nil
