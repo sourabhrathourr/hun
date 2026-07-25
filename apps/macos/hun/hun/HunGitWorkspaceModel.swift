@@ -1,6 +1,41 @@
 import Foundation
 import Observation
 
+nonisolated enum HunGitSyncState: Equatable, Sendable {
+    case upToDate(upstream: String)
+    case ahead(count: Int, upstream: String)
+    case behind(count: Int, upstream: String)
+    case diverged(ahead: Int, behind: Int, upstream: String)
+    case unpublished(branch: String)
+    case detached
+}
+
+nonisolated enum HunGitRemoteCheckAge: Equatable, Sendable {
+    case never
+    case justNow
+    case minutes(Int)
+    case hours(Int)
+    case days(Int)
+
+    init(checkedAt: Date?, relativeTo now: Date) {
+        guard let checkedAt else {
+            self = .never
+            return
+        }
+
+        let elapsed = max(0, now.timeIntervalSince(checkedAt))
+        if elapsed < 60 {
+            self = .justNow
+        } else if elapsed < 3_600 {
+            self = .minutes(max(1, Int(elapsed / 60)))
+        } else if elapsed < 86_400 {
+            self = .hours(max(1, Int(elapsed / 3_600)))
+        } else {
+            self = .days(max(1, Int(elapsed / 86_400)))
+        }
+    }
+}
+
 nonisolated struct HunGitStatus: Decodable, Equatable, Sendable {
     let isRepository: Bool
     let branch: String
@@ -78,6 +113,25 @@ nonisolated struct HunGitStatus: Decodable, Equatable, Sendable {
 
     var conflictedFiles: [HunGitFileChange] {
         files.filter(\.conflicted)
+    }
+
+    var syncState: HunGitSyncState {
+        if detached {
+            return .detached
+        }
+        if upstream.isEmpty {
+            return .unpublished(branch: branch)
+        }
+        if ahead > 0, behind > 0 {
+            return .diverged(ahead: ahead, behind: behind, upstream: upstream)
+        }
+        if ahead > 0 {
+            return .ahead(count: ahead, upstream: upstream)
+        }
+        if behind > 0 {
+            return .behind(count: behind, upstream: upstream)
+        }
+        return .upToDate(upstream: upstream)
     }
 }
 
@@ -241,6 +295,8 @@ final class HunGitWorkspaceModel {
     var pendingBranchSwitch: String?
     var isWorkspacePresented = false
     var isBranchPickerPresented = false
+    private(set) var isCommitAndPushInFlight = false
+    private(set) var lastRemoteCheckAt: Date?
     private(set) var operation: Operation?
 
     private let client: HunGitClientProtocol
@@ -290,6 +346,9 @@ final class HunGitWorkspaceModel {
             branchSearch = ""
             pendingBranchSwitch = nil
             errorMessage = nil
+            isBranchPickerPresented = false
+            isCommitAndPushInFlight = false
+            lastRemoteCheckAt = nil
         }
         await refresh()
     }
@@ -460,6 +519,14 @@ final class HunGitWorkspaceModel {
         return succeeded
     }
 
+    func commitAndPush() async -> Bool {
+        guard !isCommitAndPushInFlight else { return false }
+        isCommitAndPushInFlight = true
+        defer { isCommitAndPushInFlight = false }
+        guard await commit() else { return false }
+        return await push()
+    }
+
     func createBranch(_ branch: String) async -> Bool {
         guard let projectID = activeProjectID else { return false }
         let name = branch.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -496,28 +563,41 @@ final class HunGitWorkspaceModel {
         return await switchBranch(branch, stash: true)
     }
 
-    func fetch() async {
-        guard let projectID = activeProjectID else { return }
+    @discardableResult
+    func fetch() async -> Bool {
+        guard let projectID = activeProjectID else { return false }
         let succeeded = await applyStatusOperation(.fetching) {
             try await client.gitFetch(project: projectID)
         }
         if succeeded {
+            lastRemoteCheckAt = Date()
             await loadBranches()
         }
+        return succeeded
     }
 
-    func pull() async {
-        guard let projectID = activeProjectID else { return }
-        await applyStatusOperation(.pulling) {
+    @discardableResult
+    func pull() async -> Bool {
+        guard let projectID = activeProjectID else { return false }
+        let succeeded = await applyStatusOperation(.pulling) {
             try await client.gitPull(project: projectID)
         }
+        if succeeded {
+            lastRemoteCheckAt = Date()
+        }
+        return succeeded
     }
 
-    func push() async {
-        guard let projectID = activeProjectID else { return }
-        await applyStatusOperation(.pushing) {
+    @discardableResult
+    func push() async -> Bool {
+        guard let projectID = activeProjectID else { return false }
+        let succeeded = await applyStatusOperation(.pushing) {
             try await client.gitPush(project: projectID)
         }
+        if succeeded {
+            lastRemoteCheckAt = Date()
+        }
+        return succeeded
     }
 
     func dismissError() {

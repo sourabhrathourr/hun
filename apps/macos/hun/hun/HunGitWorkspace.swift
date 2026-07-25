@@ -1,6 +1,141 @@
 import AppKit
 import SwiftUI
 
+@MainActor
+private extension HunGitSyncState {
+    var headline: String {
+        switch self {
+        case let .upToDate(upstream):
+            "Up to date with \(upstream)"
+        case let .ahead(count, _):
+            "\(count) \(count == 1 ? "commit" : "commits") ready to push"
+        case let .behind(count, _):
+            "\(count) remote \(count == 1 ? "commit" : "commits") ready to pull"
+        case let .diverged(ahead, behind, _):
+            "Diverged · \(ahead) local, \(behind) remote"
+        case let .unpublished(branch):
+            "\(branch) has not been published"
+        case .detached:
+            "Detached HEAD"
+        }
+    }
+
+    var compactLabel: String {
+        switch self {
+        case .upToDate:
+            "Up to date"
+        case let .ahead(count, _):
+            "\(count) to push"
+        case let .behind(count, _):
+            "\(count) to pull"
+        case .diverged:
+            "Diverged"
+        case .unpublished:
+            "Not published"
+        case .detached:
+            "Detached"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .upToDate:
+            "checkmark"
+        case .ahead:
+            "arrow.up"
+        case .behind:
+            "arrow.down"
+        case .diverged:
+            "arrow.triangle.branch"
+        case .unpublished:
+            "icloud.and.arrow.up"
+        case .detached:
+            "link.badge.plus"
+        }
+    }
+
+    var tone: Color {
+        switch self {
+        case .upToDate:
+            AppTheme.success
+        case .ahead, .behind, .unpublished:
+            AppTheme.warning
+        case .diverged, .detached:
+            AppTheme.danger
+        }
+    }
+
+    var guidance: String? {
+        switch self {
+        case .diverged:
+            "Local and remote both changed · rebase or merge before pushing"
+        case .detached:
+            "Check out a branch before pulling or pushing"
+        case .upToDate, .ahead, .behind, .unpublished:
+            nil
+        }
+    }
+
+    func headline(remoteCheckAge: HunGitRemoteCheckAge) -> String {
+        if case let .upToDate(upstream) = self, remoteCheckAge == .never {
+            return "Fetch to confirm with \(upstream)"
+        }
+        return headline
+    }
+
+    func compactLabel(remoteCheckAge: HunGitRemoteCheckAge) -> String {
+        if case .upToDate = self {
+            switch remoteCheckAge {
+            case .never:
+                return "Fetch to check"
+            case .justNow:
+                return compactLabel
+            case let .minutes(count):
+                return "Up to date · \(count)m"
+            case .hours, .days:
+                return "Fetch to refresh"
+            }
+        }
+        return compactLabel
+    }
+
+    func icon(remoteCheckAge: HunGitRemoteCheckAge) -> String {
+        isUnverified(remoteCheckAge) ? "arrow.clockwise" : icon
+    }
+
+    func tone(remoteCheckAge: HunGitRemoteCheckAge) -> Color {
+        isUnverified(remoteCheckAge) ? AppTheme.textSecondary : tone
+    }
+
+    private func isUnverified(_ remoteCheckAge: HunGitRemoteCheckAge) -> Bool {
+        guard case .upToDate = self else { return false }
+        return switch remoteCheckAge {
+        case .never, .hours, .days:
+            true
+        case .justNow, .minutes:
+            false
+        }
+    }
+}
+
+@MainActor
+private extension HunGitRemoteCheckAge {
+    var detail: String {
+        switch self {
+        case .never:
+            "Fetch checks the remote without changing your files"
+        case .justNow:
+            "Remote checked just now"
+        case let .minutes(count):
+            "Remote checked \(count)m ago"
+        case let .hours(count):
+            "Remote checked \(count)h ago · fetch to refresh"
+        case let .days(count):
+            "Remote checked \(count)d ago · fetch to refresh"
+        }
+    }
+}
+
 struct HunRepositoryStatusCapsule: View {
     let project: HunProject
     @Bindable var model: HunGitWorkspaceModel
@@ -22,79 +157,93 @@ struct HunRepositoryStatusCapsule: View {
         return project.branch ?? "Repository"
     }
 
-    private var tone: Color {
-        guard let status else { return AppTheme.textTertiary }
-        if !status.conflictedFiles.isEmpty { return AppTheme.danger }
-        if status.operation != nil || !status.clean || status.ahead > 0 || status.behind > 0 {
-            return AppTheme.warning
-        }
-        return AppTheme.textSecondary
-    }
-
     var body: some View {
         Button {
-            model.isBranchPickerPresented.toggle()
-            if model.isBranchPickerPresented {
-                Task { await model.loadBranches() }
-            }
+            model.isBranchPickerPresented = true
         } label: {
-            HStack(spacing: 5) {
-                Image(systemName: "arrow.triangle.branch")
-                    .font(.system(size: 9.5, weight: .semibold))
+            TimelineView(.periodic(from: .now, by: 60)) { context in
+                let remoteCheckAge = HunGitRemoteCheckAge(
+                    checkedAt: model.lastRemoteCheckAt,
+                    relativeTo: context.date
+                )
+                let tone = capsuleTone(remoteCheckAge: remoteCheckAge)
 
-                Text(branchName)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.system(size: 9.5, weight: .semibold))
 
-                if let status {
-                    if !status.conflictedFiles.isEmpty {
-                        Text("· \(status.conflictedFiles.count) conflicts")
-                    } else if status.changeCount > 0 {
-                        Text("· \(status.changeCount) changes")
-                    }
-                    if status.ahead > 0 {
-                        Text("↑\(status.ahead)")
+                    Text(branchName)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+
+                    if let status {
+                        if !status.conflictedFiles.isEmpty {
+                            Text("· \(status.conflictedFiles.count) conflicts")
+                        } else if status.changeCount > 0 {
+                            Text("· \(status.changeCount) changes")
+                        }
+                        Text("· \(status.syncState.compactLabel(remoteCheckAge: remoteCheckAge))")
                             .monospacedDigit()
+                    } else if model.operation == .refreshing {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .scaleEffect(0.55)
+                            .frame(width: 9, height: 9)
                     }
-                    if status.behind > 0 {
-                        Text("↓\(status.behind)")
-                            .monospacedDigit()
-                    }
-                } else if model.operation == .refreshing {
-                    ProgressView()
-                        .controlSize(.mini)
-                        .scaleEffect(0.55)
-                        .frame(width: 9, height: 9)
+
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 7.5, weight: .bold))
+                        .opacity(0.7)
                 }
-
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 7.5, weight: .bold))
-                    .opacity(0.7)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(tone)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(hovering ? tone.opacity(0.10) : AppTheme.chipFill)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(hovering ? tone.opacity(0.24) : AppTheme.divider, lineWidth: 1)
+                )
+                .contentShape(Rectangle())
             }
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(tone)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(hovering ? tone.opacity(0.10) : AppTheme.chipFill)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(hovering ? tone.opacity(0.24) : AppTheme.divider, lineWidth: 1)
-            )
-            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help("Switch branch or open Git changes")
-        .popover(isPresented: $model.isBranchPickerPresented, arrowEdge: .bottom) {
-            HunGitBranchPopover(model: model)
-        }
+        .help("Open branch switcher and Git sync status")
+    }
+
+    private func capsuleTone(remoteCheckAge: HunGitRemoteCheckAge) -> Color {
+        guard let status else { return AppTheme.textTertiary }
+        if !status.conflictedFiles.isEmpty { return AppTheme.danger }
+        if status.operation != nil || !status.clean { return AppTheme.warning }
+        return status.syncState.tone(remoteCheckAge: remoteCheckAge)
     }
 }
 
-private struct HunGitBranchPopover: View {
+struct HunGitBranchDialogOverlay: View {
+    @Bindable var model: HunGitWorkspaceModel
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.56)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    model.isBranchPickerPresented = false
+                }
+
+            HunGitBranchDialog(model: model)
+                .padding(28)
+        }
+        .ignoresSafeArea()
+        .transition(.opacity)
+        .accessibilityAddTraits(.isModal)
+    }
+}
+
+private struct HunGitBranchDialog: View {
     @Bindable var model: HunGitWorkspaceModel
     @FocusState private var searchFocused: Bool
     @State private var keyboardSelectionID: String?
@@ -120,6 +269,11 @@ private struct HunGitBranchPopover: View {
             branchSearch
 
             Rectangle().fill(AppTheme.divider).frame(height: 1)
+
+            if let status = model.status, status.isRepository {
+                repositoryContext(status)
+                Rectangle().fill(AppTheme.divider).frame(height: 1)
+            }
 
             if let error = model.errorMessage {
                 branchError(error)
@@ -158,12 +312,21 @@ private struct HunGitBranchPopover: View {
             Rectangle().fill(AppTheme.divider).frame(height: 1)
             branchFooter
         }
-        .frame(width: 480, height: 450)
-        .background(AppTheme.elevated)
+        .frame(width: 540, height: 500)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(AppTheme.elevated)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(0.11), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(alignment: .topLeading) {
             HunGitBranchKeyboardMonitor(
                 onMove: moveBranchSelection,
-                onSubmit: submitBranchSearch
+                onSubmit: submitBranchSearch,
+                onDismiss: { model.isBranchPickerPresented = false }
             )
             .frame(width: 0, height: 0)
         }
@@ -175,6 +338,9 @@ private struct HunGitBranchPopover: View {
             model.branchSearch = ""
             keyboardSelectionID = nil
         }
+        .onExitCommand {
+            model.isBranchPickerPresented = false
+        }
     }
 
     private var branchSearch: some View {
@@ -182,7 +348,7 @@ private struct HunGitBranchPopover: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(AppTheme.textTertiary)
-            TextField("Search or create a branch…", text: $model.branchSearch)
+            TextField("Search branches or create a new one…", text: $model.branchSearch)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
                 .foregroundStyle(AppTheme.textPrimary)
@@ -204,6 +370,53 @@ private struct HunGitBranchPopover: View {
         .padding(.horizontal, 14)
         .frame(height: 44)
         .background(AppTheme.searchField)
+    }
+
+    private func repositoryContext(_ status: HunGitStatus) -> some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            let remoteCheckAge = HunGitRemoteCheckAge(
+                checkedAt: model.lastRemoteCheckAt,
+                relativeTo: context.date
+            )
+            let tone = status.syncState.tone(remoteCheckAge: remoteCheckAge)
+
+            HStack(spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(tone.opacity(0.10))
+                        .frame(width: 30, height: 30)
+                    Image(systemName: status.syncState.icon(remoteCheckAge: remoteCheckAge))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(tone)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(status.syncState.headline(remoteCheckAge: remoteCheckAge))
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(AppTheme.textPrimary)
+                    Text(model.operation == .fetching
+                        ? "Checking the remote for new commits…"
+                        : status.syncState.guidance ?? remoteCheckAge.detail)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(AppTheme.textTertiary)
+                }
+
+                Spacer()
+
+                Text(status.branch.isEmpty ? "DETACHED" : status.branch)
+                    .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .padding(.horizontal, 8)
+                    .frame(height: 22)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(AppTheme.chipFill)
+                    )
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 50)
+        .background(AppTheme.appBackground.opacity(0.42))
     }
 
     private func submitBranchSearch() {
@@ -414,28 +627,58 @@ private struct HunGitBranchPopover: View {
 
             Spacer()
 
+            HStack(spacing: 8) {
+                keyHint("↑↓", label: "Navigate")
+                keyHint("↩", label: "Switch")
+                keyHint("esc", label: "Close")
+            }
+
+            Rectangle()
+                .fill(AppTheme.divider)
+                .frame(width: 1, height: 16)
+                .padding(.horizontal, 2)
+
             Button {
                 Task { await model.fetch() }
             } label: {
-                Label("Fetch", systemImage: "arrow.down")
+                Label("Fetch remote", systemImage: "arrow.down.circle")
             }
             .buttonStyle(.plain)
             .foregroundStyle(AppTheme.textSecondary)
             .disabled(model.isBusy)
+            .help("Check the remote for new commits without changing local files")
         }
         .font(.system(size: 11.5, weight: .medium))
         .padding(.horizontal, 14)
         .frame(height: 42)
         .background(AppTheme.buttonFill)
     }
+
+    private func keyHint(_ key: String, label: String) -> some View {
+        HStack(spacing: 4) {
+            Text(key)
+                .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                .foregroundStyle(AppTheme.textSecondary)
+                .padding(.horizontal, 4)
+                .frame(height: 17)
+                .background(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(AppTheme.chipFill)
+                )
+            Text(label)
+                .font(.system(size: 9.5))
+                .foregroundStyle(AppTheme.textTertiary)
+        }
+    }
 }
 
 private struct HunGitBranchKeyboardMonitor: NSViewRepresentable {
     let onMove: (MoveCommandDirection) -> Void
     let onSubmit: () -> Void
+    let onDismiss: () -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onMove: onMove, onSubmit: onSubmit)
+        Coordinator(onMove: onMove, onSubmit: onSubmit, onDismiss: onDismiss)
     }
 
     func makeNSView(context: Context) -> HunGitBranchMonitorView {
@@ -449,6 +692,7 @@ private struct HunGitBranchKeyboardMonitor: NSViewRepresentable {
     func updateNSView(_ view: HunGitBranchMonitorView, context: Context) {
         context.coordinator.onMove = onMove
         context.coordinator.onSubmit = onSubmit
+        context.coordinator.onDismiss = onDismiss
         context.coordinator.install(for: view.window)
     }
 
@@ -460,15 +704,18 @@ private struct HunGitBranchKeyboardMonitor: NSViewRepresentable {
     final class Coordinator {
         var onMove: (MoveCommandDirection) -> Void
         var onSubmit: () -> Void
+        var onDismiss: () -> Void
         private weak var window: NSWindow?
         private var eventMonitor: Any?
 
         init(
             onMove: @escaping (MoveCommandDirection) -> Void,
-            onSubmit: @escaping () -> Void
+            onSubmit: @escaping () -> Void,
+            onDismiss: @escaping () -> Void
         ) {
             self.onMove = onMove
             self.onSubmit = onSubmit
+            self.onDismiss = onDismiss
         }
 
         func install(for window: NSWindow?) {
@@ -495,6 +742,9 @@ private struct HunGitBranchKeyboardMonitor: NSViewRepresentable {
                     return nil
                 case 36, 76:
                     onSubmit()
+                    return nil
+                case 53:
+                    onDismiss()
                     return nil
                 default:
                     return event
@@ -636,44 +886,31 @@ struct HunGitWorkspaceView: View {
     }
 
     private var workspaceToolbar: some View {
-        HStack(spacing: 8) {
-            Text("Changes")
-                .font(.system(size: 12.5, weight: .semibold))
-                .foregroundStyle(AppTheme.textPrimary)
-
-            if let status = model.status {
-                Text(repositorySummary(status))
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(summaryColor(status))
-                    .lineLimit(1)
+        HStack(spacing: 10) {
+            if let status = model.status, status.isRepository {
+                syncSummary(status)
+            } else {
+                Text("Git status")
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(AppTheme.textPrimary)
             }
 
             Spacer()
 
             HunGitToolbarButton(
-                title: "Fetch",
-                systemImage: "arrow.down",
+                title: "Fetch remote",
+                systemImage: "arrow.down.circle",
                 loading: model.operation == .fetching,
-                disabled: model.isBusy
+                disabled: model.isBusy,
+                help: "Check the remote for new commits without changing local files"
             ) {
                 Task { await model.fetch() }
             }
-            HunGitToolbarButton(
-                title: "Pull",
-                systemImage: "arrow.down.to.line",
-                loading: model.operation == .pulling,
-                disabled: model.isBusy || model.status?.upstream.isEmpty != false
-            ) {
-                Task { await model.pull() }
+
+            if let status = model.status {
+                syncAction(status.syncState)
             }
-            HunGitToolbarButton(
-                title: "Push",
-                systemImage: "arrow.up.to.line",
-                loading: model.operation == .pushing,
-                disabled: model.isBusy || model.status?.detached == true
-            ) {
-                Task { await model.push() }
-            }
+
             HunGitToolbarButton(
                 title: nil,
                 systemImage: "arrow.clockwise",
@@ -685,35 +922,108 @@ struct HunGitWorkspaceView: View {
             }
         }
         .padding(.horizontal, 14)
-        .frame(height: 42)
+        .frame(height: 52)
         .background(AppTheme.appBackground)
     }
 
-    private func repositorySummary(_ status: HunGitStatus) -> String {
+    private func syncSummary(_ status: HunGitStatus) -> some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            let remoteCheckAge = HunGitRemoteCheckAge(
+                checkedAt: model.lastRemoteCheckAt,
+                relativeTo: context.date
+            )
+            let tone = status.syncState.tone(remoteCheckAge: remoteCheckAge)
+
+            HStack(spacing: 9) {
+                ZStack {
+                    Circle()
+                        .fill(tone.opacity(0.10))
+                        .frame(width: 26, height: 26)
+                    Image(systemName: status.syncState.icon(remoteCheckAge: remoteCheckAge))
+                        .font(.system(size: 9.5, weight: .bold))
+                        .foregroundStyle(tone)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(status.syncState.headline(remoteCheckAge: remoteCheckAge))
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(AppTheme.textPrimary)
+                        .lineLimit(1)
+                    Text(syncDetail(status, remoteCheckAge: remoteCheckAge))
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(AppTheme.textTertiary)
+                        .lineLimit(1)
+                }
+            }
+        }
+    }
+
+    private func syncDetail(
+        _ status: HunGitStatus,
+        remoteCheckAge: HunGitRemoteCheckAge
+    ) -> String {
+        switch model.operation {
+        case .fetching:
+            return "Checking the remote without changing local files…"
+        case .pulling:
+            return "Fast-forwarding to the remote branch…"
+        case .pushing:
+            return "Sending local commits to the remote…"
+        default:
+            break
+        }
         if let operation = status.operation {
             return "\(operation.capitalized) in progress"
         }
         if !status.conflictedFiles.isEmpty {
-            return "\(status.conflictedFiles.count) conflicts"
+            return "\(status.conflictedFiles.count) conflicts need attention"
         }
-        if status.clean {
-            return status.ahead == 0 && status.behind == 0 ? "Clean" : divergence(status)
+        if let guidance = status.syncState.guidance {
+            return guidance
         }
-        return "\(status.changeCount) changes\(divergence(status).isEmpty ? "" : " · \(divergence(status))")"
+        let workingTree =
+            status.changeCount == 0
+                ? "Working tree clean"
+                : "\(status.changeCount) uncommitted \(status.changeCount == 1 ? "change" : "changes")"
+        return "\(workingTree) · \(remoteCheckAge.detail.lowercased())"
     }
 
-    private func divergence(_ status: HunGitStatus) -> String {
-        [status.ahead > 0 ? "↑\(status.ahead)" : nil, status.behind > 0 ? "↓\(status.behind)" : nil]
-            .compactMap { $0 }
-            .joined(separator: " ")
-    }
-
-    private func summaryColor(_ status: HunGitStatus) -> Color {
-        if !status.conflictedFiles.isEmpty { return AppTheme.danger }
-        if status.operation != nil || !status.clean || status.ahead > 0 || status.behind > 0 {
-            return AppTheme.warning
+    @ViewBuilder
+    private func syncAction(_ state: HunGitSyncState) -> some View {
+        switch state {
+        case let .ahead(count, _):
+            HunGitToolbarButton(
+                title: "Push \(count)",
+                systemImage: "arrow.up.to.line",
+                loading: model.operation == .pushing,
+                disabled: model.isBusy,
+                help: "Push \(count) local \(count == 1 ? "commit" : "commits") to the remote"
+            ) {
+                Task { await model.push() }
+            }
+        case let .behind(count, _):
+            HunGitToolbarButton(
+                title: "Pull \(count)",
+                systemImage: "arrow.down.to.line",
+                loading: model.operation == .pulling,
+                disabled: model.isBusy,
+                help: "Fast-forward to \(count) remote \(count == 1 ? "commit" : "commits")"
+            ) {
+                Task { await model.pull() }
+            }
+        case .unpublished:
+            HunGitToolbarButton(
+                title: "Publish branch",
+                systemImage: "icloud.and.arrow.up",
+                loading: model.operation == .pushing,
+                disabled: model.isBusy,
+                help: "Push this branch to origin and set its upstream"
+            ) {
+                Task { await model.push() }
+            }
+        case .upToDate, .diverged, .detached:
+            EmptyView()
         }
-        return AppTheme.textTertiary
     }
 
     private func workspaceError(_ message: String) -> some View {
@@ -897,39 +1207,77 @@ private struct HunGitChangesPanel: View {
                     }
                 }
 
-            Button {
-                Task { _ = await model.commit() }
-            } label: {
-                HStack(spacing: 6) {
-                    if model.operation == .committing {
-                        ProgressView()
-                            .controlSize(.mini)
-                    } else {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 9, weight: .bold))
-                    }
-                    Text(staged.isEmpty ? "Commit staged changes" : "Commit \(staged.count) \(staged.count == 1 ? "file" : "files")")
-                    Spacer()
+            HStack(spacing: 6) {
+                commitButton(
+                    title: "Commit",
+                    systemImage: "checkmark",
+                    prominent: true,
+                    loading: model.operation == .committing && !model.isCommitAndPushInFlight
+                ) {
+                    Task { _ = await model.commit() }
                 }
-                .font(.system(size: 11.5, weight: .semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 10)
-                .frame(height: 30)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(AppTheme.accent.opacity(staged.isEmpty ? 0.35 : 0.92))
-                )
-                .contentShape(Rectangle())
+
+                commitButton(
+                    title: "Commit & Push",
+                    systemImage: "arrow.up",
+                    prominent: false,
+                    loading: model.isCommitAndPushInFlight
+                ) {
+                    Task { _ = await model.commitAndPush() }
+                }
             }
-            .buttonStyle(.plain)
-            .disabled(
-                staged.isEmpty ||
-                    model.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                    model.isBusy
-            )
         }
         .padding(10)
         .background(AppTheme.buttonFill)
+    }
+
+    private func commitButton(
+        title: String,
+        systemImage: String,
+        prominent: Bool,
+        loading: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if loading {
+                    ProgressView()
+                        .controlSize(.mini)
+                } else {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 9, weight: .bold))
+                }
+                Text(title)
+                    .lineLimit(1)
+            }
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(prominent ? Color.white : AppTheme.textSecondary)
+            .frame(maxWidth: .infinity)
+            .frame(height: 30)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(prominent ? AppTheme.accent.opacity(0.92) : AppTheme.chipFill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(prominent ? Color.clear : AppTheme.divider, lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(commitDisabled)
+        .help(
+            prominent
+                ? "Create a local commit from staged changes"
+                : "Create the commit, then push it to the remote"
+        )
+    }
+
+    private var commitDisabled: Bool {
+        staged.isEmpty ||
+            model.isCommitAndPushInFlight ||
+            model.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            model.isBusy
     }
 }
 

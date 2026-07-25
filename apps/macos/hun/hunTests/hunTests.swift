@@ -6,6 +6,36 @@ import Testing
 
 @MainActor
 struct hunTests {
+    @Test func gitStatusExplainsItsRelationshipToTheRemote() {
+        #expect(HunGitStatus.fixture(ahead: 0, behind: 0).syncState == .upToDate(upstream: "origin/main"))
+        #expect(HunGitStatus.fixture(ahead: 2, behind: 0).syncState == .ahead(count: 2, upstream: "origin/main"))
+        #expect(HunGitStatus.fixture(ahead: 0, behind: 3).syncState == .behind(count: 3, upstream: "origin/main"))
+        #expect(
+            HunGitStatus.fixture(ahead: 2, behind: 3).syncState ==
+                .diverged(ahead: 2, behind: 3, upstream: "origin/main")
+        )
+        #expect(HunGitStatus.fixture(upstream: "").syncState == .unpublished(branch: "main"))
+        #expect(HunGitStatus.fixture(detached: true).syncState == .detached)
+    }
+
+    @Test func remoteCheckAgeDoesNotStayJustNow() {
+        let now = Date(timeIntervalSince1970: 100_000)
+
+        #expect(HunGitRemoteCheckAge(checkedAt: nil, relativeTo: now) == .never)
+        #expect(
+            HunGitRemoteCheckAge(checkedAt: now.addingTimeInterval(-30), relativeTo: now) ==
+                .justNow
+        )
+        #expect(
+            HunGitRemoteCheckAge(checkedAt: now.addingTimeInterval(-300), relativeTo: now) ==
+                .minutes(5)
+        )
+        #expect(
+            HunGitRemoteCheckAge(checkedAt: now.addingTimeInterval(-7_200), relativeTo: now) ==
+                .hours(2)
+        )
+    }
+
     @Test func gitDiffDocumentHidesPatchMetadataAndTracksLineNumbers() {
         let patch = """
         diff --git a/Sample.swift b/Sample.swift
@@ -202,6 +232,53 @@ struct hunTests {
 
         #expect(model.errorMessage == "boom")
         #expect(client.branchRequests == 0)
+    }
+
+    @Test func successfulFetchMarksTheRemoteAsChecked() async {
+        let client = MockGitClient()
+        let model = HunGitWorkspaceModel(client: client)
+        await model.load(projectID: "app")
+
+        await model.fetch()
+
+        #expect(model.lastRemoteCheckAt != nil)
+        #expect(client.actions == ["fetch:app"])
+    }
+
+    @Test func successfulPullAndPushMarkTheRemoteAsChecked() async {
+        let pullClient = MockGitClient()
+        let pullModel = HunGitWorkspaceModel(client: pullClient)
+        await pullModel.load(projectID: "pull-app")
+
+        await pullModel.pull()
+
+        #expect(pullModel.lastRemoteCheckAt != nil)
+        #expect(pullClient.actions == ["pull:pull-app"])
+
+        let pushClient = MockGitClient()
+        let pushModel = HunGitWorkspaceModel(client: pushClient)
+        await pushModel.load(projectID: "push-app")
+
+        await pushModel.push()
+
+        #expect(pushModel.lastRemoteCheckAt != nil)
+        #expect(pushClient.actions == ["push:push-app"])
+    }
+
+    @Test func commitAndPushRunsTheTwoGitActionsInOrder() async {
+        let client = MockGitClient()
+        let model = HunGitWorkspaceModel(client: client)
+        await model.load(projectID: "app")
+        model.commitMessage = "Explain remote state"
+
+        let succeeded = await model.commitAndPush()
+
+        #expect(succeeded)
+        #expect(client.actions == [
+            "commit:app:Explain remote state",
+            "push:app"
+        ])
+        #expect(model.commitMessage.isEmpty)
     }
 
     @Test func failedGitStageDoesNotReloadDiffOrHideItsError() async throws {
@@ -1232,15 +1309,20 @@ private final class MockProjectInitializer: HunProjectInitializing {
 }
 
 private extension HunGitStatus {
-    static func fixture() -> HunGitStatus {
+    static func fixture(
+        upstream: String = "origin/main",
+        ahead: Int = 0,
+        behind: Int = 0,
+        detached: Bool = false
+    ) -> HunGitStatus {
         HunGitStatus(
             isRepository: true,
             branch: "main",
             head: "abc123",
-            upstream: "origin/main",
-            ahead: 0,
-            behind: 0,
-            detached: false,
+            upstream: upstream,
+            ahead: ahead,
+            behind: behind,
+            detached: detached,
             clean: false,
             operation: nil,
             files: [
