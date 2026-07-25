@@ -478,6 +478,7 @@ final class HunGitWorkspaceModel {
             let parsingTask = Task.detached(priority: .userInitiated) {
                 HunGitDiffDocument(
                     patch: diff.content,
+                    syntaxPath: diff.path,
                     shouldCancel: { Task.isCancelled }
                 )
             }
@@ -526,6 +527,10 @@ final class HunGitWorkspaceModel {
     }
 
     func commit() async -> Bool {
+        await performCommit(continuePendingBranchSwitch: true)
+    }
+
+    private func performCommit(continuePendingBranchSwitch: Bool) async -> Bool {
         guard let projectID = activeProjectID else { return false }
         let message = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else {
@@ -540,6 +545,9 @@ final class HunGitWorkspaceModel {
             selectedDiffMetadata = nil
             selectedDiffDocument = nil
             selectedPath = nil
+            if continuePendingBranchSwitch {
+                await continuePendingBranchSwitchIfReady()
+            }
         }
         return succeeded
     }
@@ -548,8 +556,10 @@ final class HunGitWorkspaceModel {
         guard !isCommitAndPushInFlight else { return false }
         isCommitAndPushInFlight = true
         defer { isCommitAndPushInFlight = false }
-        guard await commit() else { return false }
-        return await push()
+        guard await performCommit(continuePendingBranchSwitch: false) else { return false }
+        guard await push() else { return false }
+        await continuePendingBranchSwitchIfReady()
+        return true
     }
 
     func createBranch(_ branch: String) async -> Bool {
@@ -567,6 +577,16 @@ final class HunGitWorkspaceModel {
 
     func switchBranch(_ branch: String, stash: Bool = false) async -> Bool {
         guard let projectID = activeProjectID else { return false }
+        if !stash, let blocker = branchSwitchBlocker {
+            pendingBranchSwitch = nil
+            errorMessage = blocker
+            return false
+        }
+        if !stash, status?.clean == false {
+            pendingBranchSwitch = branch
+            errorMessage = nil
+            return false
+        }
         let succeeded = await applyStatusOperation(.switchingBranch) {
             try await client.gitSwitchBranch(project: projectID, branch: branch, stash: stash)
         }
@@ -577,8 +597,15 @@ final class HunGitWorkspaceModel {
             selectedDiffDocument = nil
             selectedPath = nil
             await loadBranches()
-        } else if !stash, status?.clean == false {
-            pendingBranchSwitch = branch
+        } else {
+            await refresh(silently: true)
+            if let blocker = branchSwitchBlocker {
+                pendingBranchSwitch = nil
+                errorMessage = blocker
+            } else if !stash, status?.clean == false {
+                pendingBranchSwitch = branch
+                errorMessage = nil
+            }
         }
         return succeeded
     }
@@ -586,6 +613,39 @@ final class HunGitWorkspaceModel {
     func stashAndSwitchPendingBranch() async -> Bool {
         guard let branch = pendingBranchSwitch else { return false }
         return await switchBranch(branch, stash: true)
+    }
+
+    func reviewChangesForPendingBranchSwitch() async {
+        guard pendingBranchSwitch != nil else { return }
+        errorMessage = nil
+        isBranchPickerPresented = false
+        await presentWorkspace()
+    }
+
+    func cancelPendingBranchSwitch() {
+        pendingBranchSwitch = nil
+        errorMessage = nil
+    }
+
+    func cancelBranchPicker() {
+        cancelPendingBranchSwitch()
+        isBranchPickerPresented = false
+    }
+
+    private func continuePendingBranchSwitchIfReady() async {
+        guard status?.clean == true, let branch = pendingBranchSwitch else { return }
+        _ = await switchBranch(branch)
+    }
+
+    private var branchSwitchBlocker: String? {
+        guard let status else { return nil }
+        if !status.conflictedFiles.isEmpty {
+            return "Resolve the current conflicts before switching branches."
+        }
+        if let operation = status.operation, !operation.isEmpty {
+            return "Finish or abort the current \(operation) before switching branches."
+        }
+        return nil
     }
 
     @discardableResult
@@ -680,7 +740,6 @@ final class HunGitWorkspaceModel {
 
     func dismissError() {
         errorMessage = nil
-        pendingBranchSwitch = nil
     }
 
     @discardableResult

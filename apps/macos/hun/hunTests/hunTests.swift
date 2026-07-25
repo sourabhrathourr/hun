@@ -89,6 +89,96 @@ struct hunTests {
         #expect(rows[3].right(in: lines)?.newLineNumber == 4)
     }
 
+    @Test func gitDiffDocumentGroupsContiguousChangesIntoVisualBlocks() {
+        let patch = """
+        @@ -1,3 +1,5 @@
+         context
+        -removed
+        +first
+        +middle
+        +last
+         tail
+        """
+
+        let document = HunGitDiffDocument(patch: patch)
+
+        #expect(document.blockPosition(at: 0) == .none)
+        #expect(document.blockPosition(at: 1) == .single)
+        #expect(document.blockPosition(at: 2) == .first)
+        #expect(document.blockPosition(at: 3) == .middle)
+        #expect(document.blockPosition(at: 4) == .last)
+        #expect(document.blockPosition(at: 5) == .none)
+    }
+
+    @Test func gitDiffDocumentGroupsEachSideOfSplitChangesIndependently() {
+        let patch = """
+        @@ -1,2 +1,3 @@
+        -old
+        +first
+        +last
+         tail
+        """
+
+        let document = HunGitDiffDocument(patch: patch)
+
+        #expect(document.splitBlockPosition(at: 0, side: .left) == .single)
+        #expect(document.splitBlockPosition(at: 0, side: .right) == .first)
+        #expect(document.splitBlockPosition(at: 1, side: .left) == .none)
+        #expect(document.splitBlockPosition(at: 1, side: .right) == .last)
+    }
+
+    @Test func gitSyntaxHighlighterDetectsLanguageAndTokenRanges() {
+        let line = #"let title = "Hun" // workspace title"#
+        let highlighter = HunGitSyntaxHighlighter(path: "Sources/ContentView.swift")
+        let tokens = highlighter.tokens(in: line)
+        let tokenText = tokens.map { (line as NSString).substring(with: $0.range) }
+
+        #expect(highlighter.language == .swift)
+        #expect(tokens.map(\.kind) == [.keyword, .string, .comment])
+        #expect(tokenText == ["let", #""Hun""#, "// workspace title"])
+        #expect(HunGitSyntaxHighlighter(path: "web/App.tsx").language == .typeScript)
+        #expect(HunGitSyntaxHighlighter(path: "internal/git.go").language == .go)
+        #expect(HunGitSyntaxHighlighter(path: "README.md").language == .markdown)
+        #expect(HunGitSyntaxHighlighter(path: "native/engine.cpp").language == .cFamily)
+        #expect(HunGitSyntaxHighlighter(path: "android/MainActivity.kt").language == .cFamily)
+        #expect(HunGitSyntaxHighlighter(path: "scripts/release.rb").language == .ruby)
+        #expect(HunGitSyntaxHighlighter(path: "Cargo.toml").language == .configuration)
+    }
+
+    @Test func gitSyntaxHighlighterCarriesBlockCommentsAcrossLines() {
+        let highlighter = HunGitSyntaxHighlighter(path: "Sources/Renderer.swift")
+        let opening = highlighter.tokenize("/* renderer notes", startingIn: .normal)
+        let blank = highlighter.tokenize("", startingIn: opening.endState)
+        let closingLine = "continue here */ let visible = true"
+        let closing = highlighter.tokenize(closingLine, startingIn: blank.endState)
+        let closingTokenText = closing.tokens.map {
+            (closingLine as NSString).substring(with: $0.range)
+        }
+
+        #expect(opening.tokens.map(\.kind) == [.comment])
+        #expect(opening.endState == .blockComment)
+        #expect(blank.tokens.isEmpty)
+        #expect(blank.endState == .blockComment)
+        #expect(closing.tokens.map(\.kind) == [.comment, .keyword, .keyword])
+        #expect(closingTokenText == ["continue here */", "let", "true"])
+        #expect(closing.endState == .normal)
+    }
+
+    @Test func gitDiffDocumentTracksSyntaxStateForAddedLines() {
+        let patch = """
+        @@ -0,0 +1,3 @@
+        +/* renderer notes
+        +continue here
+        +*/ let visible = true
+        """
+
+        let document = HunGitDiffDocument(patch: patch, syntaxPath: "Renderer.swift")
+
+        #expect(document.unifiedSyntaxState(at: 0) == .normal)
+        #expect(document.unifiedSyntaxState(at: 1) == .blockComment)
+        #expect(document.unifiedSyntaxState(at: 2) == .blockComment)
+    }
+
     @Test func gitDiffDocumentHandlesOneHundredThousandChangedLines() {
         let patch = "@@ -0,0 +1,100000 @@\n" + String(repeating: "+expanded line\n", count: 100_000)
 
@@ -177,6 +267,86 @@ struct hunTests {
         #expect(model.isWorkspacePresented)
         #expect(model.selectedPath == "ContentView.swift")
         #expect(model.selectedDiffDocument?.lines.count == 2)
+    }
+
+    @Test func dirtyWorkingTreeRequestsADecisionBeforeSwitchingBranches() async {
+        let client = MockGitClient()
+        client.status = HunGitStatus.fixture(clean: false)
+        let model = HunGitWorkspaceModel(client: client)
+        await model.load(projectID: "app")
+
+        let switched = await model.switchBranch("feature")
+
+        #expect(!switched)
+        #expect(model.pendingBranchSwitch == "feature")
+        #expect(model.errorMessage == nil)
+        #expect(client.actions.isEmpty)
+    }
+
+    @Test func switchFailureRefreshesStaleStatusBeforeShowingAnError() async {
+        let client = MockGitClient()
+        client.status = HunGitStatus.fixture(clean: true)
+        let model = HunGitWorkspaceModel(client: client)
+        await model.load(projectID: "app")
+        client.status = HunGitStatus.fixture(clean: false)
+        client.switchError = TestError.boom
+
+        let switched = await model.switchBranch("feature")
+
+        #expect(!switched)
+        #expect(model.pendingBranchSwitch == "feature")
+        #expect(model.errorMessage == nil)
+        #expect(client.actions == ["switch:app:feature:false"])
+    }
+
+    @Test func conflictedWorkingTreeBlocksSwitchWithoutOfferingAStash() async {
+        let client = MockGitClient()
+        client.status = HunGitStatus.fixture(clean: false, conflicted: true)
+        let model = HunGitWorkspaceModel(client: client)
+        await model.load(projectID: "app")
+
+        let switched = await model.switchBranch("feature")
+
+        #expect(!switched)
+        #expect(model.pendingBranchSwitch == nil)
+        #expect(model.errorMessage == "Resolve the current conflicts before switching branches.")
+        #expect(client.actions.isEmpty)
+    }
+
+    @Test func committingTheLastLocalChangesContinuesThePendingBranchSwitch() async {
+        let client = MockGitClient()
+        client.status = HunGitStatus.fixture(clean: false)
+        client.commitResult = HunGitStatus.fixture(clean: true)
+        client.switchResult = HunGitStatus.fixture(branch: "feature", clean: true)
+        let model = HunGitWorkspaceModel(client: client)
+        await model.load(projectID: "app")
+        _ = await model.switchBranch("feature")
+        model.commitMessage = "Finish current work"
+
+        let committed = await model.commit()
+
+        #expect(committed)
+        #expect(client.actions == [
+            "commit:app:Finish current work",
+            "switch:app:feature:false"
+        ])
+        #expect(model.status?.branch == "feature")
+        #expect(model.pendingBranchSwitch == nil)
+    }
+
+    @Test func cancellingBranchPickerClearsThePendingSwitch() async {
+        let client = MockGitClient()
+        client.status = HunGitStatus.fixture(clean: false)
+        let model = HunGitWorkspaceModel(client: client)
+        await model.load(projectID: "app")
+        model.isBranchPickerPresented = true
+        _ = await model.switchBranch("feature")
+
+        model.cancelBranchPicker()
+
+        #expect(!model.isBranchPickerPresented)
+        #expect(model.pendingBranchSwitch == nil)
+        #expect(client.actions.isEmpty)
     }
 
     @Test func switchingProjectsDuringDiffLoadDoesNotLeaveGitBusy() async throws {
@@ -1282,6 +1452,9 @@ private final class MockGitClient: HunGitClientProtocol {
     var fetchError: Error?
     var updateResult: HunGitUpdateResult?
     var updateDelay: Duration?
+    var commitResult: HunGitStatus?
+    var switchResult: HunGitStatus?
+    var switchError: Error?
     var stageError: Error?
     var branchRequests = 0
     var diffRequests = 0
@@ -1332,7 +1505,7 @@ private final class MockGitClient: HunGitClientProtocol {
 
     func gitCommit(project: String, message: String) async throws -> HunGitStatus {
         actions.append("commit:\(project):\(message)")
-        return status
+        return commitResult ?? status
     }
 
     func gitCreateBranch(project: String, branch: String) async throws -> HunGitStatus {
@@ -1342,7 +1515,10 @@ private final class MockGitClient: HunGitClientProtocol {
 
     func gitSwitchBranch(project: String, branch: String, stash: Bool) async throws -> HunGitStatus {
         actions.append("switch:\(project):\(branch):\(stash)")
-        return status
+        if let switchError {
+            throw switchError
+        }
+        return switchResult ?? status
     }
 
     func gitFetch(project: String) async throws -> HunGitStatus {
@@ -1405,29 +1581,33 @@ private final class MockProjectInitializer: HunProjectInitializing {
 
 private extension HunGitStatus {
     static func fixture(
+        branch: String = "main",
         upstream: String = "origin/main",
         ahead: Int = 0,
         behind: Int = 0,
-        detached: Bool = false
+        detached: Bool = false,
+        clean: Bool = false,
+        operation: String? = nil,
+        conflicted: Bool = false
     ) -> HunGitStatus {
         HunGitStatus(
             isRepository: true,
-            branch: "main",
+            branch: branch,
             head: "abc123",
             upstream: upstream,
             ahead: ahead,
             behind: behind,
             detached: detached,
-            clean: false,
-            operation: nil,
+            clean: clean,
+            operation: operation,
             files: [
                 HunGitFileChange(
                     path: "ContentView.swift",
                     originalPath: nil,
-                    indexStatus: ".",
-                    worktreeStatus: "M",
+                    indexStatus: conflicted ? "U" : ".",
+                    worktreeStatus: conflicted ? "U" : "M",
                     untracked: false,
-                    conflicted: false
+                    conflicted: conflicted
                 )
             ]
         )

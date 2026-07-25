@@ -7,6 +7,19 @@ nonisolated enum HunGitDiffLineKind: Equatable, Sendable {
     case separator
 }
 
+nonisolated enum HunGitDiffBlockPosition: Equatable, Sendable {
+    case none
+    case single
+    case first
+    case middle
+    case last
+}
+
+nonisolated enum HunGitDiffSide: Sendable {
+    case left
+    case right
+}
+
 nonisolated struct HunGitDiffLine: Equatable, Sendable {
     let kind: HunGitDiffLineKind
     let content: String
@@ -59,18 +72,139 @@ nonisolated struct HunGitDiffDocument: Sendable {
     let splitRows: [HunGitSplitDiffRow]
     let longestUnifiedLine: Int
     let longestSplitLine: Int
+    private let oldSyntaxStates: [HunGitSyntaxState]
+    private let newSyntaxStates: [HunGitSyntaxState]
 
     init(
         patch: String,
+        syntaxPath: String = "",
         shouldCancel: @escaping @Sendable () -> Bool = { false }
     ) {
         let parsed = Self.parse(patch: patch, shouldCancel: shouldCancel)
         let rows = Self.makeSplitRows(from: parsed.lines, shouldCancel: shouldCancel)
+        let syntaxStates = Self.makeSyntaxStates(
+            for: parsed.lines,
+            path: syntaxPath,
+            shouldCancel: shouldCancel
+        )
 
         lines = parsed.lines
         splitRows = rows
         longestUnifiedLine = parsed.longestLine
         longestSplitLine = parsed.longestLine
+        oldSyntaxStates = syntaxStates.old
+        newSyntaxStates = syntaxStates.new
+    }
+
+    func blockPosition(at index: Int) -> HunGitDiffBlockPosition {
+        guard lines.indices.contains(index) else { return .none }
+        let kind = lines[index].kind
+        guard kind == .addition || kind == .deletion else { return .none }
+
+        let matchesPrevious = index > lines.startIndex && lines[index - 1].kind == kind
+        let matchesNext = index < lines.index(before: lines.endIndex) && lines[index + 1].kind == kind
+        return Self.blockPosition(matchesPrevious: matchesPrevious, matchesNext: matchesNext)
+    }
+
+    func splitBlockPosition(
+        at rowIndex: Int,
+        side: HunGitDiffSide
+    ) -> HunGitDiffBlockPosition {
+        guard splitRows.indices.contains(rowIndex),
+              let line = splitLine(at: rowIndex, side: side),
+              line.kind == .addition || line.kind == .deletion
+        else {
+            return .none
+        }
+
+        let matchesPrevious =
+            rowIndex > splitRows.startIndex &&
+            splitLine(at: rowIndex - 1, side: side)?.kind == line.kind
+        let matchesNext =
+            rowIndex < splitRows.index(before: splitRows.endIndex) &&
+            splitLine(at: rowIndex + 1, side: side)?.kind == line.kind
+        return Self.blockPosition(matchesPrevious: matchesPrevious, matchesNext: matchesNext)
+    }
+
+    func syntaxState(at lineIndex: Int, side: HunGitDiffSide) -> HunGitSyntaxState {
+        guard lines.indices.contains(lineIndex) else { return .normal }
+        switch side {
+        case .left:
+            return oldSyntaxStates[lineIndex]
+        case .right:
+            return newSyntaxStates[lineIndex]
+        }
+    }
+
+    func unifiedSyntaxState(at lineIndex: Int) -> HunGitSyntaxState {
+        guard lines.indices.contains(lineIndex) else { return .normal }
+        return lines[lineIndex].kind == .deletion
+            ? oldSyntaxStates[lineIndex]
+            : newSyntaxStates[lineIndex]
+    }
+
+    private func splitLine(at rowIndex: Int, side: HunGitDiffSide) -> HunGitDiffLine? {
+        guard splitRows.indices.contains(rowIndex) else { return nil }
+        switch side {
+        case .left:
+            return splitRows[rowIndex].left(in: lines)
+        case .right:
+            return splitRows[rowIndex].right(in: lines)
+        }
+    }
+
+    private static func blockPosition(
+        matchesPrevious: Bool,
+        matchesNext: Bool
+    ) -> HunGitDiffBlockPosition {
+        switch (matchesPrevious, matchesNext) {
+        case (false, false): .single
+        case (false, true): .first
+        case (true, true): .middle
+        case (true, false): .last
+        }
+    }
+
+    private static func makeSyntaxStates(
+        for lines: [HunGitDiffLine],
+        path: String,
+        shouldCancel: @escaping @Sendable () -> Bool
+    ) -> (old: [HunGitSyntaxState], new: [HunGitSyntaxState]) {
+        let highlighter = HunGitSyntaxHighlighter(path: path)
+        var oldStates = [HunGitSyntaxState](repeating: .normal, count: lines.count)
+        var newStates = [HunGitSyntaxState](repeating: .normal, count: lines.count)
+        guard highlighter.language != .plainText else {
+            return (oldStates, newStates)
+        }
+        var oldState = HunGitSyntaxState.normal
+        var newState = HunGitSyntaxState.normal
+
+        for index in lines.indices {
+            if index.isMultiple(of: 1_024), shouldCancel() {
+                return (oldStates, newStates)
+            }
+
+            let line = lines[index]
+            oldStates[index] = oldState
+            newStates[index] = newState
+
+            switch line.kind {
+            case .context:
+                oldState = highlighter.endState(after: line.content, startingIn: oldState)
+                newState = highlighter.endState(after: line.content, startingIn: newState)
+            case .deletion:
+                oldState = highlighter.endState(after: line.content, startingIn: oldState)
+            case .addition:
+                newState = highlighter.endState(after: line.content, startingIn: newState)
+            case .separator:
+                oldState = .normal
+                newState = .normal
+                oldStates[index] = .normal
+                newStates[index] = .normal
+            }
+        }
+
+        return (oldStates, newStates)
     }
 
     private static func parse(

@@ -231,7 +231,7 @@ struct HunGitBranchDialogOverlay: View {
             Color.black.opacity(0.56)
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    model.isBranchPickerPresented = false
+                    model.cancelBranchPicker()
                 }
 
             HunGitBranchDialog(model: model)
@@ -638,7 +638,10 @@ private struct HunGitBranchDialog: View {
                 Rectangle().fill(AppTheme.divider).frame(height: 1)
             }
 
-            if let error = model.errorMessage {
+            if let pendingBranch = model.pendingBranchSwitch {
+                branchSwitchDecision(pendingBranch)
+                Rectangle().fill(AppTheme.divider).frame(height: 1)
+            } else if let error = model.errorMessage {
                 branchError(error)
                 Rectangle().fill(AppTheme.divider).frame(height: 1)
             }
@@ -689,7 +692,7 @@ private struct HunGitBranchDialog: View {
             HunGitBranchKeyboardMonitor(
                 onMove: moveBranchSelection,
                 onSubmit: submitBranchSearch,
-                onDismiss: { model.isBranchPickerPresented = false }
+                onDismiss: { model.cancelBranchPicker() }
             )
             .frame(width: 0, height: 0)
         }
@@ -702,7 +705,7 @@ private struct HunGitBranchDialog: View {
             keyboardSelectionID = nil
         }
         .onExitCommand {
-            model.isBranchPickerPresented = false
+            model.cancelBranchPicker()
         }
     }
 
@@ -936,43 +939,105 @@ private struct HunGitBranchDialog: View {
         .disabled(model.isBusy)
     }
 
-    private func branchError(_ message: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 10))
-                    .foregroundStyle(AppTheme.warning)
-                    .padding(.top, 2)
-                Text(message)
-                    .font(.system(size: 11))
-                    .foregroundStyle(AppTheme.textSecondary)
-                    .lineLimit(3)
+    private func branchSwitchDecision(_ destination: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 9) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(AppTheme.warning.opacity(0.10))
+                        .frame(width: 28, height: 28)
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(AppTheme.warning)
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Finish current work before switching")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(AppTheme.textPrimary)
+                    Text(localChangesDescription(destination: destination))
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(AppTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 Spacer()
             }
 
-            if model.pendingBranchSwitch != nil {
-                HStack {
-                    Spacer()
-                    Button("Cancel") {
-                        model.dismissError()
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(AppTheme.textSecondary)
+            HStack(spacing: 6) {
+                branchRouteChip(model.status?.branch ?? "Current")
 
-                    Button("Stash and switch") {
-                        Task {
-                            if await model.stashAndSwitchPendingBranch() {
-                                model.isBranchPickerPresented = false
-                            }
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(AppTheme.textTertiary)
+
+                branchRouteChip(destination)
+
+                Spacer()
+
+                Button("Cancel") {
+                    model.cancelPendingBranchSwitch()
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(AppTheme.textSecondary)
+
+                Button("Review & commit") {
+                    Task {
+                        await model.reviewChangesForPendingBranchSwitch()
+                    }
+                }
+                .buttonStyle(HunGitSecondaryButtonStyle())
+
+                Button("Stash & switch") {
+                    Task {
+                        if await model.stashAndSwitchPendingBranch() {
+                            model.isBranchPickerPresented = false
                         }
                     }
-                    .buttonStyle(HunGitProminentButtonStyle())
                 }
-                .font(.system(size: 11.5, weight: .medium))
+                .buttonStyle(HunGitProminentButtonStyle())
             }
+            .font(.system(size: 11, weight: .medium))
         }
         .padding(12)
         .background(AppTheme.warning.opacity(0.06))
+    }
+
+    private func branchRouteChip(_ branch: String) -> some View {
+        Text(branch)
+            .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+            .foregroundStyle(AppTheme.textSecondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .padding(.horizontal, 7)
+            .frame(height: 21)
+            .frame(maxWidth: 126)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(AppTheme.chipFill)
+            )
+    }
+
+    private func localChangesDescription(destination: String) -> String {
+        let count = model.status?.changeCount ?? 0
+        let commitPronoun = count == 1 ? "it" : "them"
+        return "\(count) local \(count == 1 ? "change needs" : "changes need") a home before moving to \(destination). Commit \(commitPronoun) here, or stash \(commitPronoun) for later."
+    }
+
+    private func branchError(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 10))
+                .foregroundStyle(AppTheme.danger)
+                .padding(.top, 2)
+            Text(message)
+                .font(.system(size: 11))
+                .foregroundStyle(AppTheme.textSecondary)
+                .lineLimit(3)
+            Spacer()
+        }
+        .padding(12)
+        .background(AppTheme.danger.opacity(0.06))
     }
 
     private var branchFooter: some View {
@@ -1215,6 +1280,11 @@ struct HunGitWorkspaceView: View {
 
             Rectangle().fill(AppTheme.divider).frame(height: 1)
 
+            if let pendingBranch = model.pendingBranchSwitch {
+                pendingBranchSwitchBanner(pendingBranch)
+                Rectangle().fill(AppTheme.divider).frame(height: 1)
+            }
+
             if let error = model.errorMessage {
                 workspaceError(error)
                 Rectangle().fill(AppTheme.divider).frame(height: 1)
@@ -1246,6 +1316,67 @@ struct HunGitWorkspaceView: View {
             }
         }
         .background(AppTheme.appBackground)
+    }
+
+    private func pendingBranchSwitchBanner(_ destination: String) -> some View {
+        HStack(spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(AppTheme.warning.opacity(0.10))
+                    .frame(width: 28, height: 28)
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(AppTheme.warning)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 5) {
+                    Text("Preparing to switch")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(AppTheme.textPrimary)
+                    Text(model.status?.branch ?? "current")
+                        .foregroundStyle(AppTheme.textTertiary)
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 7.5, weight: .bold))
+                        .foregroundStyle(AppTheme.textTertiary)
+                    Text(destination)
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(AppTheme.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                Text(pendingSwitchDetail)
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(AppTheme.textTertiary)
+            }
+
+            Spacer()
+
+            Button("Cancel") {
+                model.cancelPendingBranchSwitch()
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 10.5, weight: .medium))
+            .foregroundStyle(AppTheme.textSecondary)
+
+            Button("Stash & switch") {
+                Task {
+                    _ = await model.stashAndSwitchPendingBranch()
+                }
+            }
+            .buttonStyle(HunGitSecondaryButtonStyle())
+            .font(.system(size: 10.5, weight: .medium))
+            .disabled(model.isBusy)
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 48)
+        .background(AppTheme.warning.opacity(0.05))
+    }
+
+    private var pendingSwitchDetail: String {
+        let count = model.status?.changeCount ?? 0
+        return "\(count) local \(count == 1 ? "change remains" : "changes remain"). Stage the work to keep, then commit below; Hun switches once the tree is clean."
     }
 
     private var workspaceToolbar: some View {
@@ -1565,7 +1696,7 @@ private struct HunGitChangesPanel: View {
                 )
                 .overlay(alignment: .topLeading) {
                     if model.commitMessage.isEmpty {
-                        Text("Commit message…")
+                        Text(commitPlaceholder)
                             .font(.system(size: 11.5))
                             .foregroundStyle(AppTheme.textTertiary)
                             .padding(.leading, 12)
@@ -1576,7 +1707,7 @@ private struct HunGitChangesPanel: View {
 
             HStack(spacing: 6) {
                 commitButton(
-                    title: "Commit",
+                    title: primaryCommitTitle,
                     systemImage: "checkmark",
                     prominent: true,
                     loading: model.operation == .committing && !model.isCommitAndPushInFlight
@@ -1646,6 +1777,23 @@ private struct HunGitChangesPanel: View {
             model.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
             model.isBusy
     }
+
+    private var primaryCommitTitle: String {
+        guard model.pendingBranchSwitch != nil,
+              unstaged.isEmpty,
+              conflicts.isEmpty
+        else {
+            return "Commit"
+        }
+        return "Commit & switch"
+    }
+
+    private var commitPlaceholder: String {
+        guard let destination = model.pendingBranchSwitch else {
+            return "Commit message…"
+        }
+        return "Commit before switching to \(destination)…"
+    }
 }
 
 private struct HunGitChangeRow: View {
@@ -1658,22 +1806,22 @@ private struct HunGitChangeRow: View {
     @State private var hovering = false
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Button(action: onSelect) {
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     Text(statusLetter)
-                        .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                        .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
                         .foregroundStyle(statusColor)
-                        .frame(width: 14)
+                        .frame(width: 13)
 
                     VStack(alignment: .leading, spacing: 1) {
                         Text(change.displayName)
-                            .font(.system(size: 11.5, weight: selected ? .medium : .regular))
+                            .font(.system(size: 10.75, weight: selected ? .medium : .regular))
                             .foregroundStyle(AppTheme.textPrimary)
                             .lineLimit(1)
                         if !change.parentPath.isEmpty {
                             Text(change.parentPath)
-                                .font(.system(size: 9.5))
+                                .font(.system(size: 9.25))
                                 .foregroundStyle(AppTheme.textTertiary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
@@ -1688,21 +1836,30 @@ private struct HunGitChangeRow: View {
 
             Button(action: onToggleStage) {
                 Image(systemName: staged ? "minus" : "plus")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(hovering ? AppTheme.textPrimary : AppTheme.textTertiary)
-                    .frame(width: 22, height: 22)
+                    .font(.system(size: 8.5, weight: .bold))
+                    .foregroundStyle(
+                        hovering
+                            ? AppTheme.textPrimary
+                            : (staged ? AppTheme.success.opacity(0.82) : AppTheme.warning.opacity(0.82))
+                    )
+                    .frame(width: 20, height: 20)
                     .background(
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .fill(hovering ? AppTheme.hover : Color.clear)
+                            .fill(hovering ? AppTheme.hover : AppTheme.buttonFill.opacity(0.72))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .stroke(AppTheme.divider.opacity(hovering ? 1 : 0.7), lineWidth: 1)
                     )
             }
             .buttonStyle(.plain)
             .disabled(busy)
+            .accessibilityLabel(staged ? "Unstage \(change.displayName)" : "Stage \(change.displayName)")
             .help(staged ? "Unstage \(change.path)" : "Stage \(change.path)")
         }
         .padding(.leading, 7)
         .padding(.trailing, 4)
-        .frame(height: 38)
+        .frame(height: 34)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(selected ? AppTheme.selection : (hovering ? AppTheme.hover : Color.clear))
@@ -1817,6 +1974,7 @@ private struct HunGitDiffPanel: View {
                     } else if let document = model.selectedDiffDocument {
                         HunGitDiffView(
                             document: document,
+                            path: diff.path,
                             presentation: presentation,
                             showWhitespace: showWhitespace
                         )
@@ -1966,6 +2124,23 @@ private struct HunGitProminentButtonStyle: ButtonStyle {
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(AppTheme.accent.opacity(configuration.isPressed ? 0.72 : 0.92))
+            )
+    }
+}
+
+private struct HunGitSecondaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(AppTheme.textSecondary)
+            .padding(.horizontal, 10)
+            .frame(height: 26)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(configuration.isPressed ? AppTheme.selection : AppTheme.chipFill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(AppTheme.divider, lineWidth: 1)
             )
     }
 }
