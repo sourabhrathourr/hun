@@ -176,11 +176,15 @@ enum HunTerminalPanelMetrics {
     static let defaultHeight: CGFloat = 280
     static let minimumHeight: CGFloat = 164
     static let minimumWorkspaceHeight: CGFloat = 170
-    static let accessibilityAdjustment: CGFloat = 24
 
     static func clamp(_ requestedHeight: CGFloat, availableHeight: CGFloat) -> CGFloat {
+        let range = allowedRange(availableHeight: availableHeight)
+        return min(max(requestedHeight, range.lowerBound), range.upperBound)
+    }
+
+    static func allowedRange(availableHeight: CGFloat) -> ClosedRange<CGFloat> {
         let maximum = max(minimumHeight, availableHeight - minimumWorkspaceHeight)
-        return min(max(requestedHeight, minimumHeight), maximum)
+        return minimumHeight ... maximum
     }
 }
 

@@ -105,6 +105,8 @@ func (d *Daemon) HandleRequest(req Request) Response {
 		return d.handleGitDiff(req)
 	case "git_stage":
 		return d.handleGitStage(req)
+	case "git_stage_all":
+		return d.handleGitStageAll(req)
 	case "git_unstage":
 		return d.handleGitUnstage(req)
 	case "git_commit":
@@ -135,7 +137,7 @@ func (d *Daemon) HandleRequest(req Request) Response {
 
 func serializesGitMutation(action string) bool {
 	switch action {
-	case "git_stage", "git_unstage", "git_commit", "git_create_branch", "git_switch_branch",
+	case "git_stage", "git_stage_all", "git_unstage", "git_commit", "git_create_branch", "git_switch_branch",
 		"git_fetch", "git_pull", "git_update_branch", "git_push":
 		return true
 	default:

@@ -185,7 +185,7 @@ nonisolated enum HunGitFileStatus: Equatable, Sendable {
     var displayLetter: String {
         switch self {
         case .unchanged: "M"
-        case .untracked: "?"
+        case .untracked: "U"
         case .ignored: "!"
         case .added: "A"
         case .modified: "M"
@@ -239,6 +239,20 @@ nonisolated struct HunGitFileChange: Decodable, Hashable, Sendable {
     var parentPath: String {
         let parent = (path as NSString).deletingLastPathComponent
         return parent == "." ? "" : parent
+    }
+}
+
+nonisolated struct HunGitChangeRowIdentity: Hashable, Sendable {
+    let path: String
+    let staged: Bool
+}
+
+nonisolated struct HunGitChangeRowItem: Identifiable, Sendable {
+    let change: HunGitFileChange
+    let staged: Bool
+
+    var id: HunGitChangeRowIdentity {
+        HunGitChangeRowIdentity(path: change.path, staged: staged)
     }
 }
 
@@ -510,6 +524,26 @@ final class HunGitWorkspaceModel {
         if succeeded,
            status?.files.contains(where: { $0.path == change.path && $0.staged }) == true,
            let updated = status?.files.first(where: { $0.path == change.path }) {
+            await loadDiff(for: updated, staged: true)
+        }
+    }
+
+    func stageAll() async {
+        guard let projectID = activeProjectID,
+              status?.unstagedFiles.isEmpty == false,
+              status?.conflictedFiles.isEmpty == true
+        else {
+            return
+        }
+        let selectedPathBeforeStaging = selectedPath
+        let succeeded = await applyStatusOperation(.staging) {
+            try await client.gitStageAll(project: projectID)
+        }
+        if succeeded,
+           let selectedPathBeforeStaging,
+           let updated = status?.files.first(where: {
+               $0.path == selectedPathBeforeStaging && $0.staged
+           }) {
             await loadDiff(for: updated, staged: true)
         }
     }

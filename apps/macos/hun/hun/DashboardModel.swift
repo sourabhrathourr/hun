@@ -974,6 +974,8 @@ enum AppTheme {
     static let appBackground = Color(hex: 0x030303)
     static let sidebar = Color(hex: 0x060606)
     static let elevated = Color(red: 0.105, green: 0.105, blue: 0.110)
+    static let dialogBackground = Color(hex: 0x080809)
+    static let dialogRaised = Color(hex: 0x0D0D0F)
 
     static let divider = Color.white.opacity(0.06)
     static let dividerStrong = Color.white.opacity(0.10)

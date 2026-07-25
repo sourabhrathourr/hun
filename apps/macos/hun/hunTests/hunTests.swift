@@ -6,6 +6,27 @@ import Testing
 
 @MainActor
 struct hunTests {
+    @Test func untrackedGitFilesUseFriendlyStatusLetter() {
+        #expect(HunGitFileStatus(code: "?").displayLetter == "U")
+    }
+
+    @Test func stagedAndWorkingTreeRowsUseDistinctIdentitiesForTheSameFile() {
+        let change = HunGitFileChange(
+            path: "Sources/App.swift",
+            originalPath: nil,
+            indexStatus: "M",
+            worktreeStatus: "M",
+            untracked: false,
+            conflicted: false
+        )
+        let staged = HunGitChangeRowItem(change: change, staged: true)
+        let workingTree = HunGitChangeRowItem(change: change, staged: false)
+
+        #expect(change.staged)
+        #expect(change.unstaged)
+        #expect(staged.id != workingTree.id)
+    }
+
     @Test func gitStatusExplainsItsRelationshipToTheRemote() {
         #expect(HunGitStatus.fixture(ahead: 0, behind: 0).syncState == .upToDate(upstream: "origin/main"))
         #expect(HunGitStatus.fixture(ahead: 2, behind: 0).syncState == .ahead(count: 2, upstream: "origin/main"))
@@ -267,6 +288,32 @@ struct hunTests {
 
         #expect(client.actions == ["stage:app:ContentView.swift"])
         #expect(model.status?.files.first?.staged == true)
+        #expect(model.selectedStaged)
+        #expect(model.selectedDiffMetadata?.staged == true)
+        #expect(model.selectedDiffDocument?.lines.last?.content == "new")
+        #expect(model.errorMessage == nil)
+    }
+
+    @Test func stageAllStagesEveryUnstagedFile() async {
+        let client = MockGitClient()
+        client.status.files.append(
+            HunGitFileChange(
+                path: "NewFile.swift",
+                originalPath: nil,
+                indexStatus: ".",
+                worktreeStatus: "?",
+                untracked: true,
+                conflicted: false
+            )
+        )
+        let model = HunGitWorkspaceModel(client: client)
+        await model.load(projectID: "app")
+
+        await model.stageAll()
+
+        #expect(client.actions == ["stage-all:app"])
+        #expect(model.status?.unstagedFiles.isEmpty == true)
+        #expect(model.status?.stagedFiles.map(\.path) == ["ContentView.swift", "NewFile.swift"])
         #expect(model.errorMessage == nil)
     }
 
@@ -1248,12 +1295,62 @@ struct hunTests {
         #expect(HunTerminalPanelMetrics.clamp(280, availableHeight: 700) == 280)
     }
 
+    @Test func workspacePanelWidthPreservesNavigatorAndDetailSpace() {
+        #expect(HunWorkspacePanelMetrics.clamp(120, availableWidth: 1_200) == 140)
+        #expect(HunWorkspacePanelMetrics.clamp(900, availableWidth: 1_200) == 640)
+        #expect(HunWorkspacePanelMetrics.clamp(500, availableWidth: 700) == 500)
+        #expect(HunWorkspacePanelMetrics.clamp(310, availableWidth: 1_200) == 310)
+        #expect(HunWorkspacePanelMetrics.clamp(320, availableWidth: 310) == 141)
+    }
+
+    @Test func workspaceResizeSurfaceOwnsHorizontalMouseDrags() throws {
+        let surface = HunPanelResizeSurfaceView(axis: .horizontal)
+        var resizedWidth: CGFloat?
+        surface.configure(
+            preferredValue: 310,
+            allowedRange: 240 ... 640,
+            onResize: { resizedWidth = $0 }
+        )
+
+        let mouseDown = try #require(
+            NSEvent.mouseEvent(
+                with: .leftMouseDown,
+                location: NSPoint(x: 100, y: 20),
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                eventNumber: 1,
+                clickCount: 1,
+                pressure: 1
+            )
+        )
+        let mouseDrag = try #require(
+            NSEvent.mouseEvent(
+                with: .leftMouseDragged,
+                location: NSPoint(x: 150, y: 20),
+                modifierFlags: [],
+                timestamp: 0.1,
+                windowNumber: 0,
+                context: nil,
+                eventNumber: 2,
+                clickCount: 1,
+                pressure: 1
+            )
+        )
+
+        #expect(surface.mouseDownCanMoveWindow == false)
+        surface.mouseDown(with: mouseDown)
+        surface.mouseDragged(with: mouseDrag)
+        #expect(resizedWidth == 360)
+    }
+
     @Test func terminalResizeSurfaceOwnsMouseDragsInsteadOfMovingWindow() throws {
-        let surface = HunTerminalResizeSurfaceView(frame: .zero)
+        let surface = HunPanelResizeSurfaceView(axis: .vertical)
         var resizedHeight: CGFloat?
         surface.configure(
-            preferredHeight: 900,
-            availableHeight: 700,
+            preferredValue: 900,
+            allowedRange: HunTerminalPanelMetrics.allowedRange(availableHeight: 700),
             onResize: { resizedHeight = $0 }
         )
 
@@ -1285,7 +1382,7 @@ struct hunTests {
         )
 
         #expect(surface.mouseDownCanMoveWindow == false)
-        #expect(surface.currentHeight == 530)
+        #expect(surface.currentValue == 530)
         surface.mouseDown(with: mouseDown)
         surface.mouseDragged(with: mouseDrag)
         #expect(resizedHeight == 480)
@@ -1541,7 +1638,13 @@ private final class MockGitClient: HunGitClientProtocol {
 
     func gitDiff(project: String, path: String, staged: Bool) async throws -> HunGitDiff {
         diffRequests += 1
-        let result = diff
+        let result = HunGitDiff(
+            path: diff.path,
+            staged: staged,
+            content: diff.content,
+            binary: diff.binary,
+            truncated: diff.truncated
+        )
         if let diffDelay {
             try? await Task.sleep(for: diffDelay)
         }
@@ -1561,6 +1664,24 @@ private final class MockGitClient: HunGitClientProtocol {
             untracked: false,
             conflicted: false
         )
+        return status
+    }
+
+    func gitStageAll(project: String) async throws -> HunGitStatus {
+        actions.append("stage-all:\(project)")
+        if let stageError {
+            throw stageError
+        }
+        status.files = status.files.map {
+            HunGitFileChange(
+                path: $0.path,
+                originalPath: $0.originalPath,
+                indexStatus: $0.untracked ? "A" : ($0.indexStatus == "." ? $0.worktreeStatus : $0.indexStatus),
+                worktreeStatus: ".",
+                untracked: false,
+                conflicted: false
+            )
+        }
         return status
     }
 

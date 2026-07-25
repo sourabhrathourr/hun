@@ -195,7 +195,7 @@ struct HunGitBranchDialogOverlay: View {
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.56)
+            Color.black.opacity(0.68)
                 .contentShape(Rectangle())
                 .onTapGesture {
                     model.cancelBranchPicker()
@@ -215,7 +215,7 @@ struct HunGitUpdateBranchDialogOverlay: View {
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.56)
+            Color.black.opacity(0.68)
                 .contentShape(Rectangle())
                 .onTapGesture {
                     model.dismissUpdateBranch()
@@ -331,11 +331,11 @@ private struct HunGitUpdateBranchDialog: View {
         .frame(width: 500)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(AppTheme.elevated)
+                .fill(AppTheme.dialogBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.white.opacity(0.11), lineWidth: 1)
+                .stroke(AppTheme.dividerStrong, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(alignment: .topLeading) {
@@ -383,7 +383,7 @@ private struct HunGitUpdateBranchDialog: View {
         }
         .padding(.horizontal, 16)
         .frame(height: 58)
-        .background(AppTheme.appBackground.opacity(0.42))
+        .background(AppTheme.dialogRaised)
     }
 
     private var dialogFooter: some View {
@@ -445,7 +445,7 @@ private struct HunGitUpdateBranchDialog: View {
         }
         .padding(.horizontal, 14)
         .frame(height: 50)
-        .background(AppTheme.buttonFill)
+        .background(AppTheme.dialogRaised)
     }
 
     private var primaryActionTitle: String {
@@ -648,11 +648,11 @@ private struct HunGitBranchDialog: View {
         .frame(width: 540, height: 500)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(AppTheme.elevated)
+                .fill(AppTheme.dialogBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.white.opacity(0.11), lineWidth: 1)
+                .stroke(AppTheme.dividerStrong, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(alignment: .topLeading) {
@@ -702,7 +702,7 @@ private struct HunGitBranchDialog: View {
         }
         .padding(.horizontal, 14)
         .frame(height: 44)
-        .background(AppTheme.searchField)
+        .background(AppTheme.dialogRaised)
     }
 
     private func repositoryContext(_ status: HunGitStatus) -> some View {
@@ -749,7 +749,7 @@ private struct HunGitBranchDialog: View {
         }
         .padding(.horizontal, 14)
         .frame(height: 50)
-        .background(AppTheme.appBackground.opacity(0.42))
+        .background(AppTheme.dialogBackground)
     }
 
     private func submitBranchSearch() {
@@ -1046,7 +1046,7 @@ private struct HunGitBranchDialog: View {
         .font(.system(size: 11.5, weight: .medium))
         .padding(.horizontal, 14)
         .frame(height: 42)
-        .background(AppTheme.buttonFill)
+        .background(AppTheme.dialogRaised)
     }
 
     private func keyHint(_ key: String, label: String) -> some View {
@@ -1238,6 +1238,9 @@ struct HunProjectWorkspaceSwitcher: View {
 }
 
 struct HunGitWorkspaceView: View {
+    @AppStorage(HunWorkspacePanelPreference.gitChangesWidth)
+    private var changesPanelWidth = Double(HunWorkspacePanelMetrics.gitDefaultWidth)
+
     let project: HunProject
     @Bindable var model: HunGitWorkspaceModel
 
@@ -1259,12 +1262,12 @@ struct HunGitWorkspaceView: View {
 
             if let status = model.status {
                 if status.isRepository {
-                    HStack(spacing: 0) {
+                    HunResizableWorkspaceSplit(
+                        preferredWidth: $changesPanelWidth,
+                        accessibilityLabel: "Resize Git changes panel"
+                    ) {
                         HunGitChangesPanel(model: model, status: status)
-                            .frame(width: 310)
-
-                        Rectangle().fill(AppTheme.divider).frame(width: 1)
-
+                    } detail: {
                         HunGitDiffPanel(model: model)
                     }
                 } else {
@@ -1534,6 +1537,7 @@ struct HunGitWorkspaceView: View {
 private struct HunGitChangesPanel: View {
     @Bindable var model: HunGitWorkspaceModel
     let status: HunGitStatus
+    @FocusState private var commitMessageFocused: Bool
 
     private var conflicts: [HunGitFileChange] {
         status.conflictedFiles
@@ -1554,6 +1558,17 @@ private struct HunGitChangesPanel: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(AppTheme.textSecondary)
                 Spacer()
+                HunGitToolbarButton(
+                    title: "Stage all",
+                    systemImage: "plus",
+                    loading: model.operation == .staging,
+                    disabled: unstaged.isEmpty || !conflicts.isEmpty || model.isBusy,
+                    help: conflicts.isEmpty
+                        ? "Stage every unstaged change"
+                        : "Resolve conflicts before staging all changes"
+                ) {
+                    Task { await model.stageAll() }
+                }
                 Text("\(status.changeCount)")
                     .font(.system(size: 10.5, weight: .medium))
                     .foregroundStyle(AppTheme.textTertiary)
@@ -1621,21 +1636,22 @@ private struct HunGitChangesPanel: View {
             .padding(.top, 10)
             .padding(.bottom, 3)
 
-            ForEach(changes, id: \.path) { change in
+            ForEach(changes.map { HunGitChangeRowItem(change: $0, staged: staged) }) { item in
                 HunGitChangeRow(
-                    change: change,
-                    staged: staged,
-                    selected: model.selectedPath == change.path && model.selectedStaged == staged,
+                    change: item.change,
+                    staged: item.staged,
+                    selected: model.selectedPath == item.change.path &&
+                        model.selectedStaged == item.staged,
                     busy: model.isBusy,
                     onSelect: {
-                        Task { await model.loadDiff(for: change, staged: staged) }
+                        Task { await model.loadDiff(for: item.change, staged: item.staged) }
                     },
                     onToggleStage: {
                         Task {
-                            if staged {
-                                await model.unstage(change)
+                            if item.staged {
+                                await model.unstage(item.change)
                             } else {
-                                await model.stage(change)
+                                await model.stage(item.change)
                             }
                         }
                     }
@@ -1651,15 +1667,19 @@ private struct HunGitChangesPanel: View {
                 .foregroundStyle(AppTheme.textPrimary)
                 .scrollContentBackground(.hidden)
                 .hunScrollStyle()
+                .focused($commitMessageFocused)
                 .padding(7)
                 .frame(height: 64)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(AppTheme.searchField)
+                        .fill(AppTheme.appBackground)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(AppTheme.divider, lineWidth: 1)
+                        .stroke(
+                            commitMessageFocused ? AppTheme.dividerStrong : AppTheme.divider,
+                            lineWidth: 1
+                        )
                 )
                 .overlay(alignment: .topLeading) {
                     if model.commitMessage.isEmpty {
@@ -1693,7 +1713,7 @@ private struct HunGitChangesPanel: View {
             }
         }
         .padding(10)
-        .background(AppTheme.buttonFill)
+        .background(AppTheme.buttonFill.opacity(0.45))
     }
 
     private func commitButton(
@@ -1703,38 +1723,16 @@ private struct HunGitChangesPanel: View {
         loading: Bool,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                if loading {
-                    ProgressView()
-                        .controlSize(.mini)
-                } else {
-                    Image(systemName: systemImage)
-                        .font(.system(size: 9, weight: .bold))
-                }
-                Text(title)
-                    .lineLimit(1)
-            }
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(prominent ? Color.white : AppTheme.textSecondary)
-            .frame(maxWidth: .infinity)
-            .frame(height: 30)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(prominent ? AppTheme.accent.opacity(0.92) : AppTheme.chipFill)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(prominent ? Color.clear : AppTheme.divider, lineWidth: 1)
-            )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(commitDisabled)
-        .help(
-            prominent
+        HunGitCommitActionButton(
+            title: title,
+            systemImage: systemImage,
+            primary: prominent,
+            loading: loading,
+            disabled: commitDisabled,
+            helpText: prominent
                 ? "Create a local commit from staged changes"
-                : "Create the commit, then push it to the remote"
+                : "Create the commit, then push it to the remote",
+            action: action
         )
     }
 
@@ -1760,6 +1758,89 @@ private struct HunGitChangesPanel: View {
             return "Commit message…"
         }
         return "Commit before switching to \(destination)…"
+    }
+}
+
+private struct HunGitCommitActionButton: View {
+    let title: String
+    let systemImage: String
+    let primary: Bool
+    let loading: Bool
+    let disabled: Bool
+    let helpText: String
+    let action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if loading {
+                    ProgressView()
+                        .controlSize(.mini)
+                } else {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 9, weight: .bold))
+                }
+                Text(title)
+                    .lineLimit(1)
+            }
+            .font(.system(size: 11, weight: .semibold))
+            .frame(maxWidth: .infinity)
+            .frame(height: 30)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(
+            HunGitCommitButtonStyle(
+                primary: primary,
+                disabled: disabled,
+                hovering: hovering
+            )
+        )
+        .disabled(disabled)
+        .onHover { hovering = $0 }
+        .help(helpText)
+    }
+}
+
+private struct HunGitCommitButtonStyle: ButtonStyle {
+    let primary: Bool
+    let disabled: Bool
+    let hovering: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(foregroundColor)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(backgroundColor(pressed: configuration.isPressed))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(borderColor, lineWidth: 1)
+            )
+            .animation(.easeOut(duration: 0.12), value: hovering)
+    }
+
+    private var foregroundColor: Color {
+        guard !disabled else { return AppTheme.textTertiary.opacity(0.55) }
+        return primary ? AppTheme.textPrimary : AppTheme.textSecondary
+    }
+
+    private func backgroundColor(pressed: Bool) -> Color {
+        guard !disabled else { return AppTheme.buttonFill.opacity(0.55) }
+        if pressed {
+            return primary ? Color.white.opacity(0.12) : AppTheme.selection
+        }
+        if hovering {
+            return primary ? Color.white.opacity(0.10) : AppTheme.hover
+        }
+        return primary ? Color.white.opacity(0.075) : AppTheme.buttonFill
+    }
+
+    private var borderColor: Color {
+        guard !disabled else { return AppTheme.divider.opacity(0.55) }
+        return primary ? AppTheme.dividerStrong : AppTheme.divider
     }
 }
 
@@ -1837,7 +1918,6 @@ private struct HunGitChangeRow: View {
 
     private var statusLetter: String {
         if change.conflicted { return "!" }
-        if change.untracked { return "?" }
         return selectedFileStatus.displayLetter
     }
 
@@ -1847,9 +1927,8 @@ private struct HunGitChangeRow: View {
 
     private var statusColor: Color {
         if change.conflicted { return AppTheme.danger }
-        if change.untracked { return AppTheme.textSecondary }
         switch selectedFileStatus {
-        case .added: return AppTheme.success
+        case .untracked, .added: return AppTheme.success
         case .deleted: return AppTheme.danger
         case .renamed, .copied: return AppTheme.accent
         default: return AppTheme.warning

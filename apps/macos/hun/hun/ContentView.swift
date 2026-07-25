@@ -1044,6 +1044,9 @@ private struct ToolbarIconButton: View {
 // MARK: - Project Detail
 
 private struct ProjectDetailView: View {
+    @AppStorage(HunWorkspacePanelPreference.servicesWidth)
+    private var servicesPanelWidth = Double(HunWorkspacePanelMetrics.servicesDefaultWidth)
+
     let project: HunProject
     let gitWorkspace: HunGitWorkspaceModel
     let mode: HunMode
@@ -1096,7 +1099,10 @@ private struct ProjectDetailView: View {
                 HunGitWorkspaceView(project: project, model: gitWorkspace)
                     .transition(.opacity)
             } else {
-                HStack(spacing: 0) {
+                HunResizableWorkspaceSplit(
+                    preferredWidth: $servicesPanelWidth,
+                    accessibilityLabel: "Resize services panel"
+                ) {
                     ServicesPanelView(
                         services: project.services,
                         selectedID: $selectedServiceID,
@@ -1107,11 +1113,8 @@ private struct ProjectDetailView: View {
                         onStop: onStopService,
                         onRemove: onRemoveService
                     )
-                    .frame(width: 320)
                     .background(AppTheme.appBackground)
-
-                    Rectangle().fill(AppTheme.divider).frame(width: 1)
-
+                } detail: {
                     LogsPanelView(
                         selectedService: selectedService,
                         scope: $selectedLogScope,

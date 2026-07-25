@@ -197,6 +197,45 @@ func TestGitActionsExposeDiffStageCommitAndBranchSwitching(t *testing.T) {
 	}
 }
 
+func TestGitStageAllStagesTrackedAndUntrackedChanges(t *testing.T) {
+	daemon, repository := newGitTestDaemon(t)
+	writeGitTestFile(t, repository, "tracked.txt", "updated\n")
+	writeGitTestFile(t, repository, "untracked.txt", "new\n")
+
+	response := daemon.HandleRequest(Request{
+		Action:  "git_stage_all",
+		Project: "repo",
+	})
+	if !response.OK {
+		t.Fatalf("git_stage_all response error: %s", response.Error)
+	}
+
+	staged := runGitTest(t, repository, "diff", "--cached", "--name-only")
+	if !containsLine(staged, "tracked.txt") || !containsLine(staged, "untracked.txt") {
+		t.Fatalf("staged files = %q, want tracked.txt and untracked.txt", staged)
+	}
+	if unstaged := runGitTest(t, repository, "diff", "--name-only"); unstaged != "" {
+		t.Fatalf("unstaged files after git_stage_all = %q", unstaged)
+	}
+
+	var diff GitDiff
+	diffResponse := daemon.HandleRequest(Request{
+		Action:  "git_diff",
+		Project: "repo",
+		Path:    "untracked.txt",
+		Staged:  true,
+	})
+	if !diffResponse.OK {
+		t.Fatalf("staged git_diff for added file response error: %s", diffResponse.Error)
+	}
+	if err := json.Unmarshal(diffResponse.Data, &diff); err != nil {
+		t.Fatalf("unmarshal staged added-file diff: %v", err)
+	}
+	if !containsLine(diff.Content, "+new") {
+		t.Fatalf("staged added-file diff does not contain content:\n%s", diff.Content)
+	}
+}
+
 func TestCappedGitOutputRetainsOnlyItsLimitAndSignalsCancellation(t *testing.T) {
 	cancellations := 0
 	output := cappedGitOutput{

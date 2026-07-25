@@ -116,6 +116,26 @@ func (d *Daemon) handleGitStage(req Request) Response {
 	})
 }
 
+func (d *Daemon) handleGitStageAll(req Request) Response {
+	repository, response := d.gitProjectPath(req)
+	if !response.OK {
+		return response
+	}
+	status, err := readGitStatus(repository)
+	if err != nil {
+		return errorResponse(err.Error())
+	}
+	for _, change := range status.Files {
+		if change.Conflicted {
+			return errorResponse("resolve conflicts before staging all changes")
+		}
+	}
+	if _, err := runGit(repository, "add", "-A"); err != nil {
+		return errorResponse(err.Error())
+	}
+	return d.gitStatusResponse(repository)
+}
+
 func (d *Daemon) handleGitUnstage(req Request) Response {
 	return d.handleGitPathMutation(req, func(repository, path string) error {
 		if _, err := runGit(repository, "rev-parse", "--verify", "HEAD"); err != nil {

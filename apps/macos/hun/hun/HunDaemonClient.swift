@@ -37,6 +37,7 @@ nonisolated protocol HunGitClientProtocol: AnyObject {
     func gitBranches(project: String) async throws -> [HunGitBranch]
     func gitDiff(project: String, path: String, staged: Bool) async throws -> HunGitDiff
     func gitStage(project: String, path: String) async throws -> HunGitStatus
+    func gitStageAll(project: String) async throws -> HunGitStatus
     func gitUnstage(project: String, path: String) async throws -> HunGitStatus
     func gitCommit(project: String, message: String) async throws -> HunGitStatus
     func gitCreateBranch(project: String, branch: String) async throws -> HunGitStatus
@@ -251,7 +252,7 @@ nonisolated struct HunDaemonLogLine: Decodable, Equatable {
 }
 
 nonisolated final class HunDaemonClient: HunDaemonClientProtocol, HunGitClientProtocol {
-    private static let requiredProtocol = 14
+    private static let requiredProtocol = 15
     private let socketPath: String
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -339,6 +340,10 @@ nonisolated final class HunDaemonClient: HunDaemonClientProtocol, HunGitClientPr
 
     func gitStage(project: String, path: String) async throws -> HunGitStatus {
         try await request(HunDaemonRequest(action: "git_stage", project: project, path: path))
+    }
+
+    func gitStageAll(project: String) async throws -> HunGitStatus {
+        try await request(HunDaemonRequest(action: "git_stage_all", project: project))
     }
 
     func gitUnstage(project: String, path: String) async throws -> HunGitStatus {
