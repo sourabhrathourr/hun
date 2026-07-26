@@ -7,13 +7,9 @@ if [[ -z "${GITHUB_ENV:-}" ]]; then
   exit 1
 fi
 
-xcode_path="$(
-  find /Applications -maxdepth 1 -type d -name 'Xcode_26*.app' |
-    sort |
-    tail -1
-)"
-if [[ -z "$xcode_path" ]]; then
-  echo "Xcode 26 is not installed on this runner." >&2
+xcode_path="/Applications/Xcode_26.4.1.app"
+if [[ ! -d "$xcode_path" ]]; then
+  echo "Xcode 26.4.1 is not installed at $xcode_path." >&2
   ls -1 /Applications | grep '^Xcode' || true
   exit 1
 fi

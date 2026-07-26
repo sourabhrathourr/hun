@@ -39,18 +39,18 @@ Standalone CLI archives are optional and do not block a Mac-only release.
 
 ## Runner and Xcode
 
-Use an explicit Apple-silicon runner label such as `macos-15`, not
-`macos-latest`. GitHub currently documents `macos-15` as an arm64 M1 runner and
-warns that `-latest` is the latest stable image GitHub provides, not necessarily
-the newest Apple OS. Pinning the OS label makes runner migrations deliberate.
+Use the explicit Apple-silicon runner label `macos-26`, not `macos-latest`.
+GitHub documents `macos-26` as an arm64 M1 runner and warns that `-latest` is
+the latest stable image GitHub provides, not necessarily the newest Apple OS.
+Pinning the OS label makes runner migrations deliberate.
 ([GitHub-hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners))
 
 Also select an explicit installed Xcode path with `DEVELOPER_DIR` and print
-`xcodebuild -version` at the beginning of the job. Hun's project was last
-upgraded by Xcode 26, while the default Xcode on `macos-15` may be older.
-GitHub's runner-image manifest is the source of truth for currently installed
-Xcode paths.
-([macOS 15 arm64 image manifest](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md))
+`xcodebuild -version` at the beginning of the job. Hun pins
+`/Applications/Xcode_26.4.1.app` so CI and production releases use the same
+known-good asset-catalog toolchain. GitHub's runner-image manifest is the source
+of truth for currently installed Xcode paths.
+([macOS 26 arm64 image manifest](https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md))
 
 The workflow should fail unless the app executable and every bundled executable
 (including the Go `hun` CLI) are `arm64`. If Hun later ships Intel support,

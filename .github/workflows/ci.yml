@@ -49,11 +49,11 @@ jobs:
         run: bun run build
 
   macos:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Select Xcode 26
+      - name: Select Xcode 26.4.1
         run: scripts/select-xcode-26.sh
 
       - name: Print toolchain
