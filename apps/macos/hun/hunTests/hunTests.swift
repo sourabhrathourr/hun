@@ -6,6 +6,57 @@ import Testing
 
 @MainActor
 struct hunTests {
+    @Test func updateBannerPreviewUsesExplicitVersion() {
+        let version = HunUpdater.previewUpdateVersion(
+            arguments: ["hun", "-HunPreviewUpdateBanner", "0.4.0"],
+            currentVersion: "0.3.0"
+        )
+
+        #expect(version == "0.4.0")
+    }
+
+    @Test func updateBannerPreviewDefaultsToNextPatchVersion() {
+        let version = HunUpdater.previewUpdateVersion(
+            arguments: ["hun", "-HunPreviewUpdateBanner"],
+            currentVersion: "0.3.0"
+        )
+
+        #expect(version == "0.3.1")
+        #expect(
+            HunUpdater.previewUpdateVersion(
+                arguments: ["hun"],
+                currentVersion: "0.3.0"
+            ) == nil
+        )
+    }
+
+    @Test func runtimeBuildParsesVersionAndCommit() {
+        #expect(
+            HunRuntimeBuild.parse("hun.sh v0.3.1 (commit: abc1234)\n")
+                == HunRuntimeBuild(version: "v0.3.1", commit: "abc1234")
+        )
+        #expect(HunRuntimeBuild.parse("hun.sh v0.3.1") == nil)
+    }
+
+    @Test func runtimeBuildRequiresProtocolVersionAndCommitToMatch() {
+        let build = HunRuntimeBuild(version: "v0.3.1", commit: "abc1234")
+        let daemon = HunDaemonInfo(
+            status: "pong",
+            protocolVersion: 15,
+            version: "v0.3.1",
+            commit: "abc1234",
+            pid: 123,
+            startedAt: "2026-07-26T09:00:00Z"
+        )
+
+        #expect(build.matches(daemon, requiredProtocol: 15))
+        #expect(!build.matches(daemon, requiredProtocol: 16))
+        #expect(
+            !HunRuntimeBuild(version: "v0.3.1", commit: "newer")
+                .matches(daemon, requiredProtocol: 15)
+        )
+    }
+
     @Test func conventionalCommitFormatterNormalizesGeneratedFields() {
         let suggestion = HunCommitMessageSuggestion(
             type: "Feature",

@@ -33,7 +33,7 @@
 	<key>SUFeedURL</key>
 	<string>https://hun.sh/appcast.xml</string>
 	<key>SUPublicEDKey</key>
-	<string>2+DOJyBNAz8nM2joYNLxzkL1nzo2EIVjGaJRKyPmRdI=</string>
+	<string>rFCoDj0x69xciEJ/X/yO46HGdmdwd9YCR+3+H2c0pVk=</string>
 	<key>SUScheduledCheckInterval</key>
 	<integer>3600</integer>
 	<key>SUShowReleaseNotes</key>

@@ -62,6 +62,7 @@ if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "Invalid version: $VERSION (expected semantic version like v0.1.0)" >&2
   exit 1
 fi
+RELEASE_VERSION="${VERSION#v}"
 
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "Not inside a git repository." >&2
@@ -104,6 +105,35 @@ if git ls-remote --tags origin "refs/tags/$VERSION" | grep -q .; then
   exit 1
 fi
 
+echo "Validating macOS version and changelog..."
+release_notes="$(mktemp)"
+trap 'rm -f "$release_notes"' EXIT
+node scripts/render-macos-release-notes.mjs "$RELEASE_VERSION" "$release_notes"
+
+build_settings="$(
+  xcodebuild \
+    -project apps/macos/hun/hun.xcodeproj \
+    -target hun \
+    -configuration Release \
+    -showBuildSettings
+)"
+project_version="$(
+  awk '/MARKETING_VERSION =/{ print $3; exit }' <<< "$build_settings"
+)"
+project_build="$(
+  awk '/CURRENT_PROJECT_VERSION =/{ print $3; exit }' <<< "$build_settings"
+)"
+
+if [[ "$project_version" != "$RELEASE_VERSION" ]]; then
+  echo "Release tag is $VERSION but the Hun app target is $project_version." >&2
+  echo "Update MARKETING_VERSION before releasing." >&2
+  exit 1
+fi
+if [[ ! "$project_build" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid Hun app build number: $project_build" >&2
+  exit 1
+fi
+
 if [[ "$SKIP_TESTS" -eq 0 ]]; then
   echo "Running test suite..."
   go test ./...
@@ -114,6 +144,7 @@ fi
 SHORT_SHA="$(git rev-parse --short HEAD)"
 echo "Ready to release:"
 echo "  version: $VERSION"
+echo "  build:   $project_build"
 echo "  commit:  $SHORT_SHA"
 
 if [[ "$DRY_RUN" -eq 1 ]]; then

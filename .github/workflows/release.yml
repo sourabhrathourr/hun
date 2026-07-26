@@ -60,6 +60,7 @@ jobs:
         run: go test -race ./internal/cli ./internal/daemon ./internal/detect ./internal/state ./internal/tui
 
   build-cli:
+    if: vars.PUBLISH_STANDALONE_CLI == 'true'
     needs: [authorize, verify]
     runs-on: ubuntu-latest
     steps:
@@ -92,7 +93,7 @@ jobs:
   build-macos:
     needs: [authorize, verify]
     runs-on: macos-15
-    environment: production
+    environment: Production
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -258,6 +259,11 @@ jobs:
 
   publish:
     needs: [authorize, build-cli, build-macos]
+    if: >-
+      always() &&
+      needs.authorize.result == 'success' &&
+      needs.build-macos.result == 'success' &&
+      (needs.build-cli.result == 'success' || needs.build-cli.result == 'skipped')
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -268,6 +274,7 @@ jobs:
           fetch-depth: 0
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: vars.PUBLISH_STANDALONE_CLI == 'true'
         with:
           name: release-cli
           path: release-cli
@@ -281,6 +288,14 @@ jobs:
         env:
           RELEASE_VERSION: ${{ needs.authorize.outputs.version }}
         run: node scripts/render-macos-release-notes.mjs "$RELEASE_VERSION" release-notes.md
+
+      - name: Validate optional Homebrew publishing
+        if: vars.PUBLISH_STANDALONE_CLI == 'true'
+        run: |
+          if [[ -z "${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}" ]]; then
+            echo "PUBLISH_STANDALONE_CLI is enabled but HOMEBREW_TAP_GITHUB_TOKEN is missing."
+            exit 1
+          fi
 
       - name: Create draft GitHub Release
         env:
@@ -297,15 +312,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          assets=(release-macos/*)
+          if [[ -d release-cli ]]; then
+            while IFS= read -r -d '' asset; do
+              assets+=("$asset")
+            done < <(find release-cli -maxdepth 1 -type f -print0)
+          fi
+
           gh release upload "$GITHUB_REF_NAME" \
-            release-cli/*.tar.gz \
-            release-cli/checksums.txt \
-            release-macos/* \
+            "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY"
 
-          expected_count="$(
-            find release-cli release-macos -maxdepth 1 -type f | wc -l | tr -d ' '
-          )"
+          expected_count="${#assets[@]}"
           uploaded_count="$(
             gh release view "$GITHUB_REF_NAME" \
               --repo "$GITHUB_REPOSITORY" \
@@ -322,14 +340,8 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --draft=false
 
-      - name: Validate Homebrew tap token
-        run: |
-          if [[ -z "${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}" ]]; then
-            echo "Missing HOMEBREW_TAP_GITHUB_TOKEN secret"
-            exit 1
-          fi
-
       - name: Update Homebrew formula
+        if: vars.PUBLISH_STANDALONE_CLI == 'true'
         run: |
           bash ./scripts/update-homebrew-formula.sh \
             --version "$GITHUB_REF_NAME" \

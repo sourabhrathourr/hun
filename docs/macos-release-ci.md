@@ -19,7 +19,7 @@ Use two separate trust levels:
 1. **CI** runs for pull requests and normal pushes. It runs Go and Swift tests
    and an unsigned macOS build. It receives no production secrets.
 2. **Release CD** runs only for an existing, trusted `v*` tag. It enters a
-   protected GitHub `production` environment, imports the Developer ID
+   protected GitHub `Production` environment, imports the Developer ID
    certificate into a temporary keychain, builds and signs the app, creates and
    signs the DMG, notarizes and staples it, generates the Sparkle appcast from
    those final bytes, publishes the GitHub Release, and deploys the appcast
@@ -32,16 +32,10 @@ may deploy. Availability of reviewers and environment controls depends on the
 repository visibility and GitHub plan.
 ([GitHub environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments))
 
-Hun's existing `.github/workflows/release.yml` already lets GoReleaser create a
-GitHub Release. There must be only one release owner. The eventual workflow
-should either:
-
-- build the Go and macOS artifacts first and have one final job create the
-  release with all assets, or
-- let GoReleaser create the release, then have the macOS job upload the DMG to
-  that same tag.
-
-The first option gives the cleanest all-or-nothing publication.
+Hun's `.github/workflows/release.yml` uses one final publication job. It builds
+and verifies the macOS artifacts first, creates a draft release, uploads every
+expected asset, verifies the asset count, and only then publishes the release.
+Standalone CLI archives are optional and do not block a Mac-only release.
 
 ## Runner and Xcode
 
@@ -65,7 +59,7 @@ Swift app universal is insufficient.
 
 ## Production secrets and variables
 
-Create a GitHub environment named `production`.
+Create a GitHub environment named `Production`.
 
 Environment **secrets**:
 
@@ -83,12 +77,15 @@ Environment **variables**:
 | `APPLE_TEAM_ID` | Personal Apple Developer team ID |
 | `NOTARY_KEY_ID` | App Store Connect API key ID |
 | `NOTARY_ISSUER_ID` | App Store Connect API issuer UUID |
-| `SPARKLE_FEED_URL` | `https://hun.sh/appcast.xml` |
-| `SPARKLE_DOWNLOAD_PREFIX` | Version-specific GitHub Release asset directory |
 
-The team ID, key ID, issuer ID, feed URL, and download prefix are identifiers,
-not private key material. Keeping them as environment variables makes that
-distinction visible.
+The team ID, key ID, and issuer ID are identifiers, not private key material.
+Keeping them as environment variables makes that distinction visible.
+
+At repository scope, `PUBLISH_STANDALONE_CLI` is an optional variable. Leave it
+unset or set it to `false` for the normal Mac-first pipeline. Set it to `true`
+only when the same tag should also publish GoReleaser archives and update the
+Homebrew tap; those releases additionally require
+`HOMEBREW_TAP_GITHUB_TOKEN` in the `release` environment.
 
 GitHub recommends secrets for the Apple `.p12` and its password, documents
 base64 as the transport for the binary certificate, and provides a reference

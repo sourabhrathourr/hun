@@ -90,6 +90,19 @@ Sources: [Gentle Update Reminders and official button example](https://sparkle-p
 [SwiftUI setup](https://sparkle-project.org/documentation/programmatic-setup/),
 [`SPUUserDriver` states and replies](https://sparkle-project.org/documentation/api-reference/Protocols/SPUUserDriver.html).
 
+### Preview the real banner without publishing
+
+The Debug app accepts a launch argument that injects a visual-only update:
+
+```text
+-HunPreviewUpdateBanner 0.3.1
+```
+
+In Xcode, open **Product → Scheme → Edit Scheme… → Run → Arguments**, add the
+two values above, and run the app. Omit the version to preview the next patch
+version automatically. The hook is compiled only into Debug builds; Release
+builds can show the banner only after Sparkle discovers a signed appcast item.
+
 ## What happens after the user clicks Update
 
 Sparkle downloads the archive, validates the EdDSA signature and Apple code
@@ -143,7 +156,8 @@ For every release:
 
 1. Increase both versions, for example from `0.2.2 (3)` to `0.2.3 (4)`, and
    write release notes.
-2. Build the Release app for `arm64`.
+2. Build the Release app for `arm64`. The app build also compiles and embeds a
+   matching Go runtime from the same Git commit.
 3. Sign all nested executable code, including Hun's bundled CLI and Sparkle's
    framework/helper bundles, from the inside out with the same Developer ID
    Application identity; then sign the outer app.
@@ -158,7 +172,9 @@ For every release:
    appcast last so clients never see an enclosure URL that is not live.
 8. Test an update from the previous **notarized production build**, including
    banner appearance, release notes, download, installation, relaunch, the new
-   version number, bundled CLI behavior, and **Check for Updates…**.
+   version number, bundled runtime behavior, and **Check for Updates…**. On
+   relaunch, the app replaces a running daemon unless its protocol, version,
+   and commit all match the bundled runtime.
 9. Update the website's direct-download button to the same final DMG. Keep old
    full archives if delta generation is desired.
 

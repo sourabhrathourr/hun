@@ -191,7 +191,7 @@ if [ "$BUILT_FEED_URL" != "https://hun.sh/appcast.xml" ]; then
   echo "Built app has an unexpected Sparkle feed URL: $BUILT_FEED_URL" >&2
   exit 1
 fi
-if [ "$BUILT_PUBLIC_ED_KEY" != "2+DOJyBNAz8nM2joYNLxzkL1nzo2EIVjGaJRKyPmRdI=" ]; then
+if [ "$BUILT_PUBLIC_ED_KEY" != "rFCoDj0x69xciEJ/X/yO46HGdmdwd9YCR+3+H2c0pVk=" ]; then
   echo "Built app has an unexpected Sparkle public key." >&2
   exit 1
 fi

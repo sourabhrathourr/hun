@@ -31,6 +31,17 @@ final class HunUpdater: NSObject, SPUStandardUserDriverDelegate {
             updaterDelegate: nil,
             userDriverDelegate: self
         )
+
+        #if DEBUG
+        if let version = Self.previewUpdateVersion(
+            arguments: ProcessInfo.processInfo.arguments,
+            currentVersion: Bundle.main.object(
+                forInfoDictionaryKey: "CFBundleShortVersionString"
+            ) as? String
+        ) {
+            availableUpdate = HunAvailableUpdate(version: version)
+        }
+        #endif
     }
 
     func checkForUpdates() {
@@ -68,5 +79,33 @@ final class HunUpdater: NSObject, SPUStandardUserDriverDelegate {
 
     func standardUserDriverWillFinishUpdateSession() {
         availableUpdate = nil
+    }
+
+    nonisolated static func previewUpdateVersion(
+        arguments: [String],
+        currentVersion: String?
+    ) -> String? {
+        guard let flagIndex = arguments.firstIndex(of: "-HunPreviewUpdateBanner") else {
+            return nil
+        }
+
+        let valueIndex = arguments.index(after: flagIndex)
+        if arguments.indices.contains(valueIndex) {
+            let value = arguments[valueIndex]
+            if !value.isEmpty, !value.hasPrefix("-") {
+                return value
+            }
+        }
+
+        guard let currentVersion else {
+            return "0.3.1"
+        }
+
+        let components = currentVersion.split(separator: ".").compactMap { Int($0) }
+        guard components.count == 3 else {
+            return "0.3.1"
+        }
+
+        return "\(components[0]).\(components[1]).\(components[2] + 1)"
     }
 }
