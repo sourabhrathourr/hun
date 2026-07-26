@@ -1,0 +1,127 @@
+[
+  {
+    "version": "0.3.0",
+    "date": "2026-07-26",
+    "title": "The workspace release",
+    "summary": "Hun grows from a service dashboard into a place to inspect, change, and ship the code already running around you.",
+    "groups": [
+      {
+        "title": "Git workspace",
+        "changes": [
+          "Review branches, sync state, staged work, local changes, and untracked files without leaving the active project.",
+          "Inspect high-performance syntax-highlighted diffs, switch between staged and unstaged views, and resize the workspace around the task.",
+          "Update branches safely while preserving staged, unstaged, and untracked work, with explicit preflight and recovery states.",
+          "Generate concise commit-message suggestions from the staged diff on supported Macs, then edit before committing."
+        ]
+      },
+      {
+        "title": "Integrated terminal",
+        "changes": [
+          "Open a persistent terminal session for each project directly beneath the workspace.",
+          "Resize the terminal with a native-feeling divider and keep sessions aligned as projects open, close, or change."
+        ]
+      },
+      {
+        "title": "Mac distribution",
+        "changes": [
+          "Ship an Apple-silicon app signed with Developer ID, notarized by Apple, and packaged in a drag-to-Applications DMG.",
+          "Add Sparkle-powered updates with hourly checks, a quiet in-app update banner, release notes, secure archive verification, installation, and relaunch.",
+          "Add Check for Updates to the app menu and connect every release to this versioned changelog."
+        ]
+      }
+    ]
+  },
+  {
+    "version": "0.2.2",
+    "date": "2026-07-11",
+    "title": "Reliable runtimes",
+    "summary": "Ports, process ownership, readiness, and dashboard continuity now agree on what is actually running.",
+    "groups": [
+      {
+        "title": "Runtime",
+        "changes": [
+          "Keep configured ports when they are free, offset only genuine collisions, and publish the selected launch port as PORT.",
+          "Reconcile listeners only when they belong to the launched service and reject collisions with other Hun services or instances.",
+          "Recover from missing sockets, stale PID files, failed termination, and orphaned development daemons.",
+          "Keep readiness and live-port state aligned with the actual process."
+        ]
+      },
+      {
+        "title": "Mac app",
+        "changes": [
+          "Restore the selected project, open tabs, selected service, and log scope across launches.",
+          "Crossfade project changes with Reduce Motion support and use restrained runtime status treatments."
+        ]
+      }
+    ]
+  },
+  {
+    "version": "0.2.1",
+    "date": "2026-07-11",
+    "title": "Health and focus",
+    "summary": "A stricter view of ports and daemon health, with safer transitions between focus and multitask work.",
+    "groups": [
+      {
+        "title": "Runtime",
+        "changes": [
+          "Prioritize configured ports, verify live listeners, and prevent concurrent port claims.",
+          "Expose daemon health, protocol, PID, uptime, restart controls, and diagnostics in native settings.",
+          "Upgrade the daemon protocol so the app can replace stale background daemons automatically."
+        ]
+      },
+      {
+        "title": "Workflow",
+        "changes": [
+          "Open local running services from the service card or context menu.",
+          "Keep the selected project running when switching from Multitask to Focus whenever possible."
+        ]
+      }
+    ]
+  },
+  {
+    "version": "0.1.6",
+    "date": "2026-02-21",
+    "title": "Log viewer v2",
+    "summary": "A dual-pane log workflow with deterministic navigation and stricter service state.",
+    "groups": [
+      {
+        "title": "Logs",
+        "changes": [
+          "Add dual-pane keyboard and mouse routing, live mode, wrapping, deterministic scrolling, and range selection.",
+          "Improve copying with OSC52 and native clipboard fallbacks plus clear visual feedback.",
+          "Reset per-service in-memory logs and distinguish stopping a service from stopping its whole project."
+        ]
+      }
+    ]
+  },
+  {
+    "version": "0.1.5",
+    "date": "2026-02-18",
+    "title": "A smoother first run",
+    "summary": "Focused improvements to onboarding, documentation, and release validation.",
+    "groups": [
+      {
+        "title": "Experience",
+        "changes": [
+          "Refresh the website and documentation around the project-first workflow.",
+          "Polish hun onboard and validate version output in the Homebrew formula."
+        ]
+      }
+    ]
+  },
+  {
+    "version": "0.1.4",
+    "date": "2026-02-10",
+    "title": "Initial public release",
+    "summary": "The first complete Hun workflow for running projects rather than arranging terminal sessions.",
+    "groups": [
+      {
+        "title": "Foundation",
+        "changes": [
+          "Switch between projects in Focus mode or run several side by side in Multitask mode.",
+          "Manage services, automatic port offsets, unified logs, and the terminal UI from one daemon-backed tool."
+        ]
+      }
+    ]
+  }
+]

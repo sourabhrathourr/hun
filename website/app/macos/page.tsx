@@ -1,28 +1,30 @@
-import { InstallButton } from "@/components/install-button";
 import { Reveal } from "@/components/reveal";
+import releases from "@/content/changelog.json";
 import macosImage from "@/public/macos-image.png";
 import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
 
-const installCommand = "curl -fsSL https://hun.sh/install-macos-beta.sh | sh";
+const downloadURL =
+  "https://github.com/sourabhrathourr/hun/releases/latest/download/hun-macos-arm64.dmg";
+const currentVersion = releases[0].version;
 
 export const metadata: Metadata = {
-  title: "hun macOS app beta",
+  title: "hun for macOS",
   description:
-    "Early testing build of the hun macOS menu bar app for switching projects, watching logs, and managing dev services.",
+    "The native Hun workspace for switching projects, reviewing Git changes, running terminals, watching logs, and managing dev services.",
   openGraph: {
-    title: "hun macOS app beta",
+    title: "hun for macOS",
     description:
-      "Early testing build of the hun macOS menu bar app for switching projects, watching logs, and managing dev services.",
+      "The native Hun workspace for projects, Git changes, terminals, logs, and dev services.",
     url: "https://hun.sh/macos",
     images: [{ url: "/api/og/macos", width: 1200, height: 630 }],
   },
   twitter: {
     card: "summary_large_image",
-    title: "hun macOS app beta",
+    title: "hun for macOS",
     description:
-      "Early testing build of the hun macOS menu bar app for switching projects, watching logs, and managing dev services.",
+      "The native Hun workspace for projects, Git changes, terminals, logs, and dev services.",
     images: ["/api/og/macos"],
   },
 };
@@ -62,6 +64,12 @@ export default function MacosPage() {
             </Link>
             <div className="flex items-center gap-4">
               <Link
+                href="/changelog"
+                className="underline underline-offset-2 hover:text-muted-foreground/70"
+              >
+                changelog
+              </Link>
+              <Link
                 href="/docs"
                 className="underline underline-offset-2 hover:text-muted-foreground/70"
               >
@@ -81,7 +89,7 @@ export default function MacosPage() {
           <Reveal delay={d}>
             <div className="max-w-2xl space-y-4">
               <p className="text-[12px] uppercase tracking-[0.18em] text-muted-foreground/40">
-                macOS app beta
+                macOS · Apple silicon
               </p>
               <h1 className="font-serif text-[42px] sm:text-[68px] leading-[0.95] text-foreground">
                 hun in your menu bar.
@@ -112,24 +120,33 @@ export default function MacosPage() {
           <Reveal delay={d * 3}>
             <div className="space-y-4">
               <h2 className="font-serif text-[30px] sm:text-[40px] leading-tight text-foreground">
-                early testing build
+                ready for the workday
               </h2>
               <p className="text-[14px] leading-relaxed text-muted-foreground/60">
-                this is the current beta path before the signed dmg. the
-                installer verifies the zip, removes old hun cli installs that can
-                conflict with the daemon protocol, installs hun.app, and opens it.
+                Developer ID signed, notarized by Apple, and shipped with secure
+                in-app updates. Download the DMG, drag Hun to Applications, and
+                future releases arrive inside the app.
               </p>
             </div>
           </Reveal>
 
           <Reveal delay={d * 4}>
-            <div className="space-y-5">
-              <div className="bg-muted px-3 py-2 rounded-sm flex items-start gap-2 text-[12px] leading-relaxed font-mono text-foreground/80">
-                <code className="min-w-0 flex-1 whitespace-pre-wrap break-all sm:break-normal">
-                  {installCommand}
-                </code>
-                <InstallButton copyText={installCommand} />
+            <div className="space-y-6">
+              <div className="flex flex-wrap items-center gap-3">
+                <a
+                  href={downloadURL}
+                  className="inline-flex h-10 items-center rounded-sm bg-foreground px-4 text-[12px] font-semibold text-background transition-opacity hover:opacity-85 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
+                >
+                  Download for Apple silicon
+                </a>
+                <span className="text-[11px] text-muted-foreground/35">
+                  v{currentVersion} · macOS 15+
+                </span>
               </div>
+              <p className="max-w-lg text-[12px] leading-relaxed text-muted-foreground/45">
+                Hun checks for updates hourly. You stay in control of when an
+                update installs and the app relaunches.
+              </p>
               <div className="grid gap-4 sm:grid-cols-2">
                 {details.map((detail) => (
                   <div
@@ -157,7 +174,14 @@ export default function MacosPage() {
             >
               back to hun.sh
             </Link>{" "}
-            &middot; beta app installs to{" "}
+            &middot;{" "}
+            <Link
+              href="/changelog"
+              className="underline underline-offset-2 hover:text-muted-foreground/60"
+            >
+              changelog
+            </Link>{" "}
+            &middot; app installs to{" "}
             <code className="text-muted-foreground/55">
               /Applications/hun.app
             </code>

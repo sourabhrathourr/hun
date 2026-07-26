@@ -1,12 +1,16 @@
 import type { MetadataRoute } from "next";
 
 export default function sitemap(): MetadataRoute.Sitemap {
+  const lastModified = new Date();
   return [
-    {
-      url: "https://hun.sh",
-      lastModified: new Date(),
-      changeFrequency: "weekly",
-      priority: 1,
-    },
-  ];
+    ["", "weekly", 1],
+    ["/macos", "weekly", 0.9],
+    ["/changelog", "weekly", 0.8],
+    ["/docs", "weekly", 0.8],
+  ].map(([path, changeFrequency, priority]) => ({
+    url: `https://hun.sh${path}`,
+    lastModified,
+    changeFrequency,
+    priority,
+  })) as MetadataRoute.Sitemap;
 }

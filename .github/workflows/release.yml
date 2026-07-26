@@ -15,65 +15,326 @@ concurrency:
 jobs:
   authorize:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Restrict release actor
         run: |
-          if [ "${{ github.actor }}" != "sourabhrathourr" ]; then
+          if [[ "${{ github.actor }}" != "sourabhrathourr" ]]; then
             echo "Release is restricted to sourabhrathourr. Current actor: ${{ github.actor }}"
             exit 1
           fi
+
+      - name: Validate release tag
+        id: version
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Expected a vX.Y.Z tag, got: $GITHUB_REF_NAME"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
   verify:
     needs: authorize
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.22.x"
+          cache: true
+
+      - name: Validate changelog version
+        env:
+          RELEASE_VERSION: ${{ needs.authorize.outputs.version }}
+        run: |
+          node scripts/render-macos-release-notes.mjs "$RELEASE_VERSION" "$RUNNER_TEMP/release-notes.md"
 
       - name: Run test suite
         run: go test ./...
 
-      - name: Run race tests (core packages)
+      - name: Run race tests for core packages
         run: go test -race ./internal/cli ./internal/daemon ./internal/detect ./internal/state ./internal/tui
 
-  release:
+  build-cli:
     needs: [authorize, verify]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.22.x"
+          cache: true
+
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        with:
+          version: "~> v2"
+          args: release --clean --skip=publish
+
+      - name: Keep public CLI artifacts only
+        run: |
+          mkdir release-cli
+          cp dist/*.tar.gz dist/checksums.txt release-cli/
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-cli
+          path: release-cli
+          if-no-files-found: error
+          retention-days: 7
+
+  build-macos:
+    needs: [authorize, verify]
+    runs-on: macos-15
+    environment: production
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate protected release configuration
+        env:
+          DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          NOTARY_KEY_P8_BASE64: ${{ secrets.NOTARY_KEY_P8_BASE64 }}
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          NOTARY_KEY_ID: ${{ vars.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ vars.NOTARY_ISSUER_ID }}
+        run: |
+          required=(
+            DEVELOPER_ID_P12_BASE64
+            DEVELOPER_ID_P12_PASSWORD
+            NOTARY_KEY_P8_BASE64
+            SPARKLE_ED_PRIVATE_KEY
+            APPLE_TEAM_ID
+            NOTARY_KEY_ID
+            NOTARY_ISSUER_ID
+          )
+          for name in "${required[@]}"; do
+            if [[ -z "${!name}" ]]; then
+              echo "Missing production environment secret or variable: $name"
+              exit 1
+            fi
+          done
+
+      - name: Select Xcode 26
+        run: scripts/select-xcode-26.sh
+
+      - name: Print toolchain
+        run: xcodebuild -version
+
+      - name: Validate app version and increasing build number
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.authorize.outputs.version }}
+        run: |
+          build_settings="$(
+            xcodebuild \
+              -project apps/macos/hun/hun.xcodeproj \
+              -target hun \
+              -configuration Release \
+              -showBuildSettings
+          )"
+          project_version="$(
+            awk '/MARKETING_VERSION =/{ print $3; exit }' <<< "$build_settings"
+          )"
+          project_build="$(
+            awk '/CURRENT_PROJECT_VERSION =/{ print $3; exit }' <<< "$build_settings"
+          )"
+          if [[ "$project_version" != "$RELEASE_VERSION" ]]; then
+            echo "Tag is v$RELEASE_VERSION but the Hun app target is $project_version."
+            exit 1
+          fi
+          if [[ ! "$project_build" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Invalid Hun app build number: $project_build"
+            exit 1
+          fi
+
+          latest_release="$(
+            gh api "repos/$GITHUB_REPOSITORY/releases/latest" 2>/dev/null || true
+          )"
+          appcast_url="$(
+            jq -r '
+              [.assets[]? | select(.name == "appcast.xml") | .browser_download_url][0] // ""
+            ' <<< "$latest_release"
+          )"
+          if [[ -n "$appcast_url" ]]; then
+            previous_build="$(
+              curl -fsSL "$appcast_url" |
+                sed -n 's/.*<sparkle:version>\([0-9][0-9]*\)<\/sparkle:version>.*/\1/p' |
+                head -1
+            )"
+            if [[ -n "$previous_build" ]] && (( project_build <= previous_build )); then
+              echo "Build $project_build must be greater than published build $previous_build."
+              exit 1
+            fi
+          fi
+
+      - name: Import Developer ID certificate
+        env:
+          DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          certificate_path="$RUNNER_TEMP/developer-id.p12"
+          keychain_path="$RUNNER_TEMP/hun-release.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+
+          printf '%s' "$DEVELOPER_ID_P12_BASE64" | base64 -D > "$certificate_path"
+          chmod 600 "$certificate_path"
+
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" \
+            -P "$DEVELOPER_ID_P12_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "$keychain_path"
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -k "$keychain_password" \
+            "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+
+          rm -f "$certificate_path"
+          echo "HUN_RELEASE_KEYCHAIN=$keychain_path" >> "$GITHUB_ENV"
+
+      - name: Decode notarization API key
+        env:
+          NOTARY_KEY_P8_BASE64: ${{ secrets.NOTARY_KEY_P8_BASE64 }}
+        run: |
+          notary_key_path="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s' "$NOTARY_KEY_P8_BASE64" | base64 -D > "$notary_key_path"
+          chmod 600 "$notary_key_path"
+          echo "HUN_NOTARY_KEY_PATH=$notary_key_path" >> "$GITHUB_ENV"
+
+      - name: Build, sign, notarize, staple, and generate appcast
+        env:
+          RELEASE_VERSION: ${{ needs.authorize.outputs.version }}
+          HUN_DEVELOPER_ID_APPLICATION: "Developer ID Application: Sourabh Rathour (${{ vars.APPLE_TEAM_ID }})"
+          HUN_NOTARY_KEY_ID: ${{ vars.NOTARY_KEY_ID }}
+          HUN_NOTARY_ISSUER_ID: ${{ vars.NOTARY_ISSUER_ID }}
+          HUN_SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          scripts/package-macos-release.sh \
+            --version "$RELEASE_VERSION" \
+            --generate-appcast
+
+      - name: Keep public Mac artifacts only
+        env:
+          RELEASE_VERSION: ${{ needs.authorize.outputs.version }}
+        run: |
+          source_dir="build/macos-release/dist"
+          mkdir release-macos
+          cp \
+            "$source_dir/hun-$RELEASE_VERSION-macos-arm64.dmg" \
+            "$source_dir/hun-$RELEASE_VERSION-macos-arm64.dmg.sha256" \
+            "$source_dir/hun-macos-arm64.dmg" \
+            "$source_dir/appcast.xml" \
+            release-macos/
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-macos
+          path: release-macos
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Clean up release credentials
+        if: always()
+        run: |
+          if [[ -n "${HUN_RELEASE_KEYCHAIN:-}" ]]; then
+            security delete-keychain "$HUN_RELEASE_KEYCHAIN" || true
+          fi
+          rm -f "$RUNNER_TEMP/AuthKey.p8" "$RUNNER_TEMP/developer-id.p12"
+
+  publish:
+    needs: [authorize, build-cli, build-macos]
     runs-on: ubuntu-latest
     environment: release
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          go-version: "1.22.x"
+          name: release-cli
+          path: release-cli
 
-      - name: Validate brew tap token
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-macos
+          path: release-macos
+
+      - name: Render release notes
+        env:
+          RELEASE_VERSION: ${{ needs.authorize.outputs.version }}
+        run: node scripts/render-macos-release-notes.mjs "$RELEASE_VERSION" release-notes.md
+
+      - name: Create draft GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ -z "${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}" ]; then
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --draft \
+            --title "hun $GITHUB_REF_NAME" \
+            --notes-file release-notes.md
+
+      - name: Upload and verify every release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" \
+            release-cli/*.tar.gz \
+            release-cli/checksums.txt \
+            release-macos/* \
+            --repo "$GITHUB_REPOSITORY"
+
+          expected_count="$(
+            find release-cli release-macos -maxdepth 1 -type f | wc -l | tr -d ' '
+          )"
+          uploaded_count="$(
+            gh release view "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json assets \
+              --jq '.assets | length'
+          )"
+          test "$uploaded_count" = "$expected_count"
+
+      - name: Publish complete GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release edit "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false
+
+      - name: Validate Homebrew tap token
+        run: |
+          if [[ -z "${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}" ]]; then
             echo "Missing HOMEBREW_TAP_GITHUB_TOKEN secret"
             exit 1
           fi
 
-      - uses: goreleaser/goreleaser-action@v5
-        with:
-          version: "~> v2"
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Update Homebrew formula
         run: |
           bash ./scripts/update-homebrew-formula.sh \
-            --version "${{ github.ref_name }}" \
-            --checksums "dist/checksums.txt" \
-            --source-repo "${{ github.repository }}" \
+            --version "$GITHUB_REF_NAME" \
+            --checksums "release-cli/checksums.txt" \
+            --source-repo "$GITHUB_REPOSITORY" \
             --tap-repo "hundotsh/homebrew-tap"
         env:
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}

@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		5A31B6992FE1000000D3B44F /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 5A31B69B2FE1000000D3B44F /* SwiftTerm */; };
+		5A31B69C2FE2000000D3B44F /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 5A31B69E2FE2000000D3B44F /* Sparkle */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -33,9 +34,22 @@
 		5A31B6852FA5344F00D3B44F /* hunUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = hunUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		5A31B69F2FE3000000D3B44F /* Exceptions for "hun" folder in "hun" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 5A31B66D2FA5344E00D3B44F /* hun */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		5A31B6702FA5344E00D3B44F /* hun */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				5A31B69F2FE3000000D3B44F /* Exceptions for "hun" folder in "hun" target */,
+			);
 			path = hun;
 			sourceTree = "<group>";
 		};
@@ -56,6 +70,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5A31B69C2FE2000000D3B44F /* Sparkle in Frameworks */,
 				5A31B6992FE1000000D3B44F /* SwiftTerm in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -118,6 +133,7 @@
 			);
 			name = hun;
 			packageProductDependencies = (
+				5A31B69E2FE2000000D3B44F /* Sparkle */,
 				5A31B69B2FE1000000D3B44F /* SwiftTerm */,
 			);
 			productName = hun;
@@ -202,13 +218,14 @@
 			);
 			mainGroup = 5A31B6652FA5344E00D3B44F;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				5A31B69D2FE2000000D3B44F /* XCRemoteSwiftPackageReference "Sparkle" */,
+				5A31B69A2FE1000000D3B44F /* XCRemoteSwiftPackageReference "SwiftTerm" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 5A31B66F2FA5344E00D3B44F /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
-			packageReferences = (
-				5A31B69A2FE1000000D3B44F /* XCRemoteSwiftPackageReference "SwiftTerm" */,
-			);
 			targets = (
 				5A31B66D2FA5344E00D3B44F /* hun */,
 				5A31B67A2FA5344F00D3B44F /* hunTests */,
@@ -430,20 +447,20 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = 85L83GK488;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "hun Dev";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				HUN_DISPLAY_NAME = "hun Dev";
+				INFOPLIST_FILE = hun/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.2;
+				MARKETING_VERSION = 0.3.0;
 				PRODUCT_BUNDLE_IDENTIFIER = sourabh.fun.hun.dev;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -459,23 +476,25 @@
 		5A31B6912FA5344F00D3B44F /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = 85L83GK488;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				HUN_DISPLAY_NAME = hun;
+				INFOPLIST_FILE = hun/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.2.2;
+				MARKETING_VERSION = 0.3.0;
 				PRODUCT_BUNDLE_IDENTIFIER = sourabh.fun.hun;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -618,6 +637,14 @@
 				version = 1.11.2;
 			};
 		};
+		5A31B69D2FE2000000D3B44F /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.9.4;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -625,6 +652,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5A31B69A2FE1000000D3B44F /* XCRemoteSwiftPackageReference "SwiftTerm" */;
 			productName = SwiftTerm;
+		};
+		5A31B69E2FE2000000D3B44F /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5A31B69D2FE2000000D3B44F /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

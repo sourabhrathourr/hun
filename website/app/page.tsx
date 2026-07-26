@@ -117,24 +117,20 @@ export default function Page() {
               <div>
                 <p className="text-foreground/80 text-[13px] font-medium">
                   <Link href="/macos" className="hover:text-foreground">
-                    macOS app beta
+                    hun for macOS
                   </Link>
                 </p>
                 <p className="text-muted-foreground/55 text-[13px] mt-1">
-                  early testing build for the menu bar app. installs hun.app
-                  with the bundled cli inside the app.
+                  a native workspace for projects, git changes, terminals,
+                  services, and logs. signed, notarized, and self-updating.
                 </p>
               </div>
-              <div className="text-foreground/80 bg-muted px-2 py-1.5 rounded-sm flex items-start gap-2 text-[12px] leading-relaxed font-mono">
-                <code className="min-w-0 flex-1 whitespace-pre-wrap break-all sm:break-normal">
-                  curl -fsSL https://hun.sh/install-macos-beta.sh | sh
-                </code>
-                <InstallButton
-                  copyText={
-                    "curl -fsSL https://hun.sh/install-macos-beta.sh | sh"
-                  }
-                />
-              </div>
+              <a
+                href="https://github.com/sourabhrathourr/hun/releases/latest/download/hun-macos-arm64.dmg"
+                className="inline-flex h-9 items-center rounded-sm bg-foreground px-3 text-[12px] font-semibold text-background transition-opacity hover:opacity-85"
+              >
+                download for Apple silicon
+              </a>
             </div>
           </Reveal>
 
@@ -151,7 +147,14 @@ export default function Page() {
                 href="/macos"
                 className="underline underline-offset-2 hover:text-muted-foreground/60"
               >
-                macOS app beta
+                macOS app
+              </Link>{" "}
+              &middot;{" "}
+              <Link
+                href="/changelog"
+                className="underline underline-offset-2 hover:text-muted-foreground/60"
+              >
+                changelog
               </Link>{" "}
               &middot;{" "}
               <a
