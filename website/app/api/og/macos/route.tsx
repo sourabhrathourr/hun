@@ -146,7 +146,7 @@ export async function GET() {
                 fontSize: 17,
               }}
             >
-              hun.sh/macos
+              hun.sh
             </div>
           </div>
         </div>

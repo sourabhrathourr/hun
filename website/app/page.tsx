@@ -1,178 +1,201 @@
 import { Reveal } from "@/components/reveal";
-import { InstallButton } from "@/components/install-button";
-import { Terminal } from "@/components/terminal";
-import { MiniTui } from "@/components/mini-tui";
+import releases from "@/content/changelog.json";
+import macosImage from "@/public/macos-image.png";
+import type { Metadata } from "next";
+import Image from "next/image";
 import Link from "next/link";
 
-export default function Page() {
+const downloadURL =
+  "https://github.com/sourabhrathourr/hun/releases/latest/download/hun-macos-arm64.dmg";
+const currentVersion = releases[0].version;
+
+export const metadata: Metadata = {
+  title: "hun for macOS",
+  description:
+    "The native Hun workspace for switching projects, reviewing Git changes, running terminals, watching logs, and managing dev services.",
+  alternates: {
+    canonical: "/",
+  },
+  openGraph: {
+    title: "hun for macOS",
+    description:
+      "The native Hun workspace for projects, Git changes, terminals, logs, and dev services.",
+    url: "https://hun.sh",
+    images: [{ url: "/api/og/macos", width: 1200, height: 630 }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "hun for macOS",
+    description:
+      "The native Hun workspace for projects, Git changes, terminals, logs, and dev services.",
+    images: ["/api/og/macos"],
+  },
+};
+
+const details = [
+  {
+    title: "menu bar first",
+    body: "open hun from the menu bar, switch projects, restart services, and jump into logs without keeping the terminal in front.",
+  },
+  {
+    title: "focus and multitask",
+    body: "run one project cleanly, or keep multiple stacks alive when you need frontend, workers, databases, and queues side by side.",
+  },
+  {
+    title: "docker aware",
+    body: "services that depend on docker can start Docker Desktop before hun asks compose to pull images or boot containers.",
+  },
+  {
+    title: "bundled cli",
+    body: "the app ships with its own hun cli inside the bundle, so the app uses the protocol it was built and tested with.",
+  },
+];
+
+export default function HomePage() {
   const d = 0.1;
 
   return (
-    <div className="min-h-dvh bg-background text-foreground flex items-start justify-center px-5 sm:px-6 py-12 sm:py-20">
-      <main className="max-w-xl w-full">
-        <div className="space-y-6 sm:space-y-7 text-[14px] sm:text-[15px] leading-relaxed text-muted-foreground">
-          <Reveal>
-            <div className="mb-8">
-              <span className="text-foreground font-serif text-[30px] sm:text-[42px] leading-tight block mb-5">
-                hun.sh
-              </span>
-              <div className="text-[13px] text-muted-foreground/50 space-y-1">
-                <p>brew tap hundotsh/tap</p>
-                <code className="text-foreground/80 bg-muted pl-2 pr-1.5 py-0.5 rounded-sm inline-flex items-center gap-2">
-                  brew install hun
-                  <InstallButton
-                    copyText={"brew tap hundotsh/tap && brew install hun"}
-                  />
-                </code>
+    <div className="min-h-dvh bg-background text-foreground px-5 sm:px-6 py-8 sm:py-12">
+      <main className="mx-auto w-full max-w-6xl">
+        <Reveal>
+          <nav className="flex items-center justify-between gap-4 text-[12px] text-muted-foreground/45">
+            <Link
+              href="/"
+              className="font-serif text-[24px] leading-none text-foreground hover:text-foreground/80"
+            >
+              hun.sh
+            </Link>
+            <div className="flex items-center gap-4">
+              <Link
+                href="/legacy"
+                className="underline underline-offset-2 hover:text-muted-foreground/70"
+              >
+                cli
+              </Link>
+              <Link
+                href="/changelog"
+                className="underline underline-offset-2 hover:text-muted-foreground/70"
+              >
+                changelog
+              </Link>
+              <Link
+                href="/docs"
+                className="underline underline-offset-2 hover:text-muted-foreground/70"
+              >
+                docs
+              </Link>
+              <a
+                href="https://github.com/sourabhrathourr/hun"
+                className="underline underline-offset-2 hover:text-muted-foreground/70"
+              >
+                github
+              </a>
+            </div>
+          </nav>
+        </Reveal>
+
+        <section className="pt-12 sm:pt-16 space-y-8 sm:space-y-10">
+          <Reveal delay={d}>
+            <div className="max-w-2xl space-y-4">
+              <p className="text-[12px] uppercase tracking-[0.18em] text-muted-foreground/40">
+                macOS · Apple silicon
+              </p>
+              <h1 className="font-serif text-[42px] sm:text-[68px] leading-[0.95] text-foreground">
+                hun in your menu bar.
+              </h1>
+              <p className="max-w-xl text-[14px] sm:text-[15px] leading-relaxed text-muted-foreground/65">
+                a native-feeling desktop app for project switching, service
+                control, and logs. built for the moment when you want hun visible
+                without opening another terminal pane.
+              </p>
+              <div className="flex flex-wrap items-center gap-3 pt-2">
+                <a
+                  href={downloadURL}
+                  className="inline-flex min-h-11 items-center rounded-sm bg-foreground px-4 text-[12px] font-semibold text-background transition-opacity hover:opacity-85 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
+                >
+                  Download DMG for Apple silicon
+                </a>
+                <span className="text-[11px] leading-relaxed text-muted-foreground/40">
+                  v{currentVersion} · macOS 15+ · signed &amp; notarized
+                </span>
               </div>
             </div>
-          </Reveal>
-
-          <Reveal delay={d}>
-            <p>
-              a command-line tool for seamless project context switching.
-              manages your dev services, ports, and logs. switches your entire
-              environment in one command.
-            </p>
           </Reveal>
 
           <Reveal delay={d * 2}>
-            <MiniTui />
+            <figure className="overflow-hidden rounded-sm border border-border bg-muted/20">
+              <Image
+                src={macosImage}
+                alt="Hun macOS app showing running services, Docker Compose services, and live logs"
+                placeholder="blur"
+                loading="lazy"
+                sizes="(min-width: 1280px) 1152px, calc(100vw - 40px)"
+                className="h-auto w-full"
+              />
+            </figure>
           </Reveal>
+        </section>
 
+        <section className="grid gap-10 border-t border-border mt-12 sm:mt-16 pt-10 sm:grid-cols-[0.85fr_1.15fr]">
           <Reveal delay={d * 3}>
-            <p>
-              say you&apos;re working on two projects. letraz, an ai resume
-              builder, runs a next.js frontend on 3000, a thumbnail service on
-              4000, a backend on 8000, and postgres on 5432. novara, a remote
-              healthcare platform, needs a frontend on 3000, backend on 8000, a
-              node worker, and docker compose running a database, redis, and
-              rabbitmq. now picture yourself ctrl+c-ing through six terminal
-              tabs, killing orphan processes on :3000, restarting docker, and
-              doing this every single time you switch. you lose context,
-              hun preserves it.
-            </p>
+            <div className="space-y-4">
+              <h2 className="font-serif text-[30px] sm:text-[40px] leading-tight text-foreground">
+                ready for the workday
+              </h2>
+              <p className="text-[14px] leading-relaxed text-muted-foreground/60">
+                Developer ID signed, notarized by Apple, and shipped with secure
+                in-app updates. Download the DMG, drag Hun to Applications, and
+                future releases arrive inside the app.
+              </p>
+            </div>
           </Reveal>
 
           <Reveal delay={d * 4}>
-            <Terminal />
-          </Reveal>
-
-          <Reveal delay={d * 5}>
-            <p>
-              run{" "}
-              <code className="text-foreground/80 bg-muted px-1.5 py-0.5 rounded-sm text-[13px]">
-                hun init
-              </code>{" "}
-              in each project and it detects your services automatically. then{" "}
-              <code className="text-foreground/80 bg-muted px-1.5 py-0.5 rounded-sm text-[13px]">
-                hun switch
-              </code>{" "}
-              to swap between them, or{" "}
-              <code className="text-foreground/80 bg-muted px-1.5 py-0.5 rounded-sm text-[13px]">
-                hun run
-              </code>{" "}
-              to run them side by side with automatic port offsets.
-            </p>
-          </Reveal>
-
-          <Reveal delay={d * 6}>
-            <p>
-              a daemon runs in the background. manages process groups, captures
-              all output, detects ports. close your laptop, come back,
-              everything&apos;s still there.
-            </p>
-          </Reveal>
-
-          <Reveal delay={d * 7}>
-            <div className="flex flex-wrap gap-2 text-[12px]">
-              {[
-                "node",
-                "go",
-                "python",
-                "docker compose",
-                "monorepos",
-                "hybrid stacks",
-              ].map((s) => (
-                <span
-                  key={s}
-                  className="text-muted-foreground/50 border border-border rounded-sm px-2 py-0.5"
-                >
-                  {s}
-                </span>
-              ))}
-            </div>
-          </Reveal>
-
-          <Reveal delay={d * 8}>
-            <p>
-              not a tmux replacement. tmux does session persistence and terminal
-              multiplexing. hun thinks in projects — which services to start,
-              which ports to free, which logs to capture. use both.
-            </p>
-          </Reveal>
-
-          <Reveal delay={d * 9}>
-            <div className="border border-border rounded-sm bg-muted/20 p-4 space-y-3">
-              <div>
-                <p className="text-foreground/80 text-[13px] font-medium">
-                  <Link href="/macos" className="hover:text-foreground">
-                    hun for macOS
-                  </Link>
-                </p>
-                <p className="text-muted-foreground/55 text-[13px] mt-1">
-                  a native workspace for projects, git changes, terminals,
-                  services, and logs. signed, notarized, and self-updating.
-                </p>
+            <div className="space-y-6">
+              <p className="max-w-lg text-[12px] leading-relaxed text-muted-foreground/45">
+                Hun checks for updates hourly. You stay in control of when an
+                update installs and the app relaunches.
+              </p>
+              <div className="grid gap-4 sm:grid-cols-2">
+                {details.map((detail) => (
+                  <div
+                    key={detail.title}
+                    className="border-t border-border pt-4 space-y-2"
+                  >
+                    <h3 className="text-[13px] font-medium text-foreground/85">
+                      {detail.title}
+                    </h3>
+                    <p className="text-[13px] leading-relaxed text-muted-foreground/55">
+                      {detail.body}
+                    </p>
+                  </div>
+                ))}
               </div>
-              <a
-                href="https://github.com/sourabhrathourr/hun/releases/latest/download/hun-macos-arm64.dmg"
-                className="inline-flex h-9 items-center rounded-sm bg-foreground px-3 text-[12px] font-semibold text-background transition-opacity hover:opacity-85"
-              >
-                download for Apple silicon
-              </a>
             </div>
           </Reveal>
+        </section>
 
-          <Reveal delay={d * 10}>
-            <p className="text-muted-foreground/40 text-[12px]">
-              <Link
-                href="/docs"
-                className="underline underline-offset-2 hover:text-muted-foreground/60"
-              >
-                docs
-              </Link>{" "}
-              &middot;{" "}
-              <Link
-                href="/macos"
-                className="underline underline-offset-2 hover:text-muted-foreground/60"
-              >
-                macOS app
-              </Link>{" "}
-              &middot;{" "}
-              <Link
-                href="/changelog"
-                className="underline underline-offset-2 hover:text-muted-foreground/60"
-              >
-                changelog
-              </Link>{" "}
-              &middot;{" "}
-              <a
-                href="https://github.com/sourabhrathourr/hun"
-                className="underline underline-offset-2 hover:text-muted-foreground/60"
-              >
-                github
-              </a>{" "}
-              &middot; built by{" "}
-              <a
-                href="https://sourabh.fun"
-                className="underline underline-offset-2 hover:text-muted-foreground/60"
-              >
-                sourabh rathour
-              </a>
-            </p>
-          </Reveal>
-        </div>
+        <Reveal delay={d * 5}>
+          <footer className="border-t border-border mt-14 pt-6 pb-4 text-[12px] text-muted-foreground/40">
+            <Link
+              href="/legacy"
+              className="underline underline-offset-2 hover:text-muted-foreground/60"
+            >
+              legacy CLI page
+            </Link>{" "}
+            &middot;{" "}
+            <Link
+              href="/changelog"
+              className="underline underline-offset-2 hover:text-muted-foreground/60"
+            >
+              changelog
+            </Link>{" "}
+            &middot; app installs to{" "}
+            <code className="text-muted-foreground/55">
+              /Applications/hun.app
+            </code>
+          </footer>
+        </Reveal>
       </main>
     </div>
   );

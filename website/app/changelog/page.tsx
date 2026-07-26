@@ -35,7 +35,7 @@ export default function ChangelogPage() {
             </Link>
             <div className="flex items-center gap-4">
               <Link
-                href="/macos"
+                href="/"
                 className="underline underline-offset-2 transition-colors hover:text-muted-foreground/70"
               >
                 macOS
