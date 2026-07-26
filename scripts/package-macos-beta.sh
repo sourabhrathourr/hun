@@ -90,22 +90,18 @@ if [ "$MIN_SYSTEM_VERSION" != "$EXPECTED_MIN_MACOS_VERSION" ]; then
   exit 1
 fi
 
-CLI_REPORTED_VERSION="$("$CLI" --version 2>/dev/null | tr -d '\r')"
-if [ "$CLI_REPORTED_VERSION" != "hun.sh $CLI_VERSION" ]; then
-  echo "Bundled CLI version mismatch." >&2
-  echo "Expected: hun.sh $CLI_VERSION" >&2
-  echo "Actual:   $CLI_REPORTED_VERSION" >&2
-  exit 1
-fi
-
 echo "Ad-hoc signing bundled CLI..."
-codesign --force --sign - "$CLI"
+codesign --force --options runtime --sign - "$CLI"
 
 echo "Ad-hoc signing app bundle..."
 codesign --force --deep --sign - "$APP"
 
 echo "Verifying signature..."
 codesign --verify --deep --strict --verbose=2 "$APP"
+"$ROOT/scripts/verify-macos-runtime.sh" \
+  "$CLI" \
+  "$CLI_VERSION" \
+  "$CLI_COMMIT"
 
 echo "Creating zip..."
 ditto -c -k --keepParent "$APP" "$ZIP"

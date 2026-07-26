@@ -242,6 +242,10 @@ codesign \
   --timestamp \
   --sign "$SIGNING_IDENTITY" \
   "$CLI"
+"$ROOT/scripts/verify-macos-runtime.sh" \
+  "$CLI" \
+  "$CLI_VERSION" \
+  "$CLI_COMMIT"
 
 echo "Signing Sparkle helpers inside-out..."
 SPARKLE_VERSION="$SPARKLE_FRAMEWORK/Versions/Current"

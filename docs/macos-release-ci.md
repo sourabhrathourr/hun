@@ -52,6 +52,13 @@ known-good asset-catalog toolchain. GitHub's runner-image manifest is the source
 of truth for currently installed Xcode paths.
 ([macOS 26 arm64 image manifest](https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md))
 
+Use Go 1.26 or later for every CI and release job. Go 1.24 added the Mach-O
+`LC_UUID` load command to binaries produced by its internal linker. Older Go
+binaries can be rejected by `dyld` on macOS 26 before Hun can inspect or launch
+its bundled runtime. The macOS CI job and release packager therefore verify the
+load command and execute the hardened runtime before publishing.
+([Go 1.24 release notes](https://go.dev/doc/go1.24))
+
 The workflow should fail unless the app executable and every bundled executable
 (including the Go `hun` CLI) are `arm64`. If Hun later ships Intel support,
 every nested executable must gain the matching `x86_64` slice; making only the

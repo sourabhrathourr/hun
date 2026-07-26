@@ -30,7 +30,7 @@ For macOS application work:
 - An Apple silicon Mac
 - macOS 15 or later
 - Xcode 26.4.1
-- Go 1.22 or later
+- Go 1.26 or later
 
 For website work, install Bun 1.3.6. Production signing and notarization
 credentials are not required for normal development or pull requests.

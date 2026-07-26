@@ -21,7 +21,7 @@ jobs:
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.22.x"
+          go-version: "1.26.x"
           cache: true
 
       - name: Run test suite
@@ -55,7 +55,7 @@ jobs:
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.22.x"
+          go-version: "1.26.x"
           cache: true
 
       - name: Select Xcode 26.4.1
@@ -79,8 +79,11 @@ jobs:
             -only-testing:hunTests \
             test
 
-      - name: Verify application and bundled CLI architectures
+      - name: Verify application and hardened bundled runtime
         run: |
           app="build/ci-macos/Build/Products/Debug/hun.app"
+          runtime="$app/Contents/Resources/hun"
           test "$(lipo -archs "$app/Contents/MacOS/hun")" = "arm64"
-          test "$(lipo -archs "$app/Contents/Resources/hun")" = "arm64"
+          codesign --force --sign - --options runtime "$runtime"
+          codesign --verify --strict --verbose=2 "$runtime"
+          scripts/verify-macos-runtime.sh "$runtime"
