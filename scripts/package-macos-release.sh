@@ -144,6 +144,12 @@ XCODE_OVERRIDES=(
   CODE_SIGNING_ALLOWED=NO
   "MARKETING_VERSION=$VERSION"
 )
+GO_BIN="${GO_BIN:-$(command -v go || true)}"
+if [ -z "$GO_BIN" ] || [ ! -x "$GO_BIN" ]; then
+  echo "Go toolchain not found. Install Go or set GO_BIN." >&2
+  exit 1
+fi
+XCODE_OVERRIDES+=("GO_BIN=$GO_BIN")
 if [ -n "$BUILD_NUMBER" ]; then
   XCODE_OVERRIDES+=("CURRENT_PROJECT_VERSION=$BUILD_NUMBER")
 fi
