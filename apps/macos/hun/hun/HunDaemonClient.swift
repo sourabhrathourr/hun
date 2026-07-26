@@ -92,6 +92,73 @@ nonisolated struct HunDaemonInfo: Decodable, Equatable {
     }
 }
 
+nonisolated struct HunRuntimeBuild: Equatable, Sendable {
+    let version: String
+    let commit: String
+
+    func matches(_ daemon: HunDaemonInfo, requiredProtocol: Int) -> Bool {
+        daemon.status == "pong"
+            && daemon.protocolVersion == requiredProtocol
+            && daemon.version == version
+            && daemon.commit == commit
+    }
+
+    static func bundled() throws -> HunRuntimeBuild {
+        let binary = try HunPaths.resolveHunBinary()
+        let process = Process()
+        let output = Pipe()
+        let errors = Pipe()
+        process.executableURL = URL(fileURLWithPath: binary)
+        process.arguments = ["version"]
+        process.standardOutput = output
+        process.standardError = errors
+
+        do {
+            try process.run()
+        } catch {
+            throw HunDaemonError.daemon(
+                "could not inspect bundled Hun runtime: \(error.localizedDescription)"
+            )
+        }
+
+        process.waitUntilExit()
+        let outputData = output.fileHandleForReading.readDataToEndOfFile()
+        let errorData = errors.fileHandleForReading.readDataToEndOfFile()
+        let stdout = String(data: outputData, encoding: .utf8) ?? ""
+        let stderr = String(data: errorData, encoding: .utf8) ?? ""
+
+        guard process.terminationStatus == 0, let build = parse(stdout) else {
+            let detail = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw HunDaemonError.daemon(
+                detail.isEmpty
+                    ? "bundled Hun runtime did not report valid build information"
+                    : "could not inspect bundled Hun runtime: \(detail)"
+            )
+        }
+        return build
+    }
+
+    static func parse(_ output: String) -> HunRuntimeBuild? {
+        let line = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefix = "hun.sh "
+        let commitMarker = " (commit: "
+        guard
+            line.hasPrefix(prefix),
+            line.hasSuffix(")"),
+            let markerRange = line.range(of: commitMarker)
+        else {
+            return nil
+        }
+
+        let version = String(line[line.index(line.startIndex, offsetBy: prefix.count)..<markerRange.lowerBound])
+        let commitStart = markerRange.upperBound
+        let commitEnd = line.index(before: line.endIndex)
+        let commit = String(line[commitStart..<commitEnd])
+        guard !version.isEmpty, !commit.isEmpty else { return nil }
+        return HunRuntimeBuild(version: version, commit: commit)
+    }
+}
+
 nonisolated protocol HunLogSubscribing: AnyObject {
     func cancel()
 }
@@ -403,13 +470,9 @@ nonisolated final class HunDaemonClient: HunDaemonClientProtocol, HunGitClientPr
         (try? await daemonInfo())?.status == "pong"
     }
 
-    func isCompatibleDaemon() async -> Bool {
-        await daemonProtocol() == Self.requiredProtocol
-    }
-
-    private func daemonProtocol() async -> Int? {
-        guard let info = try? await daemonInfo(), info.status == "pong" else { return nil }
-        return info.protocolVersion
+    func isCompatibleDaemon(expectedBuild: HunRuntimeBuild) async -> Bool {
+        guard let info = try? await daemonInfo() else { return false }
+        return expectedBuild.matches(info, requiredProtocol: Self.requiredProtocol)
     }
 
     func supportsSnapshot() async -> Bool {
@@ -444,29 +507,51 @@ nonisolated final class HunDaemonClient: HunDaemonClientProtocol, HunGitClientPr
 
 nonisolated final class HunDaemonSupervisor: HunDaemonSupervisorProtocol {
     private let client: HunDaemonClient
+    private let expectedRuntimeBuild: Result<HunRuntimeBuild, HunDaemonError>
 
-    init(client: HunDaemonClient = HunDaemonClient()) {
+    init(
+        client: HunDaemonClient = HunDaemonClient(),
+        expectedRuntimeBuild: HunRuntimeBuild? = nil
+    ) {
         self.client = client
+        if let expectedRuntimeBuild {
+            self.expectedRuntimeBuild = .success(expectedRuntimeBuild)
+        } else {
+            do {
+                self.expectedRuntimeBuild = .success(try HunRuntimeBuild.bundled())
+            } catch let error as HunDaemonError {
+                self.expectedRuntimeBuild = .failure(error)
+            } catch {
+                self.expectedRuntimeBuild = .failure(
+                    .daemon("could not inspect bundled Hun runtime: \(error.localizedDescription)")
+                )
+            }
+        }
     }
 
     func ensureDaemon() async throws {
-        if await client.isCompatibleDaemon() {
+        let expectedRuntimeBuild = try expectedRuntimeBuild.get()
+        if await client.isCompatibleDaemon(expectedBuild: expectedRuntimeBuild) {
             return
         }
 
-        try await restartDaemon()
+        try await restartDaemon(expectedRuntimeBuild: expectedRuntimeBuild)
     }
 
     func restartDaemon() async throws {
+        try await restartDaemon(expectedRuntimeBuild: expectedRuntimeBuild.get())
+    }
+
+    private func restartDaemon(expectedRuntimeBuild: HunRuntimeBuild) async throws {
         let info = try? await client.daemonInfo()
         try terminateExistingDaemon(
             reportedPID: info?.pid ?? 0,
             socketResponded: info?.status == "pong"
         )
-        try await launchDaemon()
+        try await launchDaemon(expectedRuntimeBuild: expectedRuntimeBuild)
     }
 
-    private func launchDaemon() async throws {
+    private func launchDaemon(expectedRuntimeBuild: HunRuntimeBuild) async throws {
         let binary = try HunPaths.resolveHunBinary()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binary)
@@ -482,7 +567,7 @@ nonisolated final class HunDaemonSupervisor: HunDaemonSupervisorProtocol {
         let deadline = Date().addingTimeInterval(5)
         while Date() < deadline {
             try? await Task.sleep(for: .milliseconds(100))
-            if await client.isCompatibleDaemon() {
+            if await client.isCompatibleDaemon(expectedBuild: expectedRuntimeBuild) {
                 return
             }
             if !process.isRunning {
@@ -688,7 +773,7 @@ nonisolated private struct HunDaemonEnvelope<T: Decodable>: Decodable {
 
 nonisolated private struct StatusPayload: Decodable {}
 
-nonisolated enum HunDaemonError: Error, LocalizedError {
+nonisolated enum HunDaemonError: Error, LocalizedError, Sendable {
     case daemon(String)
     case missingData
     case socket(String)

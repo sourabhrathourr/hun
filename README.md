@@ -235,22 +235,37 @@ daemon connection, menu-bar item, or window behavior.
 
 ## Release
 
-`vX.Y.Z` is a Git tag, not a branch. Pushing the tag triggers the release workflow.
+Run releases from a clean, up-to-date `main` branch. The release command owns
+the Xcode marketing version, numeric build number, changelog metadata, release
+commit, and Git tag. Pushing the tag triggers the GitHub Actions release
+workflow.
 
 ```sh
-# Dry run (checks branch/state/tests, no tag push)
-make release-dry-run RELEASE_VERSION=0.1.0
+# Preview the version, build, changelog, commit range, and actions.
+# This changes nothing.
+./scripts/release.sh --dry-run
 
-# Create and push release tag (runs checks + tests first)
-make release RELEASE_VERSION=0.1.0
+# Repeat that plan, ask for confirmation, validate it, and start the release.
+./scripts/release.sh
 ```
 
-Optional flags:
+For the first release, the command uses the version already in Xcode. After
+that, it derives the next patch and build number from the latest published
+release while preserving a newer unreleased marketing version already in the
+project. Optional overrides:
 
 ```sh
-./scripts/release.sh --version 0.1.0 --yes
-./scripts/release.sh --version 0.1.0 --skip-tests
+./scripts/release.sh minor --dry-run
+./scripts/release.sh major --dry-run
+./scripts/release.sh 1.0.0 --dry-run
 ```
+
+The tag pipeline publishes the signed, notarized Apple-silicon DMG and Sparkle
+appcast. Standalone CLI archives and the Homebrew formula are opt-in: set the
+GitHub repository variable `PUBLISH_STANDALONE_CLI=true` only for releases that
+should publish them. The macOS app always embeds its own matching Hun runtime,
+regardless of that variable. Hun does not use Changesets; the release command
+and GitHub Actions enforce the version contract directly.
 
 ## License
 

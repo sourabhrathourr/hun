@@ -3,6 +3,7 @@ import AppKit
 
 struct ContentView: View {
     @Environment(HunStore.self) private var store
+    @Environment(HunUpdater.self) private var updater
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var sidebarSearch = ""
     @State private var logSearch = ""
@@ -167,6 +168,15 @@ struct ContentView: View {
 
             if let lastError = store.lastError {
                 ErrorBanner(message: lastError, onDismiss: { store.clearLastError() })
+                Rectangle().fill(AppTheme.divider).frame(height: 1)
+            }
+
+            if let update = updater.availableUpdate {
+                HunUpdateBanner(
+                    update: update,
+                    onViewChanges: { updater.openChangelog(for: update) },
+                    onUpdate: updater.checkForUpdates
+                )
                 Rectangle().fill(AppTheme.divider).frame(height: 1)
             }
 
@@ -619,6 +629,59 @@ private struct ErrorBanner: View {
         .padding(.horizontal, 16)
         .frame(height: 30)
         .background(AppTheme.warning.opacity(0.08))
+    }
+}
+
+private struct HunUpdateBanner: View {
+    let update: HunAvailableUpdate
+    let onViewChanges: () -> Void
+    let onUpdate: () -> Void
+    @State private var hoveringChanges = false
+    @State private var hoveringUpdate = false
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Circle()
+                .fill(AppTheme.success)
+                .frame(width: 6, height: 6)
+                .shadow(color: AppTheme.success.opacity(0.24), radius: 4)
+
+            Text("Hun \(update.version) is available")
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(AppTheme.textPrimary)
+
+            Spacer(minLength: 12)
+
+            Button("View changes", action: onViewChanges)
+                .buttonStyle(.plain)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(
+                    hoveringChanges ? AppTheme.textPrimary : AppTheme.textTertiary
+                )
+                .onHover { hoveringChanges = $0 }
+                .accessibilityHint("Opens the Hun changelog in your browser")
+
+            Button("Update", action: onUpdate)
+                .buttonStyle(.plain)
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(AppTheme.appBackground)
+                .padding(.horizontal, 10)
+                .frame(height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(
+                            hoveringUpdate
+                                ? AppTheme.textPrimary
+                                : AppTheme.textPrimary.opacity(0.88)
+                        )
+                )
+                .onHover { hoveringUpdate = $0 }
+                .accessibilityHint("Downloads and installs Hun \(update.version)")
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 34)
+        .background(AppTheme.success.opacity(0.055))
+        .accessibilityElement(children: .contain)
     }
 }
 

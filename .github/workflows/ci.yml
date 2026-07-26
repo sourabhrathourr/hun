@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.22.x"
+          cache: true
+
+      - name: Run test suite
+        run: go test ./...
+
+      - name: Run race tests for core packages
+        run: go test -race ./internal/cli ./internal/daemon ./internal/detect ./internal/state ./internal/tui
+
+  website:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build production website
+        run: bun run build
+
+  macos:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.22.x"
+          cache: true
+
+      - name: Select Xcode 26.4.1
+        run: scripts/select-xcode-26.sh
+
+      - name: Print toolchain
+        run: xcodebuild -version
+
+      - name: Test Apple-silicon app without signing
+        run: |
+          xcodebuild \
+            -project apps/macos/hun/hun.xcodeproj \
+            -scheme hun \
+            -configuration Debug \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath build/ci-macos \
+            CODE_SIGNING_ALLOWED=NO \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=YES \
+            GO_BIN="$(command -v go)" \
+            -only-testing:hunTests \
+            test
+
+      - name: Verify application and bundled CLI architectures
+        run: |
+          app="build/ci-macos/Build/Products/Debug/hun.app"
+          test "$(lipo -archs "$app/Contents/MacOS/hun")" = "arm64"
+          test "$(lipo -archs "$app/Contents/Resources/hun")" = "arm64"

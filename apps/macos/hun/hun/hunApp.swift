@@ -11,16 +11,23 @@ import AppKit
 @main
 struct hunApp: App {
     @State private var store = HunStore(navigationDefaults: .standard)
+    @State private var updater = HunUpdater()
 
     var body: some Scene {
         WindowGroup("hun", id: "dashboard") {
             ContentView()
                 .environment(store)
+                .environment(updater)
                 .frame(minWidth: 560, minHeight: 420)
         }
         .windowStyle(.hiddenTitleBar)
         .commands {
             HunTerminalCommands()
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    updater.checkForUpdates()
+                }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Open Dashboard") {
                     Self.openDashboard()
