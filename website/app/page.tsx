@@ -104,9 +104,8 @@ export default function HomePage() {
                 hun in your menu bar.
               </h1>
               <p className="max-w-xl text-[14px] sm:text-[15px] leading-relaxed text-muted-foreground/65">
-                a native-feeling desktop app for project switching, service
-                control, and logs. built for the moment when you want hun visible
-                without opening another terminal pane.
+                a native macOS app for switching projects, controlling services,
+                and following logs — without opening another terminal pane.
               </p>
               <div className="flex flex-wrap items-center gap-3 pt-2">
                 <a
