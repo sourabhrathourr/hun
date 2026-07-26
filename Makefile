@@ -32,7 +32,7 @@ package-macos-release:
 		--generate-appcast
 
 release:
-	./scripts/release.sh --version "$(RELEASE_VERSION)"
+	./scripts/release.sh
 
 release-dry-run:
-	./scripts/release.sh --version "$(RELEASE_VERSION)" --dry-run
+	./scripts/release.sh --dry-run

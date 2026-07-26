@@ -152,38 +152,52 @@ Sources: [Publishing an update](https://sparkle-project.org/documentation/publis
 
 ## Repeatable release process
 
-For every release:
+From a clean, up-to-date `main`, preview the complete release without changing
+anything:
 
-1. Increase both versions, for example from `0.2.2 (3)` to `0.2.3 (4)`, and
-   write release notes.
-2. Build the Release app for `arm64`. The app build also compiles and embeds a
+```sh
+./scripts/release.sh --dry-run
+```
+
+If the version, build, commit range, and generated or existing changelog look
+right, run:
+
+```sh
+./scripts/release.sh
+```
+
+That command confirms the plan, runs tests, derives the next version and build
+from the latest published release, updates the changelog, and atomically pushes
+the bookkeeping commit with the `vX.Y.Z` tag. If the push is interrupted,
+rerun the same command. The tag starts the remaining automated process:
+
+1. Build the Release app for `arm64`. The app build also compiles and embeds a
    matching Go runtime from the same Git commit.
-3. Sign all nested executable code, including Hun's bundled CLI and Sparkle's
+2. Sign all nested executable code, including Hun's bundled CLI and Sparkle's
    framework/helper bundles, from the inside out with the same Developer ID
    Application identity; then sign the outer app.
-4. Create and sign the DMG, submit it to Apple's notary service, wait for
+3. Create and sign the DMG, submit it to Apple's notary service, wait for
    `Accepted`, staple the ticket, and validate the final DMG.
-5. Put the **final stapled DMG** in the retained updates directory and run
+4. Put the **final stapled DMG** in the retained updates directory and run
    Sparkle's `generate_appcast`. Stapling changes the DMG, so generate its
    EdDSA signature only after stapling.
-6. Confirm the generated item has `15.0.0` and `arm64` requirements and points
+5. Confirm the generated item has `15.0.0` and `arm64` requirements and points
    to the intended HTTPS DMG URL.
-7. Upload the DMG, release notes, and any delta files first. Publish the new
+6. Upload the DMG, release notes, and any delta files first. Publish the new
    appcast last so clients never see an enclosure URL that is not live.
-8. Test an update from the previous **notarized production build**, including
+7. Test an update from the previous **notarized production build**, including
    banner appearance, release notes, download, installation, relaunch, the new
    version number, bundled runtime behavior, and **Check for Updates…**. On
    relaunch, the app replaces a running daemon unless its protocol, version,
    and commit all match the bundled runtime.
-9. Update the website's direct-download button to the same final DMG. Keep old
+8. Keep old
    full archives if delta generation is desired.
 
 Sparkle recommends Xcode Archive plus Developer ID distribution because Xcode
-correctly signs Sparkle's helper tools. Hun's current manual release script
-signs only its bundled CLI and the outer app; after adding Sparkle, that script
-must be extended to sign and verify Sparkle's nested code inside-out, or be
-replaced by an Xcode archive/export step. Do not ship the first Sparkle build
-until the notarized app and an update from an older notarized build both pass.
+correctly signs Sparkle's helper tools. Hun's release packager performs the
+equivalent inside-out signing and verification for Sparkle's nested code before
+signing the outer app. Do not ship the first Sparkle build until the notarized
+app and an update from an older notarized build both pass.
 
 Sources: [Sparkle distribution guidance](https://sparkle-project.org/documentation/),
 [Apple notarization workflow](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution),

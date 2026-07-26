@@ -220,6 +220,27 @@ changelog page. A release job should fail before signing if:
 - the changelog has no entry for that version; or
 - the app's embedded `SUPublicEDKey` or `SUFeedURL` is missing.
 
+## Starting a release
+
+Release preparation is intentionally one command from a clean, synchronized
+`main` branch:
+
+```sh
+./scripts/release.sh --dry-run
+./scripts/release.sh
+```
+
+The dry run calculates and displays the next version, numeric build, commit
+range, artifact name, changelog, and every action without changing files or Git
+refs. The confirmed command runs tests, derives version/build from the latest
+published release, updates Xcode metadata, and generates a changelog entry from
+user-facing conventional commits when one is missing. It then atomically pushes
+the release commit and tag. The tag is the only trigger for the protected
+release workflow. If the atomic push fails, rerun the same command.
+
+Use `minor`, `major`, or an explicit semantic version only when the default
+patch release is not appropriate.
+
 ## Safe publication order
 
 Use a unique, versioned asset name. Never replace an already published DMG in
