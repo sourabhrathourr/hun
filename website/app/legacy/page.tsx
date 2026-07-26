@@ -3,6 +3,7 @@ import { InstallButton } from "@/components/install-button";
 import { Terminal } from "@/components/terminal";
 import { MiniTui } from "@/components/mini-tui";
 import type { Metadata } from "next";
+import Image from "next/image";
 import Link from "next/link";
 
 export const metadata: Metadata = {
@@ -30,9 +31,20 @@ export default function Page() {
         <div className="space-y-6 sm:space-y-7 text-[14px] sm:text-[15px] leading-relaxed text-muted-foreground">
           <Reveal>
             <div className="mb-8">
-              <span className="text-foreground font-serif text-[30px] sm:text-[42px] leading-tight block mb-5">
-                hun.sh
-              </span>
+              <Link
+                href="/"
+                aria-label="Hun home"
+                className="mb-5 inline-flex size-14 items-center"
+              >
+                <Image
+                  src="/hun-app-icon.png"
+                  alt=""
+                  width={48}
+                  height={48}
+                  className="size-12"
+                  priority
+                />
+              </Link>
               <div className="text-[13px] text-muted-foreground/50 space-y-1">
                 <p>brew tap hundotsh/tap</p>
                 <code className="text-foreground/80 bg-muted pl-2 pr-1.5 py-0.5 rounded-sm inline-flex items-center gap-2">

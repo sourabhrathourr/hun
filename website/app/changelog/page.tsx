@@ -1,6 +1,7 @@
 import { Reveal } from "@/components/reveal";
 import releases from "@/content/changelog.json";
 import type { Metadata } from "next";
+import Image from "next/image";
 import Link from "next/link";
 
 export const metadata: Metadata = {
@@ -29,9 +30,17 @@ export default function ChangelogPage() {
           <nav className="flex items-center justify-between gap-4 text-[12px] text-muted-foreground/45">
             <Link
               href="/"
-              className="font-serif text-[24px] leading-none text-foreground transition-colors hover:text-foreground/75"
+              aria-label="Hun home"
+              className="inline-flex size-11 items-center transition-opacity hover:opacity-80"
             >
-              hun.sh
+              <Image
+                src="/hun-app-icon.png"
+                alt=""
+                width={34}
+                height={34}
+                className="size-[34px]"
+                priority
+              />
             </Link>
             <div className="flex items-center gap-4">
               <Link
@@ -55,7 +64,7 @@ export default function ChangelogPage() {
             <p className="mb-4 text-[11px] uppercase tracking-[0.2em] text-muted-foreground/35">
               shipped work
             </p>
-            <h1 className="max-w-2xl font-serif text-[48px] leading-[0.92] text-foreground sm:text-[76px]">
+            <h1 className="max-w-2xl text-[42px] font-medium leading-[1.02] tracking-[-0.045em] text-foreground sm:text-[62px]">
               changes that alter the way you work.
             </h1>
             <p className="mt-6 max-w-xl text-[14px] leading-relaxed text-muted-foreground/55 sm:text-[15px]">
@@ -83,7 +92,7 @@ export default function ChangelogPage() {
                       )}
                       <a
                         href={`#v${release.version}`}
-                        className="font-mono text-[13px] font-medium text-foreground/85 transition-colors hover:text-foreground"
+                        className="text-[13px] font-medium text-foreground/85 transition-colors hover:text-foreground"
                       >
                         v{release.version}
                       </a>
@@ -98,7 +107,7 @@ export default function ChangelogPage() {
                 </aside>
 
                 <div className="min-w-0">
-                  <h2 className="font-serif text-[30px] leading-tight text-foreground sm:text-[38px]">
+                  <h2 className="text-[25px] font-medium leading-[1.1] tracking-[-0.03em] text-foreground sm:text-[30px]">
                     {release.title}
                   </h2>
                   <p className="mt-3 max-w-2xl text-[13px] leading-relaxed text-muted-foreground/55 sm:text-[14px]">
@@ -151,7 +160,7 @@ export default function ChangelogPage() {
             href="/"
             className="underline underline-offset-2 transition-colors hover:text-muted-foreground/60"
           >
-            back to hun.sh
+            back home
           </Link>
           <a
             href="https://github.com/sourabhrathourr/hun/releases"

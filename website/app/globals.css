@@ -3,8 +3,6 @@
 @import "shadcn/tailwind.css";
 @import "fumadocs-ui/css/neutral.css";
 @import "fumadocs-ui/css/preset.css";
-@import "@fontsource-variable/jetbrains-mono";
-@import "@fontsource/instrument-serif/400.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -41,11 +39,17 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: transparent;
   --sidebar-ring: oklch(0.556 0 0);
+  --marketing-surface:
+    0 0 0 1px oklch(1 0 0 / 0.075),
+    0 18px 50px -36px oklch(0 0 0 / 0.9);
+  --marketing-surface-hover:
+    0 0 0 1px oklch(1 0 0 / 0.13),
+    0 24px 64px -38px oklch(0 0 0 / 0.95);
 }
 
 @theme inline {
-  --font-sans: 'JetBrains Mono Variable', monospace;
-  --font-serif: 'Instrument Serif', serif;
+  --font-sans: ui-sans-serif, system-ui, sans-serif;
+  --font-serif: ui-sans-serif, system-ui, sans-serif;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-sidebar-ring: var(--sidebar-ring);
@@ -93,6 +97,8 @@
 
   body {
     @apply font-sans bg-background text-foreground;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 
   ::selection {
@@ -124,6 +130,60 @@
   }
 }
 
+.marketing-heading {
+  letter-spacing: -0.04em;
+  text-wrap: balance;
+}
+
+.marketing-copy {
+  text-wrap: pretty;
+}
+
+.marketing-surface {
+  background: oklch(1 0 0 / 0.022);
+  box-shadow: var(--marketing-surface);
+}
+
+.marketing-surface-interactive {
+  background: oklch(1 0 0 / 0.022);
+  box-shadow: var(--marketing-surface);
+  transition-duration: 200ms;
+  transition-property: box-shadow, transform;
+  transition-timing-function: ease-out;
+}
+
+.marketing-surface-interactive:hover {
+  box-shadow: var(--marketing-surface-hover);
+  transform: translateY(-2px);
+}
+
+.marketing-image {
+  outline: 1px solid oklch(1 0 0 / 0.1);
+  outline-offset: -1px;
+}
+
+.marketing-faq summary::-webkit-details-marker {
+  display: none;
+}
+
+.marketing-faq summary {
+  list-style: none;
+}
+
+.marketing-faq[open] .marketing-faq-icon {
+  transform: rotate(45deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marketing-surface-interactive {
+    transition-duration: 0ms;
+  }
+
+  .marketing-surface-interactive:hover {
+    transform: none;
+  }
+}
+
 /* Docs section: Geist Sans, override fumadocs font sizes */
 .docs-root {
   font-size: 1rem;
@@ -149,9 +209,11 @@
 .legal-copy h2 {
   margin-top: 2.75rem;
   color: color-mix(in oklab, var(--foreground) 92%, transparent);
-  font-family: var(--font-serif);
-  font-size: 1.875rem;
-  line-height: 1.15;
+  font-size: 1.5rem;
+  font-weight: 550;
+  letter-spacing: -0.03em;
+  line-height: 1.25;
+  text-wrap: balance;
 }
 
 .legal-copy h2:first-child {
@@ -161,6 +223,7 @@
 .legal-copy p,
 .legal-copy ul {
   margin-top: 1rem;
+  text-wrap: pretty;
 }
 
 .legal-copy ul {

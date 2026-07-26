@@ -1,5 +1,6 @@
 import { BetaLicenseCard } from "@/components/beta-license-card";
 import type { Metadata } from "next";
+import Image from "next/image";
 import Link from "next/link";
 
 const downloadURL =
@@ -35,9 +36,17 @@ export default async function BetaSuccessPage({
         <nav className="flex items-center justify-between">
           <Link
             href="/"
-            className="font-serif text-[24px] leading-none text-foreground hover:text-foreground/80"
+            aria-label="Hun home"
+            className="inline-flex size-11 items-center transition-opacity hover:opacity-80"
           >
-            hun.sh
+            <Image
+              src="/hun-app-icon.png"
+              alt=""
+              width={34}
+              height={34}
+              className="size-[34px]"
+              priority
+            />
           </Link>
           <span className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/40">
             public beta
@@ -46,7 +55,7 @@ export default async function BetaSuccessPage({
 
         <section className="space-y-6 border-t border-border pt-10">
           <div className="space-y-3">
-            <h1 className="font-serif text-[42px] leading-[0.98] sm:text-[56px]">
+            <h1 className="text-[36px] font-medium leading-[1.04] tracking-[-0.04em] sm:text-[46px]">
               your beta access is ready.
             </h1>
             <p className="max-w-lg text-[14px] leading-relaxed text-muted-foreground/60">
@@ -77,7 +86,7 @@ export default async function BetaSuccessPage({
               href="/"
               className="text-[12px] text-muted-foreground/50 underline underline-offset-2 hover:text-muted-foreground/75"
             >
-              Back to hun.sh
+              Back home
             </Link>
           </div>
         </section>

@@ -1,3 +1,5 @@
+import { GeistSans } from "geist/font/sans";
+import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
 
@@ -15,23 +17,31 @@ export function MarketingNav() {
     >
       <Link
         href="/"
-        className="font-serif text-[26px] leading-none text-foreground transition-colors hover:text-foreground/75 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-foreground"
+        aria-label="Hun home"
+        className="inline-flex size-11 items-center justify-start transition-[opacity,transform] duration-150 ease-out hover:opacity-80 active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
       >
-        hun.sh
+        <Image
+          src="/hun-app-icon.png"
+          alt=""
+          width={34}
+          height={34}
+          className="size-[34px]"
+          priority
+        />
       </Link>
       <div className="flex items-center gap-1 text-[11px] text-muted-foreground/60 sm:gap-2 sm:text-[12px]">
         {navItems.map((item) => (
           <Link
             key={item.href}
             href={item.href}
-            className="inline-flex h-11 items-center px-2 transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
+            className="inline-flex h-11 items-center px-2 transition-[color,transform] duration-150 ease-out hover:text-foreground active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
           >
             {item.label}
           </Link>
         ))}
         <a
           href="https://github.com/sourabhrathourr/hun"
-          className="hidden h-11 items-center px-2 transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground sm:inline-flex"
+          className="hidden h-11 items-center px-2 transition-[color,transform] duration-150 ease-out hover:text-foreground active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground sm:inline-flex"
         >
           github
         </a>
@@ -45,8 +55,18 @@ export function MarketingFooter() {
     <footer className="mt-20 border-t border-border pb-6 pt-10 sm:mt-28">
       <div className="grid gap-10 sm:grid-cols-[1.4fr_repeat(3,1fr)]">
         <div className="max-w-xs space-y-3">
-          <Link href="/" className="font-serif text-[24px] text-foreground">
-            hun.sh
+          <Link
+            href="/"
+            aria-label="Hun home"
+            className="inline-flex size-11 items-center"
+          >
+            <Image
+              src="/hun-app-icon.png"
+              alt=""
+              width={36}
+              height={36}
+              className="size-9"
+            />
           </Link>
           <p className="text-[12px] leading-relaxed text-muted-foreground/55">
             A native macOS workspace for projects, services, terminals, Git,
@@ -86,7 +106,7 @@ export function MarketingFooter() {
         />
       </div>
       <div className="mt-10 flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-5 text-[11px] text-muted-foreground/35">
-        <span>© {new Date().getUTCFullYear()} hun.sh</span>
+        <span>© {new Date().getUTCFullYear()} Hun</span>
         <span>macOS 15+ · Apple silicon</span>
       </div>
     </footer>
@@ -111,14 +131,14 @@ function FooterGroup({
             {href.startsWith("http") ? (
               <a
                 href={href}
-                className="inline-flex min-h-8 items-center transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
+                className="inline-flex h-10 items-center transition-colors duration-150 hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
               >
                 {label}
               </a>
             ) : (
               <Link
                 href={href}
-                className="inline-flex min-h-8 items-center transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
+                className="inline-flex h-10 items-center transition-colors duration-150 hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
               >
                 {label}
               </Link>
@@ -142,14 +162,16 @@ export function LegalPage({
   children: ReactNode;
 }) {
   return (
-    <div className="min-h-dvh bg-background px-5 py-8 text-foreground sm:px-6 sm:py-12">
+    <div
+      className={`${GeistSans.className} min-h-dvh bg-background px-5 py-8 text-foreground sm:px-6 sm:py-12`}
+    >
       <main className="mx-auto w-full max-w-5xl">
         <MarketingNav />
         <header className="border-b border-border pb-12 pt-16 sm:pb-16 sm:pt-24">
           <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground/40">
             {eyebrow}
           </p>
-          <h1 className="mt-4 max-w-3xl font-serif text-[48px] leading-[0.94] text-foreground sm:text-[72px]">
+          <h1 className="marketing-heading mt-4 max-w-3xl text-[42px] font-medium leading-[1.02] text-foreground sm:text-[64px]">
             {title}
           </h1>
           <p className="mt-6 max-w-2xl text-[14px] leading-7 text-muted-foreground/65 sm:text-[15px]">
