@@ -3,6 +3,7 @@ import SwiftUI
 
 struct HunSettingsSheet: View {
     @Environment(HunStore.self) private var store
+    @Environment(HunLicenseManager.self) private var license
     @Environment(\.dismiss) private var dismiss
 
     private let appVersion = HunAppVersion.current
@@ -14,6 +15,7 @@ struct HunSettingsSheet: View {
 
             ScrollView {
                 VStack(spacing: 18) {
+                    licenseSection
                     daemonSection
                     applicationSection
                     filesSection
@@ -22,11 +24,44 @@ struct HunSettingsSheet: View {
             }
             .hunScrollStyle()
         }
-        .frame(width: 540, height: 580)
+        .frame(width: 540, height: 680)
         .background(AppTheme.appBackground)
         .preferredColorScheme(.dark)
         .task {
             await store.refreshDaemonInfo()
+        }
+    }
+
+    private var licenseSection: some View {
+        SettingsSection(title: "License", eyebrow: "ACCESS") {
+            VStack(spacing: 0) {
+                SettingsValueGrid(rows: [
+                    ("Plan", license.activeSession?.productName ?? "Hun"),
+                    ("Status", license.activeSession?.isOffline == true ? "Offline grace period" : "Active"),
+                    ("Beta ends", "31 August 2026")
+                ])
+                .padding(14)
+
+                SettingsDivider()
+
+                HStack {
+                    Text("Deactivate this Mac to free one of the two activations.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(AppTheme.textTertiary)
+                    Spacer()
+                    Button("Deactivate this Mac") {
+                        Task {
+                            if await license.deactivate() {
+                                dismiss()
+                            }
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(AppTheme.accent)
+                    .controlSize(.small)
+                }
+                .padding(14)
+            }
         }
     }
 

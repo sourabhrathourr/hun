@@ -880,7 +880,7 @@ private struct ModeSelector: View {
     }
 }
 
-private struct WindowChromeConfigurator: NSViewRepresentable {
+struct WindowChromeConfigurator: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
         DispatchQueue.main.async {

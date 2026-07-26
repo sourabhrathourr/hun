@@ -139,3 +139,58 @@
   background-color: var(--background);
   border: none;
 }
+
+.legal-copy {
+  color: color-mix(in oklab, var(--muted-foreground) 82%, transparent);
+  font-size: 0.875rem;
+  line-height: 1.8;
+}
+
+.legal-copy h2 {
+  margin-top: 2.75rem;
+  color: color-mix(in oklab, var(--foreground) 92%, transparent);
+  font-family: var(--font-serif);
+  font-size: 1.875rem;
+  line-height: 1.15;
+}
+
+.legal-copy h2:first-child {
+  margin-top: 0;
+}
+
+.legal-copy p,
+.legal-copy ul {
+  margin-top: 1rem;
+}
+
+.legal-copy ul {
+  list-style: none;
+  padding-left: 0;
+}
+
+.legal-copy li {
+  position: relative;
+  padding-left: 1.25rem;
+}
+
+.legal-copy li + li {
+  margin-top: 0.5rem;
+}
+
+.legal-copy li::before {
+  position: absolute;
+  left: 0;
+  color: color-mix(in oklab, var(--muted-foreground) 45%, transparent);
+  content: "—";
+}
+
+.legal-copy a {
+  color: color-mix(in oklab, var(--foreground) 82%, transparent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.legal-copy strong {
+  color: color-mix(in oklab, var(--foreground) 88%, transparent);
+  font-weight: 500;
+}

@@ -3,25 +3,28 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://hun.sh"),
-  title: "hun.sh - seamless project context switching for developers",
+  title: {
+    default: "Hun — a native macOS workspace for local development",
+    template: "%s",
+  },
   description:
-    "hun is a command-line tool that makes context switching between dev projects smooth and seamless. one command to switch services, ports, and logs.",
+    "Switch projects, run services, inspect Git changes, use project terminals, and follow logs from one native macOS workspace.",
   openGraph: {
     type: "website",
     locale: "en_US",
     url: "https://hun.sh",
     siteName: "hun.sh",
-    title: "hun.sh - seamless project context switching for developers",
+    title: "Hun — a native macOS workspace for local development",
     description:
-      "hun is a command-line tool that makes context switching between dev projects smooth and seamless. one command to switch services, ports, and logs.",
-    images: [{ url: "/api/og", width: 1200, height: 630 }],
+      "Projects, services, Git, terminals, and logs in one native macOS workspace.",
+    images: [{ url: "/api/og/macos", width: 1200, height: 630 }],
   },
   twitter: {
     card: "summary_large_image",
-    title: "hun.sh - seamless project context switching for developers",
+    title: "Hun — a native macOS workspace for local development",
     description:
-      "hun is a command-line tool that makes context switching between dev projects smooth and seamless. one command to switch services, ports, and logs.",
-    images: ["/api/og"],
+      "Projects, services, Git, terminals, and logs in one native macOS workspace.",
+    images: ["/api/og/macos"],
   },
   robots: {
     index: true,
@@ -39,7 +42,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark" style={{ colorScheme: "dark" }} suppressHydrationWarning>
+    <html
+      lang="en"
+      className="dark"
+      style={{ colorScheme: "dark" }}
+      suppressHydrationWarning
+    >
       <head>
         <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
       </head>

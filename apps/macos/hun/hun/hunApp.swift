@@ -10,14 +10,19 @@ import AppKit
 
 @main
 struct hunApp: App {
-    @State private var store = HunStore(navigationDefaults: .standard)
+    @State private var store = HunStore(
+        navigationDefaults: .standard,
+        startAutomatically: false
+    )
     @State private var updater = HunUpdater()
+    @State private var license = HunLicenseManager()
 
     var body: some Scene {
         WindowGroup("hun", id: "dashboard") {
-            ContentView()
+            HunLicensedRootView()
                 .environment(store)
                 .environment(updater)
+                .environment(license)
                 .frame(minWidth: 560, minHeight: 420)
         }
         .windowStyle(.hiddenTitleBar)
@@ -37,8 +42,9 @@ struct hunApp: App {
         }
 
         MenuBarExtra {
-            MenuBarView()
+            HunLicenseMenuBarView()
                 .environment(store)
+                .environment(license)
         } label: {
             Image(systemName: "rectangle.badge.sparkles.fill")
         }

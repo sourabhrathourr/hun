@@ -74,6 +74,7 @@ final class HunStore {
     private var pendingModePreferredProjectID: HunProject.ID?
     private var modeChangeTask: Task<Void, Never>?
     private var modeChangeGeneration = 0
+    private var hasStarted = false
 
     init(
         client: HunDaemonClientProtocol = HunDaemonClient(),
@@ -138,6 +139,8 @@ final class HunStore {
     }
 
     func start() async {
+        guard !hasStarted else { return }
+        hasStarted = true
         installAgentSkillIfPossible()
         await refresh(force: true)
         startPolling()

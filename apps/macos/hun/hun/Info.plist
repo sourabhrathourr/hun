@@ -22,6 +22,16 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<key>HunBetaCheckoutURL</key>
+	<string>https://test.checkout.dodopayments.com/buy/pdt_0Nk1wmmFa4aRYUmVDGXSO?quantity=1&amp;redirect_url=https://hun.sh%2Fbeta%2Fsuccess</string>
+	<key>HunBetaEndsAt</key>
+	<string>2026-08-31T18:29:59Z</string>
+	<key>HunBetaProductID</key>
+	<string>pdt_0Nk1wmmFa4aRYUmVDGXSO</string>
+	<key>HunLicenseAPIBaseURL</key>
+	<string>https://test.dodopayments.com</string>
+	<key>HunLicenseProductIDs</key>
+	<string>pdt_0Nk1wmmFa4aRYUmVDGXSO</string>
 	<key>NSAccentColorName</key>
 	<string>AccentColor</string>
 	<key>NSHighResolutionCapable</key>

@@ -6,6 +6,66 @@ import Testing
 
 @MainActor
 struct hunTests {
+    @Test func betaLicenseExpiresAtTheSharedDeadline() {
+        let configuration = HunLicenseConfiguration(
+            apiBaseURL: URL(string: "https://test.dodopayments.com")!,
+            betaProductID: "beta",
+            allowedProductIDs: ["beta", "lifetime"],
+            betaEndsAt: Date(timeIntervalSince1970: 1_000),
+            checkoutURL: URL(string: "https://hun.sh")!,
+            offlineGracePeriod: 72 * 60 * 60
+        )
+
+        #expect(
+            !HunLicensePolicy.betaHasEnded(
+                productID: "beta",
+                now: Date(timeIntervalSince1970: 999),
+                configuration: configuration
+            )
+        )
+        #expect(
+            HunLicensePolicy.betaHasEnded(
+                productID: "beta",
+                now: Date(timeIntervalSince1970: 1_000),
+                configuration: configuration
+            )
+        )
+        #expect(
+            !HunLicensePolicy.betaHasEnded(
+                productID: "lifetime",
+                now: Date(timeIntervalSince1970: 2_000),
+                configuration: configuration
+            )
+        )
+    }
+
+    @Test func offlineLicenseGraceEndsAfterSeventyTwoHours() {
+        let configuration = HunLicenseConfiguration(
+            apiBaseURL: URL(string: "https://test.dodopayments.com")!,
+            betaProductID: "beta",
+            allowedProductIDs: ["beta"],
+            betaEndsAt: .distantFuture,
+            checkoutURL: URL(string: "https://hun.sh")!,
+            offlineGracePeriod: 72 * 60 * 60
+        )
+        let validation = Date(timeIntervalSince1970: 10_000)
+
+        #expect(
+            HunLicensePolicy.mayUseOffline(
+                lastValidatedAt: validation,
+                now: validation.addingTimeInterval(72 * 60 * 60),
+                configuration: configuration
+            )
+        )
+        #expect(
+            !HunLicensePolicy.mayUseOffline(
+                lastValidatedAt: validation,
+                now: validation.addingTimeInterval(72 * 60 * 60 + 1),
+                configuration: configuration
+            )
+        )
+    }
+
     @Test func updateBannerPreviewUsesExplicitVersion() {
         let version = HunUpdater.previewUpdateVersion(
             arguments: ["hun", "-HunPreviewUpdateBanner", "0.4.0"],
