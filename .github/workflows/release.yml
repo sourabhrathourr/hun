@@ -136,6 +136,13 @@ jobs:
       - name: Print toolchain
         run: xcodebuild -version
 
+      - name: Install pinned DMG builder
+        run: |
+          python3 -m venv "$RUNNER_TEMP/dmgbuild"
+          "$RUNNER_TEMP/dmgbuild/bin/pip" \
+            install --disable-pip-version-check "dmgbuild==1.6.7"
+          echo "$RUNNER_TEMP/dmgbuild/bin" >> "$GITHUB_PATH"
+
       - name: Validate app version and increasing build number
         env:
           GH_TOKEN: ${{ github.token }}

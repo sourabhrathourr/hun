@@ -9,10 +9,13 @@ CONFIGURATION="Release"
 BUILD_ROOT="${HUN_MACOS_RELEASE_BUILD_DIR:-$ROOT/build/macos-release}"
 DERIVED_DATA="$BUILD_ROOT/DerivedData"
 DIST_DIR="$BUILD_ROOT/dist"
-DMG_ROOT="$BUILD_ROOT/dmg-root"
 APP="$DERIVED_DATA/Build/Products/$CONFIGURATION/hun.app"
 CLI="$APP/Contents/Resources/hun"
 SPARKLE_FRAMEWORK="$APP/Contents/Frameworks/Sparkle.framework"
+DMG_SETTINGS="$ROOT/assets/dmg/dmgbuild-settings.py"
+DMG_BACKGROUND_1X="$ROOT/assets/dmg/background.png"
+DMG_BACKGROUND_2X="$ROOT/assets/dmg/background@2x.png"
+DMG_BACKGROUND="$BUILD_ROOT/dmg-background.tiff"
 VERSION="${HUN_MACOS_VERSION:-}"
 BUILD_NUMBER="${HUN_MACOS_BUILD_NUMBER:-}"
 CLI_VERSION="${HUN_CLI_VERSION:-v$VERSION}"
@@ -28,6 +31,7 @@ NOTARY_KEY_ID="${HUN_NOTARY_KEY_ID:-}"
 NOTARY_ISSUER_ID="${HUN_NOTARY_ISSUER_ID:-}"
 SIGNING_IDENTITY="${HUN_DEVELOPER_ID_APPLICATION:-}"
 SPARKLE_ACCOUNT="${HUN_SPARKLE_ACCOUNT:-hun}"
+DMGBUILD_BIN="${HUN_DMGBUILD_BIN:-$(command -v dmgbuild || true)}"
 GENERATE_APPCAST=0
 
 usage() {
@@ -115,6 +119,17 @@ if [ "$GENERATE_APPCAST" -eq 1 ] &&
   exit 1
 fi
 
+if [ -z "$DMGBUILD_BIN" ] || [ ! -x "$DMGBUILD_BIN" ]; then
+  echo "dmgbuild was not found. Install dmgbuild 1.6.7 or set HUN_DMGBUILD_BIN." >&2
+  exit 1
+fi
+if [ ! -f "$DMG_SETTINGS" ] ||
+   [ ! -f "$DMG_BACKGROUND_1X" ] ||
+   [ ! -f "$DMG_BACKGROUND_2X" ]; then
+  echo "DMG layout assets are missing from $ROOT/assets/dmg." >&2
+  exit 1
+fi
+
 if [ -z "$SIGNING_IDENTITY" ]; then
   SIGNING_IDENTITIES="$(
     security find-identity -v -p codesigning |
@@ -134,8 +149,8 @@ fi
 
 echo "Using signing identity: $SIGNING_IDENTITY"
 echo "Preparing release build directory: $BUILD_ROOT"
-rm -rf "$DERIVED_DATA" "$DIST_DIR" "$DMG_ROOT" "$APPCAST_ROOT"
-mkdir -p "$DIST_DIR" "$DMG_ROOT"
+rm -rf "$DERIVED_DATA" "$DIST_DIR" "$APPCAST_ROOT"
+mkdir -p "$DIST_DIR"
 
 echo "Building Apple Silicon Release app..."
 XCODE_OVERRIDES=(
@@ -284,13 +299,14 @@ echo "Verifying app signature..."
 codesign --verify --deep --strict --verbose=2 "$APP"
 
 echo "Creating DMG..."
-ditto "$APP" "$DMG_ROOT/hun.app"
-ln -s /Applications "$DMG_ROOT/Applications"
-hdiutil create \
-  -srcfolder "$DMG_ROOT" \
-  -format UDZO \
-  -volname "hun" \
-  -ov \
+tiffutil \
+  -cathidpicheck "$DMG_BACKGROUND_1X" "$DMG_BACKGROUND_2X" \
+  -out "$DMG_BACKGROUND"
+"$DMGBUILD_BIN" \
+  -s "$DMG_SETTINGS" \
+  -D "app=$APP" \
+  -D "background=$DMG_BACKGROUND" \
+  "Hun" \
   "$DMG"
 
 echo "Signing DMG..."

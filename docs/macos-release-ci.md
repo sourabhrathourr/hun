@@ -57,6 +57,31 @@ The workflow should fail unless the app executable and every bundled executable
 every nested executable must gain the matching `x86_64` slice; making only the
 Swift app universal is insufficient.
 
+## Branded DMG installer
+
+Hun's release DMG is assembled with the pinned `dmgbuild==1.6.7` package. The
+layout is defined in `assets/dmg/dmgbuild-settings.py` and uses committed 1x and
+2x artwork from `assets/dmg/`. This keeps the Finder window size, icon size,
+icon positions, hidden chrome, `/Applications` symlink, and volume icon
+deterministic in local builds and GitHub Actions.
+
+The editable artwork source is `scripts/render-dmg-background.swift`. Regenerate
+both PNGs after changing the design:
+
+```sh
+swift scripts/render-dmg-background.swift assets/dmg/background.png 1
+swift scripts/render-dmg-background.swift assets/dmg/background@2x.png 2
+```
+
+During packaging, `scripts/package-macos-release.sh` combines those files into
+a Retina TIFF with `tiffutil`, asks `dmgbuild` to create the compressed image,
+and then continues with Developer ID signing, verification, notarization, and
+stapling. Developers can install the pinned builder locally with:
+
+```sh
+python3 -m pip install "dmgbuild==1.6.7"
+```
+
 ## Production secrets and variables
 
 Create a GitHub environment named `Production`.
