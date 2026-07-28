@@ -1,5 +1,25 @@
 [
   {
+    "version": "0.3.3",
+    "date": "2026-07-28",
+    "title": "Version 0.3.3",
+    "summary": "A focused Hun update with the latest improvements and fixes.",
+    "groups": [
+      {
+        "title": "New",
+        "changes": [
+          "Switch Dodo integration to live mode."
+        ]
+      },
+      {
+        "title": "Fixes",
+        "changes": [
+          "Polish license activation flow."
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.3.2",
     "date": "2026-07-26",
     "title": "Version 0.3.2",
