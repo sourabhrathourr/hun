@@ -261,11 +261,11 @@
 /* Begin PBXShellScriptBuildPhase section */
 		5A31B6982FA6120000D3B44F /* Build hun CLI */ = {
 			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			inputFileListPaths = (
+				"$(SRCROOT)/hun-cli-inputs.xcfilelist",
 			);
 			inputPaths = (
 			);

@@ -469,7 +469,7 @@ final class HunStore {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))
                 guard !Task.isCancelled else { break }
-                guard await self?.pendingProjectReview == nil else { continue }
+                guard self?.pendingProjectReview == nil else { continue }
                 await self?.refresh(force: false)
             }
         }
@@ -573,12 +573,14 @@ final class HunStore {
         logSubscription?.cancel()
         do {
             logSubscription = try client.subscribe(project: project, service: service) { [weak self] line in
+                guard let self else { return }
                 Task { @MainActor in
-                    self?.append(line)
+                    self.append(line)
                 }
             } onError: { [weak self] error in
+                guard let self else { return }
                 Task { @MainActor in
-                    guard let self, !self.isTransientDaemonError(error) else { return }
+                    guard !self.isTransientDaemonError(error) else { return }
                     self.lastError = error.localizedDescription
                 }
             }
@@ -965,7 +967,7 @@ nonisolated enum HunMode: String, CaseIterable, Hashable {
 
 extension Color {
     /// Exact sRGB color from a 24-bit hex value, e.g. `0x030303`.
-    init(hex: UInt32) {
+    nonisolated init(hex: UInt32) {
         let r = Double((hex >> 16) & 0xFF) / 255.0
         let g = Double((hex >> 8) & 0xFF) / 255.0
         let b = Double(hex & 0xFF) / 255.0
@@ -973,7 +975,7 @@ extension Color {
     }
 }
 
-enum AppTheme {
+nonisolated enum AppTheme {
     static let appBackground = Color(hex: 0x030303)
     static let sidebar = Color(hex: 0x060606)
     static let elevated = Color(red: 0.105, green: 0.105, blue: 0.110)
