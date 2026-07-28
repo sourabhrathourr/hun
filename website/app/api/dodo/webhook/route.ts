@@ -46,7 +46,7 @@ export async function POST(request: Request) {
     }
 
     const apiBaseURL =
-      process.env.DODO_API_BASE_URL ?? "https://test.dodopayments.com";
+      process.env.DODO_API_BASE_URL ?? "https://live.dodopayments.com";
     const betaEndsAt =
       process.env.DODO_BETA_EXPIRES_AT ?? HUN_BETA_ENDS_AT;
     const response = await fetch(

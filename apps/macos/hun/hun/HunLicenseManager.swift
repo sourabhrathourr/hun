@@ -14,10 +14,10 @@ nonisolated struct HunLicenseConfiguration: Sendable {
         let info = Bundle.main.infoDictionary ?? [:]
         let apiBaseURL = URL(
             string: info["HunLicenseAPIBaseURL"] as? String
-                ?? "https://test.dodopayments.com"
+                ?? "https://live.dodopayments.com"
         )!
         let betaProductID = info["HunBetaProductID"] as? String
-            ?? "pdt_0Nk1wmmFa4aRYUmVDGXSO"
+            ?? "pdt_0Nk9a6sOPWWJ4iOwu4bwl"
         let productIDs = (info["HunLicenseProductIDs"] as? String ?? betaProductID)
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -28,7 +28,7 @@ nonisolated struct HunLicenseConfiguration: Sendable {
         )!
         let checkoutURL = URL(
             string: info["HunBetaCheckoutURL"] as? String
-                ?? "https://test.checkout.dodopayments.com/buy/pdt_0Nk1wmmFa4aRYUmVDGXSO?quantity=1&redirect_url=https://hun.sh%2Fbeta%2Fsuccess"
+                ?? "https://checkout.dodopayments.com/buy/pdt_0Nk9a6sOPWWJ4iOwu4bwl?quantity=1&redirect_url=https://hun.sh%2Fbeta%2Fsuccess"
         )!
 
         return HunLicenseConfiguration(
