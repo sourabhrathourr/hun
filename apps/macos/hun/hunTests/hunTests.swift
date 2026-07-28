@@ -66,6 +66,88 @@ struct hunTests {
         )
     }
 
+    @Test func dodoActivationResponseDecodesSnakeCaseProductID() throws {
+        let payload = Data(
+            """
+            {
+              "id": "lki_test",
+              "product": {
+                "product_id": "pdt_hun_beta",
+                "name": "Hun Public Beta"
+              }
+            }
+            """.utf8
+        )
+
+        let response = try JSONDecoder().decode(ActivateResponse.self, from: payload)
+
+        #expect(response.id == "lki_test")
+        #expect(response.product.productID == "pdt_hun_beta")
+        #expect(response.product.name == "Hun Public Beta")
+    }
+
+    @Test func licenseActivationErrorsUseProductLanguage() {
+        #expect(
+            HunLicenseError.rejected(
+                statusCode: 404,
+                providerMessage: "The requested resource could not be found."
+            ).errorDescription
+                == "That license key isn’t valid. Check the key and try again."
+        )
+        #expect(
+            HunLicenseError.rejected(
+                statusCode: 403,
+                providerMessage: "License key activation limit reached"
+            ).errorDescription
+                == "This key is already active on two Macs. Deactivate one before trying again."
+        )
+        #expect(
+            HunLicenseError.rejected(
+                statusCode: 400,
+                providerMessage: "License key has expired"
+            ).errorDescription
+                == "This license key has expired."
+        )
+        #expect(
+            HunLicenseError.rejected(
+                statusCode: 503,
+                providerMessage: "Internal service error"
+            ).errorDescription
+                == "The license service is temporarily unavailable. Try again in a moment."
+        )
+    }
+
+    @Test func licenseNetworkErrorsUseActionableProductLanguage() {
+        #expect(
+            HunLicenseUserMessage.activation(
+                for: URLError(.notConnectedToInternet)
+            ) == "Couldn’t connect to the license service. Check your internet connection and try again."
+        )
+    }
+
+    @Test func failedLicenseStorageReleasesTheDodoActivation() async {
+        let service = MockLicenseService()
+        let configuration = HunLicenseConfiguration(
+            apiBaseURL: URL(string: "https://test.dodopayments.com")!,
+            betaProductID: "beta",
+            allowedProductIDs: ["beta"],
+            betaEndsAt: .distantFuture,
+            checkoutURL: URL(string: "https://hun.sh")!,
+            offlineGracePeriod: 72 * 60 * 60
+        )
+        let manager = HunLicenseManager(
+            configuration: configuration,
+            service: service,
+            store: FailingLicenseStore()
+        )
+
+        await manager.activate("test-license")
+
+        #expect(service.deactivatedInstances == ["lki_test"])
+        #expect(manager.state == .needsActivation)
+        #expect(manager.errorMessage == "Hun couldn’t activate this license key. Try again.")
+    }
+
     @Test func updateBannerPreviewUsesExplicitVersion() {
         let version = HunUpdater.previewUpdateVersion(
             arguments: ["hun", "-HunPreviewUpdateBanner", "0.4.0"],
@@ -1647,6 +1729,27 @@ struct hunTests {
         #expect(resizedHeight == 456)
     }
 
+    @Test func activationButtonOwnsTheFirstClickInsteadOfMovingTheWindow() {
+        let button = HunFirstMouseButtonView()
+
+        #expect(button.mouseDownCanMoveWindow == false)
+        #expect(button.acceptsFirstMouse(for: nil))
+    }
+
+    @Test func activationButtonShowsValidationProgressInline() {
+        let button = HunFirstMouseButtonView()
+        button.attributedTitle = NSAttributedString(string: "Activate Hun")
+
+        button.setLoading(true)
+
+        #expect(button.isLoading)
+        #expect(button.attributedTitle.string.isEmpty)
+
+        button.setLoading(false)
+
+        #expect(!button.isLoading)
+    }
+
     @Test func sleekScrollbarsOverlayContentWithoutChangingItsWidth() throws {
         let scrollView = HunStyledScrollView(
             frame: NSRect(x: 0, y: 0, width: 240, height: 180)
@@ -1814,6 +1917,47 @@ struct hunTests {
             )
         ).level
     }
+}
+
+private final class MockLicenseService: HunLicenseServing, @unchecked Sendable {
+    var deactivatedInstances: [String] = []
+
+    func activate(
+        licenseKey: String,
+        deviceName: String
+    ) async throws -> HunLicenseActivation {
+        HunLicenseActivation(
+            instanceID: "lki_test",
+            productID: "beta",
+            productName: "Hun Public Beta"
+        )
+    }
+
+    func validate(
+        licenseKey: String,
+        instanceID: String
+    ) async throws -> Bool {
+        true
+    }
+
+    func deactivate(
+        licenseKey: String,
+        instanceID: String
+    ) async throws {
+        deactivatedInstances.append(instanceID)
+    }
+}
+
+private struct FailingLicenseStore: HunLicenseStoring {
+    func load() throws -> HunStoredLicense? {
+        nil
+    }
+
+    func save(_ license: HunStoredLicense) throws {
+        throw TestError.boom
+    }
+
+    func delete() throws {}
 }
 
 @MainActor

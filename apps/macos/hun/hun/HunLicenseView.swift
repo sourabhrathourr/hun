@@ -7,13 +7,15 @@ struct HunLicensedRootView: View {
     @State private var storeStarted = false
 
     var body: some View {
-        Group {
+        ZStack {
             if license.isLicensed {
                 ContentView()
             } else {
                 HunLicenseGateView()
             }
         }
+        .background(AppTheme.appBackground)
+        .preferredColorScheme(.dark)
         .task {
             await license.restore()
         }
@@ -24,6 +26,7 @@ struct HunLicensedRootView: View {
         }
     }
 }
+
 struct HunLicenseMenuBarView: View {
     @Environment(HunLicenseManager.self) private var license
 
@@ -94,12 +97,7 @@ private struct HunLicenseGateView: View {
                 ProgressView().controlSize(.small)
             }
         case .activating:
-            statusView(
-                title: "Activating Hun",
-                detail: "Registering this Mac with your beta license."
-            ) {
-                ProgressView().controlSize(.small)
-            }
+            activationForm
         case .expired:
             statusView(
                 title: "The public beta has ended",
@@ -155,6 +153,7 @@ private struct HunLicenseGateView: View {
                             .stroke(AppTheme.dividerStrong, lineWidth: 1)
                     }
                     .focused($licenseFieldFocused)
+                    .disabled(isActivating)
                     .onSubmit(activate)
                     .accessibilityLabel("Hun license key")
 
@@ -165,23 +164,16 @@ private struct HunLicenseGateView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                Button(action: activate) {
-                    Text("Activate Hun")
-                        .font(.system(size: 12, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 36)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(AppTheme.appBackground)
-                .background(AppTheme.textPrimary)
-                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                .disabled(licenseKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .opacity(
-                    licenseKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        ? 0.45
-                        : 1
+                HunFirstMouseButton(
+                    title: "Activate Hun",
+                    isEnabled: !licenseKey
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .isEmpty && !isActivating,
+                    isLoading: isActivating,
+                    action: activate
                 )
-                .keyboardShortcut(.defaultAction)
+                .frame(maxWidth: .infinity)
+                .frame(height: 36)
             }
 
             HStack {
@@ -244,6 +236,132 @@ private struct HunLicenseGateView: View {
     }
 
     private func activate() {
+        guard !isActivating else { return }
         Task { await license.activate(licenseKey) }
+    }
+
+    private var isActivating: Bool {
+        if case .activating = license.state {
+            return true
+        }
+        return false
+    }
+}
+
+private struct HunFirstMouseButton: NSViewRepresentable {
+    let title: String
+    let isEnabled: Bool
+    let isLoading: Bool
+    let action: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(action: action)
+    }
+
+    func makeNSView(context: Context) -> HunFirstMouseButtonView {
+        let button = HunFirstMouseButtonView()
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.performAction)
+        button.setButtonType(.momentaryPushIn)
+        button.isBordered = false
+        button.focusRingType = .none
+        button.alignment = .center
+        button.wantsLayer = true
+        button.layer?.cornerRadius = 7
+        button.layer?.masksToBounds = true
+        configure(button, coordinator: context.coordinator)
+        return button
+    }
+
+    func updateNSView(
+        _ button: HunFirstMouseButtonView,
+        context: Context
+    ) {
+        configure(button, coordinator: context.coordinator)
+    }
+
+    private func configure(
+        _ button: HunFirstMouseButtonView,
+        coordinator: Coordinator
+    ) {
+        coordinator.action = action
+        button.isEnabled = isEnabled
+        button.alphaValue = isEnabled || isLoading ? 1 : 0.45
+        button.layer?.backgroundColor = NSColor(
+            calibratedWhite: 0.92,
+            alpha: 1
+        ).cgColor
+        button.attributedTitle = NSAttributedString(
+            string: title,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+                .foregroundColor: NSColor(
+                    calibratedRed: 0.012,
+                    green: 0.012,
+                    blue: 0.012,
+                    alpha: 1
+                )
+            ]
+        )
+        button.setLoading(isLoading)
+        button.setAccessibilityLabel(isLoading ? "Activating Hun" : title)
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var action: () -> Void
+
+        init(action: @escaping () -> Void) {
+            self.action = action
+        }
+
+        @objc func performAction() {
+            action()
+        }
+    }
+}
+
+final class HunFirstMouseButtonView: NSButton {
+    private let progressIndicator: NSProgressIndicator = {
+        let indicator = NSProgressIndicator()
+        indicator.style = .spinning
+        indicator.controlSize = .small
+        indicator.isDisplayedWhenStopped = false
+        indicator.translatesAutoresizingMaskIntoConstraints = false
+        indicator.appearance = NSAppearance(named: .aqua)
+        return indicator
+    }()
+
+    private(set) var isLoading = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        addSubview(progressIndicator)
+        NSLayoutConstraint.activate([
+            progressIndicator.centerXAnchor.constraint(equalTo: centerXAnchor),
+            progressIndicator.centerYAnchor.constraint(equalTo: centerYAnchor)
+        ])
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    func setLoading(_ loading: Bool) {
+        isLoading = loading
+        if loading {
+            attributedTitle = NSAttributedString(string: "")
+            progressIndicator.startAnimation(nil)
+        } else {
+            progressIndicator.stopAnimation(nil)
+        }
+    }
+
+    override var mouseDownCanMoveWindow: Bool {
+        false
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
     }
 }

@@ -174,37 +174,41 @@ final class HunLicenseManager {
                 licenseKey: trimmedKey,
                 deviceName: Host.current().localizedName ?? "Mac"
             )
-            guard configuration.allowedProductIDs.contains(activation.productID) else {
-                try? await service.deactivate(
-                    licenseKey: trimmedKey,
-                    instanceID: activation.instanceID
-                )
-                throw HunLicenseError.wrongProduct
-            }
-            guard !HunLicensePolicy.betaHasEnded(
-                productID: activation.productID,
-                now: now(),
-                configuration: configuration
-            ) else {
-                try? await service.deactivate(
-                    licenseKey: trimmedKey,
-                    instanceID: activation.instanceID
-                )
-                state = .expired
-                return
-            }
+            do {
+                guard configuration.allowedProductIDs.contains(activation.productID) else {
+                    throw HunLicenseError.wrongProduct
+                }
+                guard !HunLicensePolicy.betaHasEnded(
+                    productID: activation.productID,
+                    now: now(),
+                    configuration: configuration
+                ) else {
+                    try? await service.deactivate(
+                        licenseKey: trimmedKey,
+                        instanceID: activation.instanceID
+                    )
+                    state = .expired
+                    return
+                }
 
-            let stored = HunStoredLicense(
-                licenseKey: trimmedKey,
-                instanceID: activation.instanceID,
-                productID: activation.productID,
-                productName: activation.productName,
-                lastValidatedAt: now()
-            )
-            try store.save(stored)
-            state = .active(stored.session(isOffline: false))
+                let stored = HunStoredLicense(
+                    licenseKey: trimmedKey,
+                    instanceID: activation.instanceID,
+                    productID: activation.productID,
+                    productName: activation.productName,
+                    lastValidatedAt: now()
+                )
+                try store.save(stored)
+                state = .active(stored.session(isOffline: false))
+            } catch {
+                try? await service.deactivate(
+                    licenseKey: trimmedKey,
+                    instanceID: activation.instanceID
+                )
+                throw error
+            }
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = HunLicenseUserMessage.activation(for: error)
             state = .needsActivation
         }
     }
@@ -237,18 +241,82 @@ final class HunLicenseManager {
 
 enum HunLicenseError: LocalizedError {
     case invalidResponse
-    case rejected(String)
+    case rejected(statusCode: Int, providerMessage: String?)
     case wrongProduct
 
     var errorDescription: String? {
         switch self {
         case .invalidResponse:
-            "Dodo Payments returned an unexpected response."
-        case let .rejected(message):
-            message
+            "Hun couldn’t verify that license key. Try again in a moment."
+        case let .rejected(statusCode, providerMessage):
+            Self.rejectionDescription(
+                statusCode: statusCode,
+                providerMessage: providerMessage
+            )
         case .wrongProduct:
             "This key is not for Hun."
         }
+    }
+
+    private static func rejectionDescription(
+        statusCode: Int,
+        providerMessage: String?
+    ) -> String {
+        let message = providerMessage?.lowercased() ?? ""
+
+        if message.contains("activation limit")
+            || message.contains("maximum activation")
+            || message.contains("too many activation")
+        {
+            return "This key is already active on two Macs. Deactivate one before trying again."
+        }
+        if message.contains("expired") {
+            return "This license key has expired."
+        }
+        if message.contains("revoked")
+            || message.contains("disabled")
+            || message.contains("inactive")
+        {
+            return "This license key is no longer active."
+        }
+
+        switch statusCode {
+        case 400, 404, 422:
+            return "That license key isn’t valid. Check the key and try again."
+        case 403:
+            return "This key is already active on two Macs. Deactivate one before trying again."
+        case 429:
+            return "Too many activation attempts. Wait a moment and try again."
+        case 500 ... 599:
+            return "The license service is temporarily unavailable. Try again in a moment."
+        default:
+            return "Hun couldn’t activate this license key. Try again."
+        }
+    }
+}
+
+nonisolated enum HunLicenseUserMessage {
+    static func activation(for error: Error) -> String {
+        if let licenseError = error as? HunLicenseError {
+            return licenseError.errorDescription
+                ?? "Hun couldn’t activate this license key. Try again."
+        }
+
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .notConnectedToInternet,
+                 .cannotConnectToHost,
+                 .cannotFindHost,
+                 .dnsLookupFailed,
+                 .networkConnectionLost,
+                 .timedOut:
+                return "Couldn’t connect to the license service. Check your internet connection and try again."
+            default:
+                break
+            }
+        }
+
+        return "Hun couldn’t activate this license key. Try again."
     }
 }
 
@@ -300,9 +368,16 @@ struct HunDodoLicenseService: HunLicenseServing {
                 licenseKeyInstanceID: instanceID
             )
         )
-        let (_, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {
-            throw HunLicenseError.rejected("Dodo Payments could not deactivate this Mac.")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw HunLicenseError.invalidResponse
+        }
+        guard (200 ..< 300).contains(http.statusCode) else {
+            let error = try? JSONDecoder().decode(DodoErrorResponse.self, from: data)
+            throw HunLicenseError.rejected(
+                statusCode: http.statusCode,
+                providerMessage: error?.message
+            )
         }
     }
 
@@ -325,13 +400,16 @@ struct HunDodoLicenseService: HunLicenseServing {
         guard (200 ..< 300).contains(http.statusCode) else {
             let error = try? JSONDecoder().decode(DodoErrorResponse.self, from: data)
             throw HunLicenseError.rejected(
-                error?.message ?? "That license key could not be activated."
+                statusCode: http.statusCode,
+                providerMessage: error?.message
             )
         }
 
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        return try decoder.decode(Response.self, from: data)
+        do {
+            return try JSONDecoder().decode(Response.self, from: data)
+        } catch {
+            throw HunLicenseError.invalidResponse
+        }
     }
 }
 
@@ -352,6 +430,11 @@ nonisolated struct ActivateResponse: Decodable {
     struct Product: Decodable {
         let productID: String
         let name: String
+
+        private enum CodingKeys: String, CodingKey {
+            case productID = "product_id"
+            case name
+        }
     }
 }
 
@@ -397,7 +480,11 @@ nonisolated protocol HunLicenseStoring: Sendable {
 }
 
 struct HunKeychainLicenseStore: HunLicenseStoring {
+#if DEBUG
+    private let service = "sh.hun.license.dev"
+#else
     private let service = "sh.hun.license"
+#endif
     private let account = "active-license"
 
     func load() throws -> HunStoredLicense? {
