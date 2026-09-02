@@ -38,7 +38,7 @@ struct HunSettingsSheet: View {
                 SettingsValueGrid(rows: [
                     ("Plan", license.activeSession?.productName ?? "Hun"),
                     ("Status", license.activeSession?.isOffline == true ? "Offline grace period" : "Active"),
-                    ("Beta ends", "31 August 2026")
+                    ("Expiry", "Managed by Dodo Payments")
                 ])
                 .padding(14)
 

@@ -1,4 +1,5 @@
 import { LegalPage } from "@/components/marketing-shell";
+import { hunBetaEndDateLong } from "@/lib/dodo";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
@@ -32,11 +33,12 @@ export default function TermsPage() {
 
       <h2>3. Beta access</h2>
       <p>
-        The public beta is provided without charge and is scheduled to end on
-        31 August 2026. A valid beta license key is required, may be activated
-        on up to two Macs, and expires at the shared beta end date. Beta
-        software may contain defects or change before general availability.
-        We may modify, suspend, or end beta access when reasonably necessary.
+        The public beta is provided without charge and is scheduled to end on{" "}
+        {hunBetaEndDateLong}. A valid beta license key is required, may be
+        activated on up to two Macs, and expires at the shared beta end date.
+        Beta software may contain defects or change before general
+        availability. We may modify, suspend, or end beta access when reasonably
+        necessary.
       </p>
 
       <h2>4. Paid licenses</h2>

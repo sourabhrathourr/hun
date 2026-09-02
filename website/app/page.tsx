@@ -4,7 +4,7 @@ import {
 } from "@/components/marketing-shell";
 import { Reveal } from "@/components/reveal";
 import releases from "@/content/changelog.json";
-import { hunBetaCheckoutURL } from "@/lib/dodo";
+import { hunBetaCheckoutURL, hunBetaEndDateLong } from "@/lib/dodo";
 import macosImage from "@/public/macos-image.png";
 import type { Metadata } from "next";
 import Image from "next/image";
@@ -54,7 +54,7 @@ const questions = [
   {
     question: "What happens when the public beta ends?",
     answer:
-      "The beta is free through 31 August 2026. After that, continued use will require the planned $15 lifetime license. The paid-license transition will ship before the beta deadline.",
+      `The beta is free through ${hunBetaEndDateLong}. After that, continued use will require the planned $15 lifetime license. The paid-license transition will ship before the beta deadline.`,
   },
 ];
 
@@ -115,7 +115,7 @@ export default function HomePage() {
                   The full app is free during the public beta.
                 </span>{" "}
                 A beta license key is required, works on two Macs, and expires
-                for everyone on 31 August 2026.
+                for everyone on {hunBetaEndDateLong}.
               </p>
               <Link
                 href="/pricing"
@@ -278,9 +278,9 @@ export default function HomePage() {
                       free while we build it with you.
                     </h2>
                     <p className="mt-5 max-w-2xl text-[13px] leading-6 text-foreground/48">
-                      Use every feature through 31 August 2026. After beta, the
-                      planned price is $15 once for a lifetime license on two
-                      Macs—no subscription and no feature ladder.
+                      Use every feature through {hunBetaEndDateLong}. After
+                      beta, the planned price is $15 once for a lifetime license
+                      on two Macs—no subscription and no feature ladder.
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-3 lg:justify-end">

@@ -3,7 +3,11 @@ import {
   MarketingNav,
 } from "@/components/marketing-shell";
 import { Reveal } from "@/components/reveal";
-import { hunBetaCheckoutURL } from "@/lib/dodo";
+import {
+  hunBetaCheckoutURL,
+  hunBetaEndDateLong,
+  hunBetaEndDateShort,
+} from "@/lib/dodo";
 import type { Metadata } from "next";
 import Link from "next/link";
 
@@ -48,7 +52,7 @@ const questions = [
   {
     question: "When does the public beta end?",
     answer:
-      "All public beta licenses expire together on 31 August 2026. We will explain the paid transition inside the app before that date.",
+      `All public beta licenses expire together on ${hunBetaEndDateLong}. We will explain the paid transition inside the app before that date.`,
   },
   {
     question: "Is the paid license a subscription?",
@@ -122,7 +126,7 @@ export default function PricingPage() {
                     <span className="pb-2 text-[12px] leading-5 text-foreground/42">
                       complete access
                       <br />
-                      through 31 Aug 2026
+                      through {hunBetaEndDateShort}
                     </span>
                   </div>
                   <p className="mt-6 max-w-lg text-[12px] leading-6 text-foreground/48 sm:text-[13px]">

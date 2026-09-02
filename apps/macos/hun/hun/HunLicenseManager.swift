@@ -4,9 +4,7 @@ import Security
 
 nonisolated struct HunLicenseConfiguration: Sendable {
     let apiBaseURL: URL
-    let betaProductID: String
     let allowedProductIDs: Set<String>
-    let betaEndsAt: Date
     let checkoutURL: URL
     let offlineGracePeriod: TimeInterval
 
@@ -16,16 +14,13 @@ nonisolated struct HunLicenseConfiguration: Sendable {
             string: info["HunLicenseAPIBaseURL"] as? String
                 ?? "https://live.dodopayments.com"
         )!
-        let betaProductID = info["HunBetaProductID"] as? String
-            ?? "pdt_0Nk9a6sOPWWJ4iOwu4bwl"
-        let productIDs = (info["HunLicenseProductIDs"] as? String ?? betaProductID)
+        let productIDs = (
+            info["HunLicenseProductIDs"] as? String
+                ?? "pdt_0Nk9a6sOPWWJ4iOwu4bwl"
+        )
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-        let betaEndsAt = ISO8601DateFormatter().date(
-            from: info["HunBetaEndsAt"] as? String
-                ?? "2026-08-31T18:29:59Z"
-        )!
         let checkoutURL = URL(
             string: info["HunBetaCheckoutURL"] as? String
                 ?? "https://checkout.dodopayments.com/buy/pdt_0Nk9a6sOPWWJ4iOwu4bwl?quantity=1&redirect_url=https://hun.sh%2Fbeta%2Fsuccess"
@@ -33,9 +28,7 @@ nonisolated struct HunLicenseConfiguration: Sendable {
 
         return HunLicenseConfiguration(
             apiBaseURL: apiBaseURL,
-            betaProductID: betaProductID,
             allowedProductIDs: Set(productIDs),
-            betaEndsAt: betaEndsAt,
             checkoutURL: checkoutURL,
             offlineGracePeriod: 72 * 60 * 60
         )
@@ -43,14 +36,6 @@ nonisolated struct HunLicenseConfiguration: Sendable {
 }
 
 nonisolated enum HunLicensePolicy {
-    static func betaHasEnded(
-        productID: String,
-        now: Date,
-        configuration: HunLicenseConfiguration
-    ) -> Bool {
-        productID == configuration.betaProductID && now >= configuration.betaEndsAt
-    }
-
     static func mayUseOffline(
         lastValidatedAt: Date,
         now: Date,
@@ -72,7 +57,6 @@ enum HunLicenseState: Equatable {
     case needsActivation
     case activating
     case active(HunLicenseSession)
-    case expired
     case unavailable(String)
 }
 
@@ -116,15 +100,6 @@ final class HunLicenseManager {
 
         guard let stored = try? store.load() else {
             state = .needsActivation
-            return
-        }
-
-        if HunLicensePolicy.betaHasEnded(
-            productID: stored.productID,
-            now: now(),
-            configuration: configuration
-        ) {
-            state = .expired
             return
         }
 
@@ -178,19 +153,6 @@ final class HunLicenseManager {
                 guard configuration.allowedProductIDs.contains(activation.productID) else {
                     throw HunLicenseError.wrongProduct
                 }
-                guard !HunLicensePolicy.betaHasEnded(
-                    productID: activation.productID,
-                    now: now(),
-                    configuration: configuration
-                ) else {
-                    try? await service.deactivate(
-                        licenseKey: trimmedKey,
-                        instanceID: activation.instanceID
-                    )
-                    state = .expired
-                    return
-                }
-
                 let stored = HunStoredLicense(
                     licenseKey: trimmedKey,
                     instanceID: activation.instanceID,

@@ -98,17 +98,6 @@ private struct HunLicenseGateView: View {
             }
         case .activating:
             activationForm
-        case .expired:
-            statusView(
-                title: "The public beta has ended",
-                detail: "Thanks for testing Hun. Visit hun.sh for the next release."
-            ) {
-                Button("Visit hun.sh") {
-                    NSWorkspace.shared.open(URL(string: "https://hun.sh")!)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(AppTheme.accent)
-            }
         case let .unavailable(message):
             statusView(title: "Could not verify your license", detail: message) {
                 Button("Try again") {
@@ -132,7 +121,7 @@ private struct HunLicenseGateView: View {
                 Text("Activate the public beta")
                     .font(.system(size: 24, weight: .semibold))
                     .foregroundStyle(AppTheme.textPrimary)
-                Text("Paste the license key from your Dodo Payments email. Beta access is free and ends for everyone on 31 August 2026.")
+                Text("Paste the license key from your Dodo Payments email. Beta access remains active while your license is valid.")
                     .font(.system(size: 12.5))
                     .foregroundStyle(AppTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)

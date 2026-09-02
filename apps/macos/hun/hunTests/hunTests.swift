@@ -6,35 +6,43 @@ import Testing
 
 @MainActor
 struct hunTests {
-    @Test func betaLicenseExpiresAtTheSharedDeadline() {
+    @Test func storedBetaLicenseValidityComesFromDodo() async {
+        let service = MockLicenseService()
+        let previousValidation = Date(timeIntervalSince1970: 1_000)
+        let currentDate = Date(timeIntervalSince1970: 2_000)
+        let store = InMemoryLicenseStore(
+            license: HunStoredLicense(
+                licenseKey: "test-license",
+                instanceID: "lki_test",
+                productID: "beta",
+                productName: "Hun Public Beta",
+                lastValidatedAt: previousValidation
+            )
+        )
         let configuration = HunLicenseConfiguration(
             apiBaseURL: URL(string: "https://test.dodopayments.com")!,
-            betaProductID: "beta",
-            allowedProductIDs: ["beta", "lifetime"],
-            betaEndsAt: Date(timeIntervalSince1970: 1_000),
+            allowedProductIDs: ["beta"],
             checkoutURL: URL(string: "https://hun.sh")!,
             offlineGracePeriod: 72 * 60 * 60
         )
+        let manager = HunLicenseManager(
+            configuration: configuration,
+            service: service,
+            store: store,
+            now: { currentDate }
+        )
 
+        await manager.restore()
+
+        #expect(service.validatedInstances == ["lki_test"])
         #expect(
-            !HunLicensePolicy.betaHasEnded(
-                productID: "beta",
-                now: Date(timeIntervalSince1970: 999),
-                configuration: configuration
-            )
-        )
-        #expect(
-            HunLicensePolicy.betaHasEnded(
-                productID: "beta",
-                now: Date(timeIntervalSince1970: 1_000),
-                configuration: configuration
-            )
-        )
-        #expect(
-            !HunLicensePolicy.betaHasEnded(
-                productID: "lifetime",
-                now: Date(timeIntervalSince1970: 2_000),
-                configuration: configuration
+            manager.state == .active(
+                HunLicenseSession(
+                    productID: "beta",
+                    productName: "Hun Public Beta",
+                    lastValidatedAt: currentDate,
+                    isOffline: false
+                )
             )
         )
     }
@@ -42,9 +50,7 @@ struct hunTests {
     @Test func offlineLicenseGraceEndsAfterSeventyTwoHours() {
         let configuration = HunLicenseConfiguration(
             apiBaseURL: URL(string: "https://test.dodopayments.com")!,
-            betaProductID: "beta",
             allowedProductIDs: ["beta"],
-            betaEndsAt: .distantFuture,
             checkoutURL: URL(string: "https://hun.sh")!,
             offlineGracePeriod: 72 * 60 * 60
         )
@@ -129,9 +135,7 @@ struct hunTests {
         let service = MockLicenseService()
         let configuration = HunLicenseConfiguration(
             apiBaseURL: URL(string: "https://test.dodopayments.com")!,
-            betaProductID: "beta",
             allowedProductIDs: ["beta"],
-            betaEndsAt: .distantFuture,
             checkoutURL: URL(string: "https://hun.sh")!,
             offlineGracePeriod: 72 * 60 * 60
         )
@@ -1921,6 +1925,7 @@ struct hunTests {
 
 private final class MockLicenseService: HunLicenseServing, @unchecked Sendable {
     var deactivatedInstances: [String] = []
+    var validatedInstances: [String] = []
 
     func activate(
         licenseKey: String,
@@ -1937,7 +1942,8 @@ private final class MockLicenseService: HunLicenseServing, @unchecked Sendable {
         licenseKey: String,
         instanceID: String
     ) async throws -> Bool {
-        true
+        validatedInstances.append(instanceID)
+        return true
     }
 
     func deactivate(
@@ -1945,6 +1951,26 @@ private final class MockLicenseService: HunLicenseServing, @unchecked Sendable {
         instanceID: String
     ) async throws {
         deactivatedInstances.append(instanceID)
+    }
+}
+
+private final class InMemoryLicenseStore: HunLicenseStoring, @unchecked Sendable {
+    private var license: HunStoredLicense?
+
+    init(license: HunStoredLicense? = nil) {
+        self.license = license
+    }
+
+    func load() throws -> HunStoredLicense? {
+        license
+    }
+
+    func save(_ license: HunStoredLicense) throws {
+        self.license = license
+    }
+
+    func delete() throws {
+        license = nil
     }
 }
 

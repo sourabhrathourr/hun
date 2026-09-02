@@ -1,4 +1,5 @@
 import { BetaLicenseCard } from "@/components/beta-license-card";
+import { hunBetaEndDateLong } from "@/lib/dodo";
 import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
@@ -61,7 +62,7 @@ export default async function BetaSuccessPage({
             <p className="max-w-lg text-[14px] leading-relaxed text-muted-foreground/60">
               Download Hun, move it to Applications, then paste your license
               key into the activation screen. The public beta ends for everyone
-              on 31 August 2026.
+              on {hunBetaEndDateLong}.
             </p>
           </div>
 

@@ -1,4 +1,5 @@
 import { LegalPage } from "@/components/marketing-shell";
+import { hunBetaEndDateLong } from "@/lib/dodo";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
@@ -16,9 +17,9 @@ export default function RefundPolicyPage() {
     >
       <h2>1. Public beta</h2>
       <p>
-        Hun&apos;s public beta is provided without charge through 31 August
-        2026. Because no payment is taken for beta access, there is no beta
-        purchase to refund.
+        Hun&apos;s public beta is provided without charge through{" "}
+        {hunBetaEndDateLong}. Because no payment is taken for beta access, there
+        is no beta purchase to refund.
       </p>
 
       <h2>2. Paid licenses</h2>

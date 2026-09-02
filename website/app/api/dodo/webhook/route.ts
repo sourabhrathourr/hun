@@ -1,4 +1,4 @@
-import { HUN_BETA_ENDS_AT, HUN_BETA_PRODUCT_ID } from "@/lib/dodo";
+import { HUN_BETA_PRODUCT_ID, hunBetaEndsAt } from "@/lib/dodo";
 import { Webhook } from "standardwebhooks";
 
 export const runtime = "nodejs";
@@ -47,8 +47,6 @@ export async function POST(request: Request) {
 
     const apiBaseURL =
       process.env.DODO_API_BASE_URL ?? "https://live.dodopayments.com";
-    const betaEndsAt =
-      process.env.DODO_BETA_EXPIRES_AT ?? HUN_BETA_ENDS_AT;
     const response = await fetch(
       `${apiBaseURL}/license_keys/${encodeURIComponent(license.id)}`,
       {
@@ -58,7 +56,7 @@ export async function POST(request: Request) {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          expires_at: betaEndsAt,
+          expires_at: hunBetaEndsAt,
         }),
       },
     );
