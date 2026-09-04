@@ -1,5 +1,19 @@
 [
   {
+    "version": "0.3.5",
+    "date": "2026-09-04",
+    "title": "Version 0.3.5",
+    "summary": "A focused Hun update with the latest improvements and fixes.",
+    "groups": [
+      {
+        "title": "New",
+        "changes": [
+          "Add system light theme."
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.3.4",
     "date": "2026-09-02",
     "title": "Version 0.3.4",
