@@ -26,7 +26,6 @@ struct HunSettingsSheet: View {
         }
         .frame(width: 540, height: 680)
         .background(AppTheme.appBackground)
-        .preferredColorScheme(.dark)
         .task {
             await store.refreshDaemonInfo()
         }

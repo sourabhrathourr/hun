@@ -242,6 +242,7 @@ private struct HunTerminalHeaderButton: View {
 
 private struct HunTerminalHostView: NSViewRepresentable {
     let session: HunTerminalSession
+    @Environment(\.colorScheme) private var colorScheme
 
     func makeNSView(context: Context) -> HunTerminalContainerView {
         let container = HunTerminalContainerView()
@@ -250,7 +251,10 @@ private struct HunTerminalHostView: NSViewRepresentable {
     }
 
     func updateNSView(_ container: HunTerminalContainerView, context: Context) {
+        _ = colorScheme // Make system appearance changes refresh the native terminal.
         container.embed(session.view)
+        container.updateAppearance()
+        session.updateAppearance()
     }
 
     static func dismantleNSView(_ container: HunTerminalContainerView, coordinator: Void) {
@@ -264,11 +268,22 @@ private final class HunTerminalContainerView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = NSColor(AppTheme.appBackground).cgColor
+        updateAppearance()
     }
 
     required init?(coder: NSCoder) {
         nil
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateAppearance()
+    }
+
+    func updateAppearance() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = NSColor(AppTheme.appBackground).cgColor
+        }
     }
 
     func embed(_ view: NSView) {

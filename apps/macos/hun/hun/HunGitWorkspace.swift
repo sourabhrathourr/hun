@@ -1912,23 +1912,23 @@ private struct HunGitCommitButtonStyle: ButtonStyle {
 
     private var foregroundColor: Color {
         guard !disabled else { return AppTheme.textTertiary.opacity(0.55) }
-        return primary ? AppTheme.textPrimary : AppTheme.textSecondary
+        return primary ? AppTheme.commitPrimaryText : AppTheme.textSecondary
     }
 
     private func backgroundColor(pressed: Bool) -> Color {
         guard !disabled else { return AppTheme.buttonFill.opacity(0.55) }
         if pressed {
-            return primary ? Color.white.opacity(0.12) : AppTheme.selection
+            return primary ? AppTheme.commitPrimaryFillPressed : AppTheme.selection
         }
         if hovering {
-            return primary ? Color.white.opacity(0.10) : AppTheme.hover
+            return primary ? AppTheme.commitPrimaryFillHover : AppTheme.hover
         }
-        return primary ? Color.white.opacity(0.075) : AppTheme.buttonFill
+        return primary ? AppTheme.commitPrimaryFill : AppTheme.buttonFill
     }
 
     private var borderColor: Color {
         guard !disabled else { return AppTheme.divider.opacity(0.55) }
-        return primary ? AppTheme.dividerStrong : AppTheme.divider
+        return primary ? AppTheme.commitPrimaryBorder : AppTheme.divider
     }
 }
 

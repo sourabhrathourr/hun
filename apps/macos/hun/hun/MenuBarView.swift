@@ -70,8 +70,7 @@ struct MenuBarView: View {
             MenuBarFooter()
         }
         .frame(width: 320)
-        .background(Color(hex: 0x060606))
-        .preferredColorScheme(.dark)
+        .background(AppTheme.menuBackground)
         .task {
             await store.refresh(force: true)
         }

@@ -89,7 +89,6 @@ struct ContentView: View {
                     .zIndex(21)
             }
         }
-        .preferredColorScheme(.dark)
         .background(AppTheme.appBackground)
         .background(WindowChromeConfigurator())
         .background(
@@ -274,7 +273,7 @@ struct ContentView: View {
                 sidebar(docked: false)
                     .frame(width: sidebarWidth)
                     .frame(maxHeight: .infinity)
-                    .background(AppTheme.appBackground)
+                    .background(AppTheme.sidebar)
                     .overlay(alignment: .trailing) {
                         Rectangle().fill(AppTheme.divider).frame(width: 1)
                     }
@@ -664,15 +663,15 @@ private struct HunUpdateBanner: View {
             Button("Update", action: onUpdate)
                 .buttonStyle(.plain)
                 .font(.system(size: 11.5, weight: .semibold))
-                .foregroundStyle(AppTheme.appBackground)
+                .foregroundStyle(AppTheme.updateActionText)
                 .padding(.horizontal, 10)
                 .frame(height: 22)
                 .background(
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
                         .fill(
                             hoveringUpdate
-                                ? AppTheme.textPrimary
-                                : AppTheme.textPrimary.opacity(0.88)
+                                ? AppTheme.updateActionFillHover
+                                : AppTheme.updateActionFill
                         )
                 )
                 .onHover { hoveringUpdate = $0 }
@@ -1984,9 +1983,12 @@ private struct LiveTailButton: View {
             .background(.ultraThinMaterial, in: Capsule())
             .overlay(
                 Capsule()
-                    .stroke(Color.white.opacity(hovering ? 0.22 : 0.12), lineWidth: 1)
+                    .stroke(
+                        hovering ? AppTheme.floatingBorderHover : AppTheme.floatingBorder,
+                        lineWidth: 1
+                    )
             )
-            .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
+            .shadow(color: AppTheme.floatingShadow, radius: 10, y: 4)
             .scaleEffect(hovering ? 1.03 : 1.0)
         }
         .buttonStyle(.plain)
@@ -2002,6 +2004,7 @@ private struct LogsTextView: NSViewRepresentable {
     let highlight: String
     @Binding var isTailing: Bool
     let scrollTrigger: Int
+    @Environment(\.colorScheme) private var colorScheme
 
     final class Coordinator: NSObject {
         var lastSignature: String = ""
@@ -2096,7 +2099,7 @@ private struct LogsTextView: NSViewRepresentable {
 
         textView.selectedTextAttributes = [
             .backgroundColor: NSColor(AppTheme.accent).withAlphaComponent(0.32),
-            .foregroundColor: NSColor(white: 0.96, alpha: 1)
+            .foregroundColor: NSColor(AppTheme.selectedText)
         ]
 
         let (attr, ranges) = buildAttributedString()
@@ -2110,6 +2113,7 @@ private struct LogsTextView: NSViewRepresentable {
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
+        _ = colorScheme // Refresh native colors when macOS changes appearance.
         let coord = context.coordinator
         coord.currentTailing = { isTailing }
         coord.setTailing = { value in
@@ -2123,8 +2127,15 @@ private struct LogsTextView: NSViewRepresentable {
             DispatchQueue.main.async { scrollToBottom(scroll: scroll) }
         }
 
-        guard coord.lastSignature != signature else { return }
         guard let textView = scroll.documentView as? LogsTextViewKit else { return }
+        scroll.backgroundColor = NSColor(AppTheme.appBackground)
+        textView.backgroundColor = NSColor(AppTheme.appBackground)
+        textView.selectedTextAttributes = [
+            .backgroundColor: NSColor(AppTheme.accent).withAlphaComponent(0.32),
+            .foregroundColor: NSColor(AppTheme.selectedText)
+        ]
+        textView.needsDisplay = true
+        guard coord.lastSignature != signature else { return }
         let (attr, ranges) = buildAttributedString()
         textView.textStorage?.setAttributedString(attr)
         textView.lastLineRange = ranges.last
@@ -2147,7 +2158,10 @@ private struct LogsTextView: NSViewRepresentable {
     private static let serviceFont: NSFont = .monospacedSystemFont(ofSize: 11, weight: .medium)
 
     private static let highlightBackground = NSColor(red: 0.99, green: 0.80, blue: 0.30, alpha: 0.32)
-    private static let highlightForeground = NSColor(white: 0.99, alpha: 1)
+    private static let highlightForeground = AppTheme.nativeColor(
+        light: 0x3A3020,
+        dark: 0xFCFCFC
+    )
 
     private func buildAttributedString() -> (NSAttributedString, [NSRange]) {
         let result = NSMutableAttributedString()
@@ -2237,11 +2251,36 @@ private struct LogsTextView: NSViewRepresentable {
 
     private func serviceAccent(for service: String) -> NSColor {
         let palette: [NSColor] = [
-            NSColor(red: 0.45, green: 0.55, blue: 0.95, alpha: 1),
-            NSColor(red: 0.95, green: 0.55, blue: 0.50, alpha: 1),
-            NSColor(red: 0.45, green: 0.78, blue: 0.65, alpha: 1),
-            NSColor(red: 0.85, green: 0.65, blue: 0.45, alpha: 1),
-            NSColor(red: 0.72, green: 0.55, blue: 0.92, alpha: 1)
+            AppTheme.nativeColor(
+                light: 0x445DB7,
+                darkRed: 0.45,
+                darkGreen: 0.55,
+                darkBlue: 0.95
+            ),
+            AppTheme.nativeColor(
+                light: 0xB64C46,
+                darkRed: 0.95,
+                darkGreen: 0.55,
+                darkBlue: 0.50
+            ),
+            AppTheme.nativeColor(
+                light: 0x327C65,
+                darkRed: 0.45,
+                darkGreen: 0.78,
+                darkBlue: 0.65
+            ),
+            AppTheme.nativeColor(
+                light: 0x986327,
+                darkRed: 0.85,
+                darkGreen: 0.65,
+                darkBlue: 0.45
+            ),
+            AppTheme.nativeColor(
+                light: 0x744DA7,
+                darkRed: 0.72,
+                darkGreen: 0.55,
+                darkBlue: 0.92
+            )
         ]
         let idx = abs(service.hashValue) % palette.count
         return palette[idx]

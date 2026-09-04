@@ -1,11 +1,42 @@
 import AppKit
 import Darwin
 import Foundation
+import SwiftUI
 import Testing
 @testable import hun
 
+private enum ThemeTestError: Error {
+    case unavailableAppearance
+    case unresolvableColor
+}
+
 @MainActor
 struct hunTests {
+    @Test func appThemeUsesCreamCanvasInLightMode() throws {
+        let color = try themeComponents(AppTheme.appBackground, appearance: .aqua)
+        let sidebar = try themeComponents(AppTheme.sidebar, appearance: .aqua)
+
+        #expect(abs(color.red - 247.0 / 255.0) < 0.0001)
+        #expect(abs(color.green - 247.0 / 255.0) < 0.0001)
+        #expect(abs(color.blue - 242.0 / 255.0) < 0.0001)
+        #expect(abs(color.alpha - 1) < 0.0001)
+        #expect(abs(sidebar.red - 242.0 / 255.0) < 0.0001)
+        #expect(abs(sidebar.green - 242.0 / 255.0) < 0.0001)
+        #expect(abs(sidebar.blue - 236.0 / 255.0) < 0.0001)
+    }
+
+    @Test func appThemePreservesOriginalDarkCanvasAndRaisedSurface() throws {
+        let canvas = try themeComponents(AppTheme.appBackground, appearance: .darkAqua)
+        let raised = try themeComponents(AppTheme.elevated, appearance: .darkAqua)
+
+        #expect(abs(canvas.red - 3.0 / 255.0) < 0.0001)
+        #expect(abs(canvas.green - 3.0 / 255.0) < 0.0001)
+        #expect(abs(canvas.blue - 3.0 / 255.0) < 0.0001)
+        #expect(abs(raised.red - 0.105) < 0.0001)
+        #expect(abs(raised.green - 0.105) < 0.0001)
+        #expect(abs(raised.blue - 0.110) < 0.0001)
+    }
+
     @Test func storedBetaLicenseValidityComesFromDodo() async {
         let service = MockLicenseService()
         let previousValidation = Date(timeIntervalSince1970: 1_000)
@@ -45,6 +76,29 @@ struct hunTests {
                 )
             )
         )
+    }
+
+    private func themeComponents(
+        _ color: Color,
+        appearance name: NSAppearance.Name
+    ) throws -> (red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat) {
+        guard let appearance = NSAppearance(named: name) else {
+            throw ThemeTestError.unavailableAppearance
+        }
+        var components: (red: CGFloat, green: CGFloat, blue: CGFloat, alpha: CGFloat)?
+        appearance.performAsCurrentDrawingAppearance {
+            guard let resolved = NSColor(color).usingColorSpace(.sRGB) else { return }
+            components = (
+                resolved.redComponent,
+                resolved.greenComponent,
+                resolved.blueComponent,
+                resolved.alphaComponent
+            )
+        }
+        guard let components else {
+            throw ThemeTestError.unresolvableColor
+        }
+        return components
     }
 
     @Test func offlineLicenseGraceEndsAfterSeventyTwoHours() {

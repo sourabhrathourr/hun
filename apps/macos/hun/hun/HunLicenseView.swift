@@ -15,7 +15,6 @@ struct HunLicensedRootView: View {
             }
         }
         .background(AppTheme.appBackground)
-        .preferredColorScheme(.dark)
         .task {
             await license.restore()
         }
@@ -49,8 +48,7 @@ struct HunLicenseMenuBarView: View {
             }
             .padding(14)
             .frame(width: 260, alignment: .leading)
-            .background(AppTheme.sidebar)
-            .preferredColorScheme(.dark)
+            .background(AppTheme.menuBackground)
         }
     }
 }
@@ -72,7 +70,6 @@ private struct HunLicenseGateView: View {
             }
             .padding(.horizontal, 32)
         }
-        .preferredColorScheme(.dark)
         .background(WindowChromeConfigurator())
         .onAppear {
             if case .needsActivation = license.state {
@@ -242,6 +239,7 @@ private struct HunFirstMouseButton: NSViewRepresentable {
     let isEnabled: Bool
     let isLoading: Bool
     let action: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
 
     func makeCoordinator() -> Coordinator {
         Coordinator(action: action)
@@ -276,22 +274,30 @@ private struct HunFirstMouseButton: NSViewRepresentable {
         coordinator.action = action
         button.isEnabled = isEnabled
         button.alphaValue = isEnabled || isLoading ? 1 : 0.45
-        button.layer?.backgroundColor = NSColor(
-            calibratedWhite: 0.92,
-            alpha: 1
-        ).cgColor
+        let usesDarkPalette = colorScheme == .dark
+        button.layer?.backgroundColor = usesDarkPalette
+            ? NSColor(calibratedWhite: 0.92, alpha: 1).cgColor
+            : NSColor(
+                srgbRed: 94.0 / 255,
+                green: 106.0 / 255,
+                blue: 210.0 / 255,
+                alpha: 1
+            ).cgColor
         button.attributedTitle = NSAttributedString(
             string: title,
             attributes: [
                 .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
-                .foregroundColor: NSColor(
-                    calibratedRed: 0.012,
-                    green: 0.012,
-                    blue: 0.012,
-                    alpha: 1
-                )
+                .foregroundColor: usesDarkPalette
+                    ? NSColor(
+                        calibratedRed: 0.012,
+                        green: 0.012,
+                        blue: 0.012,
+                        alpha: 1
+                    )
+                    : NSColor.white
             ]
         )
+        button.setUsesDarkPalette(usesDarkPalette)
         button.setLoading(isLoading)
         button.setAccessibilityLabel(isLoading ? "Activating Hun" : title)
     }
@@ -317,7 +323,6 @@ final class HunFirstMouseButtonView: NSButton {
         indicator.controlSize = .small
         indicator.isDisplayedWhenStopped = false
         indicator.translatesAutoresizingMaskIntoConstraints = false
-        indicator.appearance = NSAppearance(named: .aqua)
         return indicator
     }()
 
@@ -344,6 +349,14 @@ final class HunFirstMouseButtonView: NSButton {
         } else {
             progressIndicator.stopAnimation(nil)
         }
+    }
+
+    func setUsesDarkPalette(_ usesDarkPalette: Bool) {
+        // Preserve the original dark button spinner; use a light spinner on
+        // the purple button in light appearance.
+        progressIndicator.appearance = NSAppearance(
+            named: usesDarkPalette ? .aqua : .darkAqua
+        )
     }
 
     override var mouseDownCanMoveWindow: Bool {

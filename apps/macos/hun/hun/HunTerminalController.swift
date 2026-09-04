@@ -142,6 +142,10 @@ final class HunTerminalSession: HunTerminalEngineDelegate {
         engine.focus()
     }
 
+    func updateAppearance() {
+        engine.updateAppearance()
+    }
+
     func clear() {
         guard engine.isRunning else { return }
         engine.clear()

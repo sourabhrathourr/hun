@@ -975,40 +975,6 @@ extension Color {
     }
 }
 
-nonisolated enum AppTheme {
-    static let appBackground = Color(hex: 0x030303)
-    static let sidebar = Color(hex: 0x060606)
-    static let elevated = Color(red: 0.105, green: 0.105, blue: 0.110)
-    static let dialogBackground = Color(hex: 0x080809)
-    static let dialogRaised = Color(hex: 0x0D0D0F)
-
-    static let divider = Color.white.opacity(0.06)
-    static let dividerStrong = Color.white.opacity(0.10)
-
-    static let hover = Color.white.opacity(0.035)
-    static let selection = Color.white.opacity(0.06)
-    static let tabActive = Color.white.opacity(0.055)
-    static let chipFill = Color.white.opacity(0.05)
-    static let buttonFill = Color.white.opacity(0.04)
-    static let searchField = Color.white.opacity(0.035)
-
-    static let textPrimary = Color.white.opacity(0.92)
-    static let textSecondary = Color.white.opacity(0.55)
-    static let textTertiary = Color.white.opacity(0.36)
-
-    /// Neutral used for log body text — readable but softer than pure white.
-    static let logText = Color.white.opacity(0.66)
-    /// Dimmer still, for log timestamps.
-    static let logTimestamp = Color.white.opacity(0.26)
-
-    static let accent = Color(red: 0.369, green: 0.416, blue: 0.824)
-    static let success = Color(red: 0.34, green: 0.78, blue: 0.45)
-    static let warning = Color(red: 0.95, green: 0.66, blue: 0.34)
-    static let danger = Color(red: 0.93, green: 0.45, blue: 0.45)
-
-    static let brand = textPrimary
-}
-
 nonisolated enum HunDateParser {
     private static let isoWithFractional: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()

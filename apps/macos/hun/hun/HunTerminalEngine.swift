@@ -61,6 +61,11 @@ protocol HunTerminalEngine: AnyObject {
     func reset()
     func terminate()
     func focus()
+    func updateAppearance()
+}
+
+extension HunTerminalEngine {
+    func updateAppearance() {}
 }
 
 @MainActor
@@ -114,18 +119,32 @@ final class SwiftTermTerminalEngine: NSObject, HunTerminalEngine, @preconcurrenc
         scrollVisibilityController?.refresh()
     }
 
+    func updateAppearance() {
+        applyAppearance()
+        scrollVisibilityController?.refresh()
+    }
+
     private func configureTerminal() {
         terminalView.processDelegate = self
         terminalView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-        terminalView.nativeBackgroundColor = NSColor(AppTheme.appBackground)
-        terminalView.nativeForegroundColor = NSColor(AppTheme.logText)
-        terminalView.layer?.backgroundColor = NSColor(AppTheme.appBackground).cgColor
-        terminalView.caretColor = NSColor(AppTheme.accent)
-        terminalView.selectedTextBackgroundColor = NSColor(AppTheme.accent).withAlphaComponent(0.36)
+        applyAppearance()
         terminalView.optionAsMetaKey = true
         terminalView.allowMouseReporting = true
         terminalView.terminal.setCursorStyle(.steadyBar)
         terminalView.setAccessibilityLabel("Project terminal")
+    }
+
+    private func applyAppearance() {
+        terminalView.effectiveAppearance.performAsCurrentDrawingAppearance {
+            let background = NSColor(AppTheme.appBackground)
+            terminalView.nativeBackgroundColor = background
+            terminalView.nativeForegroundColor = NSColor(AppTheme.logText)
+            terminalView.layer?.backgroundColor = background.cgColor
+            terminalView.caretColor = NSColor(AppTheme.accent)
+            terminalView.selectedTextBackgroundColor = NSColor(AppTheme.accent)
+                .withAlphaComponent(0.36)
+        }
+        terminalView.needsDisplay = true
     }
 
     func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
@@ -187,7 +206,9 @@ private final class HunTerminalScrollVisibilityController: NSResponder {
         guard let scroller else { return }
         scroller.scrollerStyle = .overlay
         scroller.controlSize = .mini
-        scroller.knobStyle = .light
+        scroller.knobStyle = terminalView?.effectiveAppearance.bestMatch(
+            from: [.aqua, .darkAqua]
+        ) == .darkAqua ? .light : .dark
         if let terminalView {
             visibilityController.install(
                 scroller: scroller,

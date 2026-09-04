@@ -18,6 +18,7 @@ struct HunGitDiffView: NSViewRepresentable {
     let path: String
     let presentation: HunGitDiffPresentation
     let showWhitespace: Bool
+    @Environment(\.colorScheme) private var colorScheme
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -58,6 +59,7 @@ struct HunGitDiffView: NSViewRepresentable {
             path: path,
             presentation: presentation,
             showWhitespace: showWhitespace,
+            colorScheme: colorScheme,
             in: scrollView
         )
         return scrollView
@@ -69,6 +71,7 @@ struct HunGitDiffView: NSViewRepresentable {
             path: path,
             presentation: presentation,
             showWhitespace: showWhitespace,
+            colorScheme: colorScheme,
             in: scrollView
         )
     }
@@ -82,19 +85,22 @@ struct HunGitDiffView: NSViewRepresentable {
         private var documentID: UUID?
         private var syntaxPath = ""
         private var syntaxHighlighter = HunGitSyntaxHighlighter(path: "")
+        private var colorScheme: ColorScheme?
 
         func update(
             document: HunGitDiffDocument,
             path: String,
             presentation: HunGitDiffPresentation,
             showWhitespace: Bool,
+            colorScheme: ColorScheme,
             in scrollView: HunGitDiffScrollView
         ) {
             let contentChanged = documentID != document.id
             let modeChanged = self.presentation != presentation
             let whitespaceChanged = self.showWhitespace != showWhitespace
             let pathChanged = syntaxPath != path
-            guard contentChanged || modeChanged || whitespaceChanged || pathChanged else {
+            let appearanceChanged = self.colorScheme != colorScheme
+            guard contentChanged || modeChanged || whitespaceChanged || pathChanged || appearanceChanged else {
                 resizeTable(in: scrollView)
                 return
             }
@@ -104,8 +110,11 @@ struct HunGitDiffView: NSViewRepresentable {
             self.documentID = document.id
             self.presentation = presentation
             self.showWhitespace = showWhitespace
+            self.colorScheme = colorScheme
             syntaxPath = path
             syntaxHighlighter = HunGitSyntaxHighlighter(path: path)
+            scrollView.backgroundColor = HunGitDiffPalette.canvas
+            tableView?.backgroundColor = HunGitDiffPalette.canvas
             tableView?.reloadData()
             resizeTable(in: scrollView)
 
@@ -248,22 +257,113 @@ private enum HunGitDiffMetrics {
 }
 
 private enum HunGitDiffPalette {
-    static let canvas = NSColor(srgbRed: 0.012, green: 0.012, blue: 0.012, alpha: 1)
-    static let gutter = NSColor.white.withAlphaComponent(0.018)
-    static let divider = NSColor.white.withAlphaComponent(0.065)
-    static let code = NSColor.white.withAlphaComponent(0.68)
-    static let lineNumber = NSColor.white.withAlphaComponent(0.28)
-    static let addition = NSColor(srgbRed: 0.34, green: 0.78, blue: 0.45, alpha: 0.92)
-    static let deletion = NSColor(srgbRed: 0.93, green: 0.45, blue: 0.45, alpha: 0.92)
-    static let additionFill = NSColor(srgbRed: 0.20, green: 0.72, blue: 0.35, alpha: 0.075)
-    static let deletionFill = NSColor(srgbRed: 0.88, green: 0.30, blue: 0.30, alpha: 0.075)
-    static let keyword = NSColor(srgbRed: 0.78, green: 0.62, blue: 0.98, alpha: 0.96)
-    static let string = NSColor(srgbRed: 0.91, green: 0.72, blue: 0.43, alpha: 0.96)
-    static let number = NSColor(srgbRed: 0.48, green: 0.72, blue: 0.96, alpha: 0.96)
-    static let comment = NSColor(srgbRed: 0.49, green: 0.58, blue: 0.51, alpha: 0.82)
-    static let type = NSColor(srgbRed: 0.42, green: 0.80, blue: 0.82, alpha: 0.96)
-    static let property = NSColor(srgbRed: 0.52, green: 0.70, blue: 0.94, alpha: 0.96)
-    static let heading = NSColor(srgbRed: 0.84, green: 0.67, blue: 0.98, alpha: 0.96)
+    static let canvas = AppTheme.nativeColor(
+        light: 0xFFFFFF,
+        darkRed: 0.012,
+        darkGreen: 0.012,
+        darkBlue: 0.012
+    )
+    static let gutter = AppTheme.nativeColor(
+        light: 0x181816,
+        dark: 0xFFFFFF,
+        lightOpacity: 0.018,
+        darkOpacity: 0.018
+    )
+    static let divider = AppTheme.nativeColor(
+        light: 0x181816,
+        dark: 0xFFFFFF,
+        lightOpacity: 0.075,
+        darkOpacity: 0.065
+    )
+    static let code = AppTheme.nativeColor(
+        light: 0x30302D,
+        dark: 0xFFFFFF,
+        darkOpacity: 0.68
+    )
+    static let lineNumber = AppTheme.nativeColor(
+        light: 0x85857E,
+        dark: 0xFFFFFF,
+        darkOpacity: 0.28
+    )
+    static let addition = AppTheme.nativeColor(
+        light: 0x287A3D,
+        darkRed: 0.34,
+        darkGreen: 0.78,
+        darkBlue: 0.45,
+        darkOpacity: 0.92
+    )
+    static let deletion = AppTheme.nativeColor(
+        light: 0xB84040,
+        darkRed: 0.93,
+        darkGreen: 0.45,
+        darkBlue: 0.45,
+        darkOpacity: 0.92
+    )
+    static let additionFill = AppTheme.nativeColor(
+        light: 0x2F8A48,
+        darkRed: 0.20,
+        darkGreen: 0.72,
+        darkBlue: 0.35,
+        lightOpacity: 0.09,
+        darkOpacity: 0.075
+    )
+    static let deletionFill = AppTheme.nativeColor(
+        light: 0xC14545,
+        darkRed: 0.88,
+        darkGreen: 0.30,
+        darkBlue: 0.30,
+        lightOpacity: 0.085,
+        darkOpacity: 0.075
+    )
+    static let keyword = AppTheme.nativeColor(
+        light: 0x7447A8,
+        darkRed: 0.78,
+        darkGreen: 0.62,
+        darkBlue: 0.98,
+        darkOpacity: 0.96
+    )
+    static let string = AppTheme.nativeColor(
+        light: 0x8A5A18,
+        darkRed: 0.91,
+        darkGreen: 0.72,
+        darkBlue: 0.43,
+        darkOpacity: 0.96
+    )
+    static let number = AppTheme.nativeColor(
+        light: 0x376EAD,
+        darkRed: 0.48,
+        darkGreen: 0.72,
+        darkBlue: 0.96,
+        darkOpacity: 0.96
+    )
+    static let comment = AppTheme.nativeColor(
+        light: 0x637267,
+        darkRed: 0.49,
+        darkGreen: 0.58,
+        darkBlue: 0.51,
+        darkOpacity: 0.82
+    )
+    static let type = AppTheme.nativeColor(
+        light: 0x267C80,
+        darkRed: 0.42,
+        darkGreen: 0.80,
+        darkBlue: 0.82,
+        darkOpacity: 0.96
+    )
+    static let property = AppTheme.nativeColor(
+        light: 0x416FA8,
+        darkRed: 0.52,
+        darkGreen: 0.70,
+        darkBlue: 0.94,
+        darkOpacity: 0.96
+    )
+    static let heading = AppTheme.nativeColor(
+        light: 0x7447A8,
+        darkRed: 0.84,
+        darkGreen: 0.67,
+        darkBlue: 0.98,
+        darkOpacity: 0.96
+    )
 }
 
 private struct HunGitRenderedLine {
@@ -299,6 +399,11 @@ private final class HunGitDiffRowView: NSView {
 
     override var isFlipped: Bool {
         true
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
     }
 
     func configure(
@@ -396,7 +501,7 @@ private final class HunGitDiffRowView: NSView {
             return
         }
 
-        NSColor.white.withAlphaComponent(0.018).setFill()
+        HunGitDiffPalette.gutter.setFill()
         NSRect(
             x: visibleRect.minX,
             y: 0,

@@ -147,7 +147,6 @@ private struct AddProjectReviewSheet: View {
         }
         .frame(width: 680, height: 520)
         .background(AppTheme.appBackground)
-        .preferredColorScheme(.dark)
         .interactiveDismissDisabled()
     }
 
@@ -432,6 +431,7 @@ private struct ReviewActionButton: View {
 
 private struct YamlScrollView: NSViewRepresentable {
     let text: String
+    @Environment(\.colorScheme) private var colorScheme
 
     final class Coordinator {
         var lastText: String = ""
@@ -478,7 +478,7 @@ private struct YamlScrollView: NSViewRepresentable {
         textView.layoutManager?.allowsNonContiguousLayout = true
         textView.selectedTextAttributes = [
             .backgroundColor: NSColor(AppTheme.accent).withAlphaComponent(0.32),
-            .foregroundColor: NSColor(white: 0.96, alpha: 1)
+            .foregroundColor: NSColor(AppTheme.selectedText)
         ]
 
         scroll.documentView = textView
@@ -487,7 +487,9 @@ private struct YamlScrollView: NSViewRepresentable {
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
+        _ = colorScheme // Refresh native colors when macOS changes appearance.
         guard let textView = scroll.documentView as? NSTextView else { return }
+        textView.needsDisplay = true
         if context.coordinator.lastText != text {
             applyText(to: textView, context: context)
         }
