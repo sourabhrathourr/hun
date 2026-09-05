@@ -48,15 +48,17 @@ func (d *Daemon) HandleRequest(req Request) Response {
 		d.gitMu.Lock()
 		defer d.gitMu.Unlock()
 	}
+	if req.Action == "snapshot" || req.Action == "refresh" {
+		if req.Origin == "hook" {
+			return errorResponse("lifecycle commands cannot run recursively from Hun hooks")
+		}
+		return d.handleSnapshotRequest(req.Action == "refresh")
+	}
 	if serializesLifecycle(req.Action) {
 		if req.Origin == "hook" {
 			return errorResponse("lifecycle commands cannot run recursively from Hun hooks")
 		}
-		wait := 30 * time.Second
-		if req.Action == "snapshot" {
-			wait = 100 * time.Millisecond
-		}
-		if !d.acquireLifecycle(wait) {
+		if !d.acquireLifecycle(30 * time.Second) {
 			return errorResponse("lifecycle operation in progress")
 		}
 		defer d.lifecycleMu.Unlock()
@@ -89,10 +91,6 @@ func (d *Daemon) HandleRequest(req Request) Response {
 		return d.handleRestart(req)
 	case "status":
 		return d.handleStatus()
-	case "snapshot":
-		return d.handleSnapshot(false)
-	case "refresh":
-		return d.handleSnapshot(true)
 	case "register_project", "add_project":
 		return d.handleRegisterProject(req)
 	case "logs":
@@ -161,7 +159,7 @@ func (d *Daemon) acquireLifecycle(timeout time.Duration) bool {
 func serializesLifecycle(action string) bool {
 	switch action {
 	case "start", "start_service", "stop", "stop_service", "remove_service", "restart", "focus",
-		"snapshot", "refresh", "register_project", "add_project":
+		"register_project", "add_project":
 		return true
 	default:
 		return false
@@ -399,6 +397,21 @@ func (d *Daemon) handleSnapshot(force bool) Response {
 	if err != nil {
 		return errorResponse(err.Error())
 	}
+	return successResponse(snapshot)
+}
+
+// handleSnapshotRequest keeps the dashboard readable while startup recovery or
+// another service transition owns the lifecycle lock. Discovery mutates the
+// registry, so it still runs under that lock; the fallback only reads the
+// already-loaded registry and current process state.
+func (d *Daemon) handleSnapshotRequest(force bool) Response {
+	if d.acquireLifecycle(100 * time.Millisecond) {
+		defer d.lifecycleMu.Unlock()
+		return d.handleSnapshot(force)
+	}
+
+	snapshot := d.manager.CachedSnapshot()
+	snapshot.LifecycleBusy = true
 	return successResponse(snapshot)
 }
 

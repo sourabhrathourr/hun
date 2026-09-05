@@ -61,6 +61,16 @@ nonisolated enum AppTheme {
         dark: 0xFFFFFF,
         darkOpacity: 0.035
     )
+    static let modeSelectorBackground = color(
+        light: 0xF2F2EC,
+        dark: 0xFFFFFF,
+        darkOpacity: 0.035
+    )
+    static let modeSelectorActive = color(
+        light: 0xFFFFFF,
+        dark: 0xFFFFFF,
+        darkOpacity: 0.055
+    )
     static let floatingBorder = color(
         light: 0x181816,
         dark: 0xFFFFFF,

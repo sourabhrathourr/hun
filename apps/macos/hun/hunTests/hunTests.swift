@@ -37,6 +37,23 @@ struct hunTests {
         #expect(abs(raised.blue - 0.110) < 0.0001)
     }
 
+    @Test func modeSelectorsUseWhiteActiveTabsInLightModeWithoutChangingDarkMode() throws {
+        let lightActive = try themeComponents(AppTheme.modeSelectorActive, appearance: .aqua)
+        let lightBackground = try themeComponents(AppTheme.modeSelectorBackground, appearance: .aqua)
+        let darkActive = try themeComponents(AppTheme.modeSelectorActive, appearance: .darkAqua)
+        let darkBackground = try themeComponents(AppTheme.modeSelectorBackground, appearance: .darkAqua)
+
+        #expect(abs(lightActive.red - 1) < 0.0001)
+        #expect(abs(lightActive.green - 1) < 0.0001)
+        #expect(abs(lightActive.blue - 1) < 0.0001)
+        #expect(abs(lightActive.alpha - 1) < 0.0001)
+        #expect(abs(lightBackground.red - 242.0 / 255.0) < 0.0001)
+        #expect(abs(lightBackground.green - 242.0 / 255.0) < 0.0001)
+        #expect(abs(lightBackground.blue - 236.0 / 255.0) < 0.0001)
+        #expect(abs(darkActive.alpha - 0.055) < 0.0001)
+        #expect(abs(darkBackground.alpha - 0.035) < 0.0001)
+    }
+
     @Test func storedBetaLicenseValidityComesFromDodo() async {
         let service = MockLicenseService()
         let previousValidation = Date(timeIntervalSince1970: 1_000)
@@ -1026,6 +1043,19 @@ struct hunTests {
         #expect(store.model.projects.first?.iconIsCustom == true)
     }
 
+    @Test func cachedSnapshotKeepsProjectsVisibleDuringRecovery() async {
+        let client = MockDaemonClient()
+        client.nextSnapshot = HunDaemonSnapshot.fixture(activeProject: "app").replacingLifecycleBusy(true)
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+
+        await store.refresh(force: true)
+
+        #expect(store.isConnected)
+        #expect(store.isRecoveringServices)
+        #expect(store.model.projects.map(\.id) == ["app"])
+        #expect(store.selectedProjectID == "app")
+    }
+
     @Test func dashboardNavigationRestoresLastVisibleProject() async throws {
         let suiteName = "hunTests.navigation.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -1102,7 +1132,24 @@ struct hunTests {
         let snapshot = try JSONDecoder().decode(HunDaemonSnapshot.self, from: payload)
 
         #expect(snapshot.warnings.isEmpty)
+        #expect(!snapshot.lifecycleBusy)
         #expect(snapshot.projects.map(\.id) == ["app"])
+    }
+
+    @Test func busySnapshotDecodingPreservesRecoveryState() throws {
+        let payload = """
+        {
+          "protocol": 15,
+          "mode": "focus",
+          "scan_dirs": [],
+          "projects": [],
+          "lifecycle_busy": true
+        }
+        """.data(using: .utf8)!
+
+        let snapshot = try JSONDecoder().decode(HunDaemonSnapshot.self, from: payload)
+
+        #expect(snapshot.lifecycleBusy)
     }
 
     @Test func projectWithoutGitBranchDoesNotInventUnknownBranch() throws {
@@ -1545,6 +1592,47 @@ struct hunTests {
 
         #expect(store.globalMode == .focus)
         #expect(client.actions.last == "mode:focus:app")
+    }
+
+    @Test func modeChangeCommitsOnlyAfterDaemonAcknowledgesIt() async throws {
+        let client = MockDaemonClient()
+        client.modeChangeDelay = .milliseconds(100)
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        await store.refresh(force: true)
+
+        store.changeMode(.multitask, preferredProject: nil)
+
+        #expect(store.globalMode == .focus)
+        #expect(store.displayedMode == .multitask)
+        #expect(store.isChangingMode)
+        try await waitUntil { store.globalMode == .multitask && !store.isChangingMode }
+    }
+
+    @Test func modeChangeRetriesLifecycleRecoveryContention() async throws {
+        let client = MockDaemonClient()
+        client.modeErrors = [TestError.lifecycleBusy]
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        await store.refresh(force: true)
+
+        store.changeMode(.multitask, preferredProject: nil)
+
+        try await waitUntil { client.modeChangeAttempts == 2 && store.globalMode == .multitask }
+        #expect(!store.isChangingMode)
+        #expect(store.lastError == nil)
+    }
+
+    @Test func failedModeChangeRollsBackPendingSelection() async throws {
+        let client = MockDaemonClient()
+        client.modeErrors = [TestError.boom]
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        await store.refresh(force: true)
+
+        store.changeMode(.multitask, preferredProject: nil)
+
+        try await waitUntil { !store.isChangingMode }
+        #expect(store.globalMode == .focus)
+        #expect(store.displayedMode == .focus)
+        #expect(store.lastError == "Couldn’t switch mode: boom")
     }
 
     @Test func modeChangeWithoutDashboardPreferenceDoesNotUseHiddenSelection() async throws {
@@ -2313,6 +2401,8 @@ private final class MockDaemonClient: HunDaemonClientProtocol {
     var error: Error?
     var startProjectDelay: Duration?
     var modeChangeDelay: Duration?
+    var modeErrors: [Error] = []
+    var modeChangeAttempts = 0
     var actions: [String] = []
     var snapshotForces: [Bool] = []
     var logRequests: [(project: String, service: String?, lines: Int)] = []
@@ -2375,8 +2465,12 @@ private final class MockDaemonClient: HunDaemonClientProtocol {
     }
 
     func setMode(_ mode: HunMode, preferredProject: String?) async throws {
+        modeChangeAttempts += 1
         if let modeChangeDelay {
             try? await Task.sleep(for: modeChangeDelay)
+        }
+        if !modeErrors.isEmpty {
+            throw modeErrors.removeFirst()
         }
         nextSnapshot = nextSnapshot.replacingMode(mode.rawValue)
         actions.append("mode:\(mode.rawValue):\(preferredProject ?? "none")")
@@ -2413,6 +2507,7 @@ private final class MockSubscription: HunLogSubscribing {
 private enum TestError: Error, LocalizedError {
     case boom
     case connectionClosed
+    case lifecycleBusy
 
     var errorDescription: String? {
         switch self {
@@ -2420,6 +2515,8 @@ private enum TestError: Error, LocalizedError {
             return "boom"
         case .connectionClosed:
             return "connection closed"
+        case .lifecycleBusy:
+            return "lifecycle operation in progress"
         }
     }
 }
@@ -2471,7 +2568,21 @@ private extension HunDaemonSnapshot {
             scanDirs: scanDirs,
             lastScanAt: lastScanAt,
             projects: projects,
-            warnings: warnings
+            warnings: warnings,
+            lifecycleBusy: lifecycleBusy
+        )
+    }
+
+    func replacingLifecycleBusy(_ lifecycleBusy: Bool) -> HunDaemonSnapshot {
+        HunDaemonSnapshot(
+            protocolVersion: protocolVersion,
+            mode: mode,
+            activeProject: activeProject,
+            scanDirs: scanDirs,
+            lastScanAt: lastScanAt,
+            projects: projects,
+            warnings: warnings,
+            lifecycleBusy: lifecycleBusy
         )
     }
 
@@ -2483,7 +2594,8 @@ private extension HunDaemonSnapshot {
             scanDirs: scanDirs,
             lastScanAt: lastScanAt,
             projects: projects + [project],
-            warnings: warnings
+            warnings: warnings,
+            lifecycleBusy: lifecycleBusy
         )
     }
 }

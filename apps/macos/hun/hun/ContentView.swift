@@ -148,7 +148,7 @@ struct ContentView: View {
     private var mainContent: some View {
         @Bindable var store = store
         let mode = Binding(
-            get: { store.globalMode },
+            get: { store.displayedMode },
             set: { store.changeMode($0, preferredProject: store.selectedProjectID) }
         )
         return VStack(spacing: 0) {
@@ -156,6 +156,7 @@ struct ContentView: View {
                 openProjects: openProjects,
                 activeID: $store.selectedProjectID,
                 mode: mode,
+                isModePending: store.isChangingMode,
                 showSidebarControl: !sidebarDocked,
                 onSelect: selectProjectTab,
                 onClose: closeTab,
@@ -183,7 +184,11 @@ struct ContentView: View {
                 if let project = activeProject {
                     projectWorkspace(project)
                 } else {
-                    EmptyStateView(projectCount: model.projects.count, onRefresh: { store.refreshNow() })
+                    EmptyStateView(
+                        projectCount: model.projects.count,
+                        isRecovering: store.isRecoveringServices,
+                        onRefresh: { store.refreshNow() }
+                    )
                 }
             }
             .id(store.selectedProjectID)
@@ -594,7 +599,7 @@ private struct SidebarSearchField: View {
         .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(AppTheme.searchField)
+                .fill(AppTheme.modeSelectorBackground)
         )
     }
 }
@@ -778,6 +783,7 @@ private struct TopBarView: View {
     let openProjects: [HunProject]
     @Binding var activeID: String?
     @Binding var mode: HunMode
+    let isModePending: Bool
     let showSidebarControl: Bool
     let onSelect: (String) -> Void
     let onClose: (String) -> Void
@@ -831,7 +837,7 @@ private struct TopBarView: View {
                 .help("Development build · isolated daemon and data")
             #endif
 
-            ModeSelector(mode: $mode)
+            ModeSelector(mode: $mode, isPending: isModePending)
         }
         .padding(.trailing, 12)
         .frame(height: 44)
@@ -840,6 +846,7 @@ private struct TopBarView: View {
 
 private struct ModeSelector: View {
     @Binding var mode: HunMode
+    let isPending: Bool
 
     var body: some View {
         HStack(spacing: 0) {
@@ -853,6 +860,7 @@ private struct ModeSelector: View {
                 .fill(AppTheme.searchField)
         )
         .help(mode.helpText)
+        .disabled(isPending)
     }
 
     private func modeButton(_ option: HunMode) -> some View {
@@ -871,7 +879,7 @@ private struct ModeSelector: View {
             .padding(.vertical, 4)
             .background(
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(active ? AppTheme.tabActive : Color.clear)
+                    .fill(active ? AppTheme.modeSelectorActive : Color.clear)
             )
             .contentShape(Rectangle())
         }
@@ -2291,20 +2299,26 @@ private struct LogsTextView: NSViewRepresentable {
 
 private struct EmptyStateView: View {
     let projectCount: Int
+    let isRecovering: Bool
     let onRefresh: () -> Void
 
     var body: some View {
         VStack(spacing: 10) {
-            Image(systemName: "rectangle.dashed")
-                .font(.system(size: 30, weight: .light))
-                .foregroundStyle(AppTheme.textTertiary)
+            if isRecovering {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Image(systemName: "rectangle.dashed")
+                    .font(.system(size: 30, weight: .light))
+                    .foregroundStyle(AppTheme.textTertiary)
+            }
             Text(title)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(AppTheme.textSecondary)
             Text(message)
                 .font(.system(size: 12))
                 .foregroundStyle(AppTheme.textTertiary)
-            if projectCount == 0 {
+            if projectCount == 0 && !isRecovering {
                 ActionButton(
                     title: "Refresh",
                     systemImage: "arrow.clockwise",
@@ -2319,10 +2333,14 @@ private struct EmptyStateView: View {
     }
 
     private var title: String {
-        projectCount == 0 ? "No projects found" : "No project selected"
+        if isRecovering { return "Restoring projects…" }
+        return projectCount == 0 ? "No projects found" : "No project selected"
     }
 
     private var message: String {
+        if isRecovering {
+            return "Hun is reconnecting to your running services."
+        }
         if projectCount == 0 {
             return "Create or edit .hun.yml in a configured project root."
         }

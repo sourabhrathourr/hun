@@ -24,11 +24,11 @@ struct MenuBarView: View {
 
     var body: some View {
         let mode = Binding(
-            get: { store.globalMode },
+            get: { store.displayedMode },
             set: { store.changeMode($0, preferredProject: nil) }
         )
         VStack(spacing: 0) {
-            MenuBarHeader(mode: mode)
+            MenuBarHeader(mode: mode, isModePending: store.isChangingMode)
 
             divider
 
@@ -400,6 +400,7 @@ private struct MenuScrollIndicator: View {
 
 private struct MenuBarHeader: View {
     @Binding var mode: HunMode
+    let isModePending: Bool
 
     var body: some View {
         HStack(spacing: 10) {
@@ -407,7 +408,7 @@ private struct MenuBarHeader: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(AppTheme.textPrimary)
             Spacer()
-            ModeSegmented(mode: $mode)
+            ModeSegmented(mode: $mode, isPending: isModePending)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -416,6 +417,7 @@ private struct MenuBarHeader: View {
 
 private struct ModeSegmented: View {
     @Binding var mode: HunMode
+    let isPending: Bool
 
     var body: some View {
         HStack(spacing: 0) {
@@ -430,7 +432,7 @@ private struct ModeSegmented: View {
                         .padding(.vertical, 3)
                         .background(
                             RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .fill(mode == option ? AppTheme.tabActive : Color.clear)
+                                .fill(mode == option ? AppTheme.modeSelectorActive : Color.clear)
                         )
                         .contentShape(Rectangle())
                 }
@@ -440,8 +442,9 @@ private struct ModeSegmented: View {
         .padding(2)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(AppTheme.searchField)
+                .fill(AppTheme.modeSelectorBackground)
         )
+        .disabled(isPending)
     }
 }
 

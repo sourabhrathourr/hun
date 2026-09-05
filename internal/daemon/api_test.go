@@ -162,6 +162,56 @@ func TestSnapshotIncludesStoppedRegisteredProjectServices(t *testing.T) {
 	}
 }
 
+func TestSnapshotReturnsCachedRegistryWhileLifecycleIsBusy(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := t.TempDir()
+	projectDir := writeDaemonProject(t, root, "recovering-app", "web")
+
+	st, err := state.Load()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	st.Register("recovering-app", projectDir)
+	if err := st.Save(); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer m.Shutdown()
+
+	d := &Daemon{manager: m}
+	d.lifecycleMu.Lock()
+	defer d.lifecycleMu.Unlock()
+
+	for _, action := range []string{"snapshot", "refresh"} {
+		t.Run(action, func(t *testing.T) {
+			started := time.Now()
+			resp := d.HandleRequest(Request{Action: action})
+			if elapsed := time.Since(started); elapsed > time.Second {
+				t.Fatalf("%s took %s while lifecycle was busy, want cached response", action, elapsed)
+			}
+			if !resp.OK {
+				t.Fatalf("%s response error: %s", action, resp.Error)
+			}
+
+			var snapshot Snapshot
+			if err := json.Unmarshal(resp.Data, &snapshot); err != nil {
+				t.Fatalf("unmarshal %s snapshot: %v", action, err)
+			}
+			if !snapshot.LifecycleBusy {
+				t.Fatalf("%s lifecycle_busy = false, want true", action)
+			}
+			if len(snapshot.Projects) != 1 || snapshot.Projects[0].ID != "recovering-app" {
+				t.Fatalf("%s projects = %#v, want cached recovering-app", action, snapshot.Projects)
+			}
+		})
+	}
+}
+
 func TestRegisterProjectAddsProjectOutsideScanRoots(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

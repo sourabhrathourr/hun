@@ -6,21 +6,8 @@ import UniformTypeIdentifiers
 @Observable
 final class HunStore {
     var model = HunDashboardModel.empty
-    var globalMode: HunMode = .focus {
-        didSet {
-            guard oldValue != globalMode, !isApplyingSnapshot else { return }
-            let mode = globalMode
-            let preferredProject = mode == .focus ? pendingModePreferredProjectID : nil
-            modeChangeGeneration += 1
-            let generation = modeChangeGeneration
-            let previousTask = modeChangeTask
-            modeChangeTask = Task { [weak self] in
-                await previousTask?.value
-                guard let self, generation == self.modeChangeGeneration else { return }
-                await self.setMode(mode, preferredProject: preferredProject)
-            }
-        }
-    }
+    private(set) var globalMode: HunMode = .focus
+    private(set) var pendingMode: HunMode?
     var selectedProjectID: HunProject.ID? {
         didSet {
             guard oldValue != selectedProjectID else { return }
@@ -54,6 +41,7 @@ final class HunStore {
     }
     var isConnected = false
     var isRefreshing = false
+    var isRecoveringServices = false
     var isAddingProject = false
     var pendingProjectReview: HunProjectInitReview?
     var lastError: String?
@@ -71,7 +59,6 @@ final class HunStore {
     private var logSubscription: HunLogSubscribing?
     private var logsByProject: [HunProject.ID: [HunLogLine]] = [:]
     private var isApplyingSnapshot = false
-    private var pendingModePreferredProjectID: HunProject.ID?
     private var modeChangeTask: Task<Void, Never>?
     private var modeChangeGeneration = 0
     private var hasStarted = false
@@ -108,11 +95,26 @@ final class HunStore {
         model.projects.filter { $0.status == .running }
     }
 
+    var displayedMode: HunMode {
+        pendingMode ?? globalMode
+    }
+
+    var isChangingMode: Bool {
+        pendingMode != nil
+    }
+
     func changeMode(_ mode: HunMode, preferredProject: HunProject.ID?) {
-        guard mode != globalMode else { return }
-        pendingModePreferredProjectID = runningProjectID(preferredProject)
-        globalMode = mode
-        pendingModePreferredProjectID = nil
+        guard mode != displayedMode else { return }
+        let preferredProject = mode == .focus ? runningProjectID(preferredProject) : nil
+        pendingMode = mode
+        modeChangeGeneration += 1
+        let generation = modeChangeGeneration
+        let previousTask = modeChangeTask
+        modeChangeTask = Task { [weak self] in
+            await previousTask?.value
+            guard let self, generation == self.modeChangeGeneration else { return }
+            await self.setMode(mode, preferredProject: preferredProject, generation: generation)
+        }
     }
 
     private func runningProjectID(_ requestedProject: HunProject.ID?) -> HunProject.ID? {
@@ -338,6 +340,7 @@ final class HunStore {
     func refresh(force: Bool) async {
         guard !isRefreshing else { return }
         isRefreshing = true
+        defer { isRefreshing = false }
         let priorLogKey = currentLogKey
         do {
             try await supervisor.ensureDaemon()
@@ -350,11 +353,13 @@ final class HunStore {
             }
         } catch {
             isConnected = false
-            if !isTransientDaemonError(error) {
+            if isTransientDaemonError(error) {
+                isRecoveringServices = true
+            } else {
+                isRecoveringServices = false
                 lastError = error.localizedDescription
             }
         }
-        isRefreshing = false
     }
 
     func selectProject(_ id: HunProject.ID) {
@@ -422,14 +427,32 @@ final class HunStore {
         }
     }
 
-    private func setMode(_ mode: HunMode, preferredProject: String?) async {
-        do {
-            try await client.setMode(mode, preferredProject: preferredProject)
-            await refresh(force: false)
-        } catch {
-            if !isTransientDaemonError(error) {
-                lastError = error.localizedDescription
+    private func setMode(_ mode: HunMode, preferredProject: String?, generation: Int) async {
+        var finalError: Error?
+        for attempt in 0..<3 {
+            do {
+                try await client.setMode(mode, preferredProject: preferredProject)
+                globalMode = mode
+                if generation == modeChangeGeneration {
+                    pendingMode = nil
+                    lastError = nil
+                }
+                await refresh(force: false)
+                return
+            } catch {
+                finalError = error
+                guard isTransientDaemonError(error), attempt < 2 else { break }
+                if !isLifecycleBusyError(error) {
+                    try? await supervisor.ensureDaemon()
+                }
+                try? await Task.sleep(for: .milliseconds(250))
             }
+        }
+
+        guard generation == modeChangeGeneration else { return }
+        pendingMode = nil
+        if let finalError {
+            lastError = "Couldn’t switch mode: \(finalError.localizedDescription)"
         }
     }
 
@@ -463,6 +486,10 @@ final class HunStore {
             message.contains("lifecycle operation in progress")
     }
 
+    private func isLifecycleBusyError(_ error: Error) -> Bool {
+        error.localizedDescription.localizedCaseInsensitiveContains("lifecycle operation in progress")
+    }
+
     private func startPolling() {
         guard pollTask == nil else { return }
         pollTask = Task { [weak self] in
@@ -480,6 +507,7 @@ final class HunStore {
         defer { isApplyingSnapshot = false }
 
         globalMode = HunMode(snapshot.mode)
+        isRecoveringServices = snapshot.lifecycleBusy
 
         let projects = snapshot.projects.map { project in
             HunProject(snapshot: project, activeID: snapshot.activeProject, logs: logsByProject[project.id] ?? [])

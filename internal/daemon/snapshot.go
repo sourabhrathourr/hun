@@ -24,6 +24,7 @@ type Snapshot struct {
 	LastScanAt    time.Time         `json:"last_scan_at,omitempty"`
 	Projects      []SnapshotProject `json:"projects"`
 	Warnings      []string          `json:"warnings,omitempty"`
+	LifecycleBusy bool              `json:"lifecycle_busy,omitempty"`
 }
 
 type SnapshotProject struct {
@@ -58,17 +59,35 @@ func (m *Manager) Snapshot(forceDiscovery bool) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 
+	return m.buildSnapshot(result, m.lastScanAt()), nil
+}
+
+// CachedSnapshot returns the last known registry without running discovery.
+// It is safe to call while lifecycle recovery is in progress because it only
+// reads state protected by the manager's own locks.
+func (m *Manager) CachedSnapshot() Snapshot {
+	m.stateMu.Lock()
+	result := discovery.Result{
+		ScanDirs: append([]string(nil), m.discoveryScanDirs...),
+		Warnings: append([]string(nil), m.discoveryWarnings...),
+	}
+	lastScanAt := m.lastDiscoveryScan
+	m.stateMu.Unlock()
+
+	return m.buildSnapshot(result, lastScanAt)
+}
+
+func (m *Manager) buildSnapshot(result discovery.Result, lastScanAt time.Time) Snapshot {
 	st := m.StateSnapshot()
 	status := m.Status()
-	warnings := append([]string(nil), result.Warnings...)
 
 	snapshot := Snapshot{
 		Protocol:      CurrentProtocolVersion,
 		Mode:          st.Mode,
 		ActiveProject: st.ActiveProject,
 		ScanDirs:      append([]string(nil), result.ScanDirs...),
-		LastScanAt:    m.lastScanAt(),
-		Warnings:      warnings,
+		LastScanAt:    lastScanAt,
+		Warnings:      append([]string(nil), result.Warnings...),
 	}
 	if snapshot.Mode == "" {
 		snapshot.Mode = "focus"
@@ -85,7 +104,7 @@ func (m *Manager) Snapshot(forceDiscovery bool) (Snapshot, error) {
 		snapshot.Projects = append(snapshot.Projects, project)
 	}
 
-	return snapshot, nil
+	return snapshot
 }
 
 func (m *Manager) ReconcileDiscovery(force bool) (discovery.Result, error) {

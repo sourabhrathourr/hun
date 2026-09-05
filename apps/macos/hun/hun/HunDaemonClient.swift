@@ -176,6 +176,7 @@ nonisolated struct HunDaemonSnapshot: Decodable, Equatable {
     let lastScanAt: String?
     let projects: [HunDaemonProject]
     let warnings: [String]
+    let lifecycleBusy: Bool
 
     enum CodingKeys: String, CodingKey {
         case protocolVersion = "protocol"
@@ -185,6 +186,7 @@ nonisolated struct HunDaemonSnapshot: Decodable, Equatable {
         case lastScanAt = "last_scan_at"
         case projects
         case warnings
+        case lifecycleBusy = "lifecycle_busy"
     }
 
     init(
@@ -194,7 +196,8 @@ nonisolated struct HunDaemonSnapshot: Decodable, Equatable {
         scanDirs: [String],
         lastScanAt: String?,
         projects: [HunDaemonProject],
-        warnings: [String]
+        warnings: [String],
+        lifecycleBusy: Bool = false
     ) {
         self.protocolVersion = protocolVersion
         self.mode = mode
@@ -203,6 +206,7 @@ nonisolated struct HunDaemonSnapshot: Decodable, Equatable {
         self.lastScanAt = lastScanAt
         self.projects = projects
         self.warnings = warnings
+        self.lifecycleBusy = lifecycleBusy
     }
 
     init(from decoder: Decoder) throws {
@@ -214,6 +218,7 @@ nonisolated struct HunDaemonSnapshot: Decodable, Equatable {
         lastScanAt = try container.decodeIfPresent(String.self, forKey: .lastScanAt)
         projects = try container.decodeIfPresent([HunDaemonProject].self, forKey: .projects) ?? []
         warnings = try container.decodeIfPresent([String].self, forKey: .warnings) ?? []
+        lifecycleBusy = try container.decodeIfPresent(Bool.self, forKey: .lifecycleBusy) ?? false
     }
 }
 
@@ -333,7 +338,10 @@ nonisolated final class HunDaemonClient: HunDaemonClientProtocol, HunGitClientPr
     }
 
     func snapshot(force: Bool) async throws -> HunDaemonSnapshot {
-        try await request(HunDaemonRequest(action: force ? "refresh" : "snapshot"))
+        try await request(
+            HunDaemonRequest(action: force ? "refresh" : "snapshot"),
+            timeoutNanoseconds: 30_000_000_000
+        )
     }
 
     func registerProject(path: String) async throws {
@@ -485,7 +493,7 @@ nonisolated final class HunDaemonClient: HunDaemonClientProtocol, HunGitClientPr
     }
 
     private func send(_ request: HunDaemonRequest) async throws {
-        let _: StatusPayload = try await self.request(request)
+        let _: StatusPayload = try await self.request(request, timeoutNanoseconds: 120_000_000_000)
     }
 
     private func request<T: Decodable>(_ request: HunDaemonRequest, timeoutNanoseconds: UInt64? = nil) async throws -> T {
