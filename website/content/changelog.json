@@ -1,5 +1,19 @@
 [
   {
+    "version": "0.3.6",
+    "date": "2026-09-05",
+    "title": "Version 0.3.6",
+    "summary": "A focused Hun update with the latest improvements and fixes.",
+    "groups": [
+      {
+        "title": "Fixes",
+        "changes": [
+          "Stabilize recovery and mode switching."
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.3.5",
     "date": "2026-09-04",
     "title": "Version 0.3.5",
