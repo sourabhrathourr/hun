@@ -324,7 +324,7 @@ nonisolated struct HunDaemonLogLine: Decodable, Equatable {
 }
 
 nonisolated final class HunDaemonClient: HunDaemonClientProtocol, HunGitClientProtocol {
-    private static let requiredProtocol = 15
+    static let requiredProtocol = 15
     private let socketPath: String
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -516,12 +516,15 @@ nonisolated final class HunDaemonClient: HunDaemonClientProtocol, HunGitClientPr
 nonisolated final class HunDaemonSupervisor: HunDaemonSupervisorProtocol {
     private let client: HunDaemonClient
     private let expectedRuntimeBuild: Result<HunRuntimeBuild, HunDaemonError>
+    private let homeURL: URL
 
     init(
         client: HunDaemonClient = HunDaemonClient(),
-        expectedRuntimeBuild: HunRuntimeBuild? = nil
+        expectedRuntimeBuild: HunRuntimeBuild? = nil,
+        homeURL: URL = HunPaths.homeURL
     ) {
         self.client = client
+        self.homeURL = homeURL
         if let expectedRuntimeBuild {
             self.expectedRuntimeBuild = .success(expectedRuntimeBuild)
         } else {
@@ -539,7 +542,20 @@ nonisolated final class HunDaemonSupervisor: HunDaemonSupervisorProtocol {
 
     func ensureDaemon() async throws {
         let expectedRuntimeBuild = try expectedRuntimeBuild.get()
-        if await client.isCompatibleDaemon(expectedBuild: expectedRuntimeBuild) {
+        let info: HunDaemonInfo
+        do {
+            info = try await client.daemonInfo()
+        } catch {
+            // A timeout is not a version mismatch. Keep a live daemon and its
+            // services intact; the next refresh can reconnect to it.
+            if isDaemonRunning(pidPath: pidPath, lockPath: lockPath) {
+                throw error
+            }
+            try await launchDaemon(expectedRuntimeBuild: expectedRuntimeBuild)
+            return
+        }
+
+        if expectedRuntimeBuild.matches(info, requiredProtocol: HunDaemonClient.requiredProtocol) {
             return
         }
 
@@ -565,7 +581,7 @@ nonisolated final class HunDaemonSupervisor: HunDaemonSupervisorProtocol {
         process.executableURL = URL(fileURLWithPath: binary)
         process.arguments = ["daemon"]
         var environment = await HunShellEnvironment.loginEnvironment()
-        environment["HUN_HOME"] = HunPaths.homeURL.path
+        environment["HUN_HOME"] = homeURL.path
         process.environment = environment
         process.standardInput = nil
         process.standardOutput = nil
@@ -589,8 +605,8 @@ nonisolated final class HunDaemonSupervisor: HunDaemonSupervisorProtocol {
     private func terminateExistingDaemon(reportedPID: Int, socketResponded: Bool) throws {
         let pid = resolvedDaemonProcessID(
             reportedPID: reportedPID,
-            pidPath: HunPaths.pidPath,
-            lockPath: HunPaths.lockPath
+            pidPath: pidPath,
+            lockPath: lockPath
         )
         guard let pid else {
             if socketResponded {
@@ -600,9 +616,13 @@ nonisolated final class HunDaemonSupervisor: HunDaemonSupervisorProtocol {
         }
 
         try terminateDaemonProcess(pid)
-        try? FileManager.default.removeItem(atPath: HunPaths.socketPath)
-        try? FileManager.default.removeItem(atPath: HunPaths.pidPath)
+        try? FileManager.default.removeItem(atPath: socketPath)
+        try? FileManager.default.removeItem(atPath: pidPath)
     }
+
+    private var socketPath: String { homeURL.appendingPathComponent("daemon.sock").path }
+    private var pidPath: String { homeURL.appendingPathComponent("daemon.pid").path }
+    private var lockPath: String { homeURL.appendingPathComponent("daemon.lock").path }
 }
 
 nonisolated final class HunLogSubscription: HunLogSubscribing {
@@ -687,6 +707,24 @@ nonisolated func lockedDaemonProcessID(lockPath: String) -> Int32? {
     }
     guard errno == EWOULDBLOCK || errno == EAGAIN else { return nil }
     return daemonPID(in: lockPath)
+}
+
+nonisolated func isDaemonRunning(pidPath: String, lockPath: String) -> Bool {
+    // The daemon holds daemon.lock for its whole lifetime, so the lock is the
+    // source of truth. daemon.pid outlives a crash and its PID can be reused by
+    // an unrelated process; only fall back to it when there is no lock file.
+    let fd = Darwin.open(lockPath, O_RDWR)
+    if fd >= 0 {
+        defer { _ = Darwin.close(fd) }
+        errno = 0
+        if hunSystemFlock(fd, LOCK_EX | LOCK_NB) == 0 {
+            _ = hunSystemFlock(fd, LOCK_UN)
+            return false
+        }
+        return errno == EWOULDBLOCK || errno == EAGAIN
+    }
+    guard let pid = daemonPID(in: pidPath) else { return false }
+    return daemonProcessExists(pid)
 }
 
 nonisolated func daemonProcessExists(_ pid: Int32) -> Bool {

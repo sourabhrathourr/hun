@@ -483,6 +483,7 @@ final class HunStore {
             message.contains("connection refused") ||
             message.contains("broken pipe") ||
             message.contains("socket is not connected") ||
+            message.contains("resource temporarily unavailable") ||
             message.contains("lifecycle operation in progress")
     }
 
