@@ -1,5 +1,19 @@
 [
   {
+    "version": "0.3.7",
+    "date": "2026-10-19",
+    "title": "Version 0.3.7",
+    "summary": "A focused Hun update with the latest improvements and fixes.",
+    "groups": [
+      {
+        "title": "Fixes",
+        "changes": [
+          "Preserve live daemon after failed health probe (#3)."
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.3.6",
     "date": "2026-09-05",
     "title": "Version 0.3.6",
