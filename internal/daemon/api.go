@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/sourabhrathourr/hun/internal/config"
@@ -24,6 +26,12 @@ type Request struct {
 	Origin  string `json:"origin,omitempty"`
 	Stash   bool   `json:"stash,omitempty"`
 	Port    int    `json:"port,omitempty"`
+	// Profile picks the services start runs: a profile from .hun.yml, or
+	// "all". Empty means the profile the project last ran.
+	Profile  string   `json:"profile,omitempty"`
+	Services []string `json:"services,omitempty"`
+	// Content is .hun.yml source for validate_config and save_config.
+	Content string `json:"content,omitempty"`
 }
 
 // Response is the JSON response from the daemon.
@@ -111,6 +119,12 @@ func (d *Daemon) HandleRequest(req Request) Response {
 		return d.handleRemoveProject(req)
 	case "logs":
 		return d.handleLogs(req)
+	case "clear_logs":
+		if req.Project == "" {
+			return errorResponse("project name required")
+		}
+		d.manager.ClearLogs(req.Project, req.Service)
+		return successResponse(map[string]string{"status": "logs_cleared"})
 	case "git_status":
 		return d.handleGitStatus(req)
 	case "git_branches":
@@ -125,6 +139,15 @@ func (d *Daemon) HandleRequest(req Request) Response {
 		return d.handlePorts()
 	case "focus":
 		return d.handleFocus(req)
+	case "save_profile":
+		return d.handleSaveProfile(req)
+	case "validate_config":
+		if _, err := config.ParseProject([]byte(req.Content)); err != nil {
+			return errorResponse(err.Error())
+		}
+		return successResponse(map[string]string{"status": "valid"})
+	case "save_config":
+		return d.handleSaveConfig(req)
 	case "free_port":
 		return d.handleFreePort(req)
 	case "subscribe":
@@ -160,7 +183,7 @@ func (d *Daemon) acquireLifecycle(timeout time.Duration) bool {
 func serializesLifecycle(action string) bool {
 	switch action {
 	case "start", "start_service", "stop", "stop_service", "remove_service", "restart", "focus",
-		"register_project", "add_project", "remove_project", "free_port":
+		"register_project", "add_project", "remove_project", "free_port", "save_profile", "save_config":
 		return true
 	default:
 		return false
@@ -185,9 +208,29 @@ func (d *Daemon) handleStart(req Request) Response {
 		return errorResponse(fmt.Sprintf("loading project config: %v", err))
 	}
 
+	profile := req.Profile
+	if profile == "" {
+		profile = d.manager.RememberedProfile(req.Project, proj)
+	} else if _, err := proj.ResolveProfile(profile); err != nil {
+		return errorResponse(err.Error())
+	}
+
 	exclusive := req.Mode != "parallel"
 	if exclusive {
 		d.clearForFocus(req.Project, proj)
+	}
+
+	// A project whose services all crashed or exited is cleared first, so
+	// Run starts it again instead of reporting it as already running.
+	if d.manager.IsRunning(req.Project) && !d.manager.HasLiveServices(req.Project) {
+		_ = d.manager.stopProject(req.Project, false)
+	}
+
+	if d.manager.IsRunning(req.Project) && req.Profile != "" {
+		if err := d.manager.ApplyProfile(req.Project, profile, proj, path, exclusive); err != nil {
+			return errorResponseFrom(err)
+		}
+		return successResponse(map[string]string{"status": "profile_applied"})
 	}
 
 	if d.manager.IsRunning(req.Project) {
@@ -201,7 +244,7 @@ func (d *Daemon) handleStart(req Request) Response {
 		return successResponse(map[string]string{"status": "already_running"})
 	}
 
-	if err := d.manager.StartProject(req.Project, proj, path, exclusive); err != nil {
+	if err := d.manager.StartProfile(req.Project, profile, proj, path, exclusive); err != nil {
 		return errorResponseFrom(err)
 	}
 
@@ -209,6 +252,54 @@ func (d *Daemon) handleStart(req Request) Response {
 		"status": "started",
 		"offset": d.manager.ports.GetOffset(req.Project),
 	})
+}
+
+// handleSaveProfile writes a profile to the project's .hun.yml and makes it
+// the one Run uses, since it usually captures what is running right now.
+func (d *Daemon) handleSaveProfile(req Request) Response {
+	if req.Project == "" {
+		return errorResponse("project name required")
+	}
+	name := strings.TrimSpace(req.Profile)
+	if name == "" {
+		return errorResponse("profile name required")
+	}
+	if len(req.Services) == 0 {
+		return errorResponse("a profile needs at least one service")
+	}
+	path, ok := d.manager.ProjectPath(req.Project)
+	if !ok {
+		return errorResponse(fmt.Sprintf("project %q not in registry", req.Project))
+	}
+	if err := config.SaveProfile(path, name, req.Services); err != nil {
+		return errorResponse(err.Error())
+	}
+	d.manager.rememberProfile(req.Project, name)
+	return successResponse(map[string]string{"status": "profile_saved", "profile": name})
+}
+
+// handleSaveConfig replaces a project's .hun.yml with edited source, after
+// checking it is a config Hun can run. The project is named by Project, or by
+// Path for a folder that is still being added.
+func (d *Daemon) handleSaveConfig(req Request) Response {
+	path := req.Path
+	if req.Project != "" {
+		registered, ok := d.manager.ProjectPath(req.Project)
+		if !ok {
+			return errorResponse(fmt.Sprintf("project %q not in registry", req.Project))
+		}
+		path = registered
+	}
+	if path == "" || !filepath.IsAbs(path) {
+		return errorResponse("project name or absolute folder path required")
+	}
+	if !config.ProjectExists(path) {
+		return errorResponse(fmt.Sprintf("no .hun.yml in %s", path))
+	}
+	if err := config.SaveProjectSource(path, []byte(req.Content)); err != nil {
+		return errorResponse(err.Error())
+	}
+	return successResponse(map[string]string{"status": "config_saved"})
 }
 
 func (d *Daemon) handleStartService(req Request) Response {
@@ -362,7 +453,8 @@ func (d *Daemon) handleRestart(req Request) Response {
 		wasExclusive := d.manager.currentMode() == "focus"
 		d.manager.StopProject(req.Project)
 		time.Sleep(500 * time.Millisecond)
-		if err := d.manager.StartProject(req.Project, proj, path, wasExclusive); err != nil {
+		profile := d.manager.RememberedProfile(req.Project, proj)
+		if err := d.manager.StartProfile(req.Project, profile, proj, path, wasExclusive); err != nil {
 			return errorResponseFrom(err)
 		}
 		return successResponse(map[string]string{"status": "restarted"})
@@ -380,7 +472,8 @@ func (d *Daemon) handleRestart(req Request) Response {
 			return errorResponse(err.Error())
 		}
 		if _, ok := d.manager.attribution(freshObservationAge).external(req.Project, req.Service); ok {
-			if err := d.manager.StopService(req.Project, req.Service); err != nil {
+			// Not StopService: it starts again right below, so the project stays up.
+			if err := d.manager.stopService(req.Project, req.Service); err != nil {
 				return errorResponse(err.Error())
 			}
 			if svc := proj.Services[req.Service]; svc != nil && svc.Port > 0 {

@@ -206,15 +206,19 @@ func (d *Daemon) handleSubscribe(conn net.Conn, req Request) {
 	data, _ := json.Marshal(resp)
 	conn.Write(append(data, '\n'))
 
-	// Stream log lines
+	// Stream log lines. A burst goes out in a few large writes: flush only
+	// once no more lines are waiting, so a quiet stream still sends each line
+	// right away.
+	out := bufio.NewWriterSize(conn, 64*1024)
+	encoder := json.NewEncoder(out)
 	for line := range sub.Ch {
-		data, err := json.Marshal(line)
-		if err != nil {
-			continue
-		}
-		_, err = conn.Write(append(data, '\n'))
-		if err != nil {
+		if err := encoder.Encode(line); err != nil {
 			return // Connection closed
+		}
+		if len(sub.Ch) == 0 {
+			if err := out.Flush(); err != nil {
+				return // Connection closed
+			}
 		}
 	}
 }
@@ -273,7 +277,8 @@ func (d *Daemon) recoverRunningProjects() {
 		}
 		d.manager.ports.SetOffset(item.name, item.offset)
 		exclusive := snapshot.Mode == "focus" && len(running) == 1 && idx == 0
-		if err := d.manager.StartProject(item.name, proj, item.path, exclusive); err != nil {
+		profile := d.manager.RememberedProfile(item.name, proj)
+		if err := d.manager.StartProfile(item.name, profile, proj, item.path, exclusive); err != nil {
 			continue
 		}
 	}

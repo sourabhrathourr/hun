@@ -63,11 +63,11 @@ struct HunRepositoryStatusCapsule: View {
             .padding(.horizontal, 7)
             .padding(.vertical, 4)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                HunRoundedShape()
                     .fill(hovering ? AppTheme.hover : AppTheme.chipFill)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                HunRoundedShape()
                     .stroke(
                         hovering ? AppTheme.textTertiary.opacity(0.32) : AppTheme.divider,
                         lineWidth: 1
@@ -207,14 +207,14 @@ private struct HunGitBranchDialog: View {
         }
         .frame(width: 440)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            HunRoundedShape()
                 .fill(AppTheme.dialogBackground)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            HunRoundedShape()
                 .stroke(AppTheme.dividerStrong, lineWidth: 1)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .clipShape(HunRoundedShape())
         .overlay(alignment: .topLeading) {
             HunGitBranchKeyboardMonitor(
                 onMove: moveBranchSelection,
@@ -474,7 +474,7 @@ private struct HunBranchRow: View {
             .padding(.horizontal, 8)
             .frame(height: 30)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                HunRoundedShape()
                     .fill(isKeyboardSelected || (hovering && !isCurrent) ? AppTheme.selection : Color.clear)
             )
             .contentShape(Rectangle())
@@ -599,7 +599,7 @@ private struct HunGitProminentButtonStyle: ButtonStyle {
             .padding(.horizontal, 10)
             .frame(height: 26)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                HunRoundedShape()
                     .fill(AppTheme.accent.opacity(configuration.isPressed ? 0.72 : 0.92))
             )
     }

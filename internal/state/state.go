@@ -39,6 +39,9 @@ type ProjectState struct {
 	LastNote  string                  `json:"last_note"`
 	StartedAt string                  `json:"started_at"`
 	IconPath  string                  `json:"icon_path,omitempty"`
+	// Profile is the profile this project last ran; empty means every
+	// service. It is kept while the project is stopped so Run repeats it.
+	Profile string `json:"profile,omitempty"`
 }
 
 // ServiceState holds runtime state for a single service.

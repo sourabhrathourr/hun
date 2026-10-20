@@ -15,6 +15,14 @@ nonisolated protocol HunDaemonClientProtocol: AnyObject {
     func registerProject(path: String) async throws
     func startProject(_ project: String, mode: HunDaemonStartMode) async throws
     func startService(_ project: String, service: String, mode: HunDaemonStartMode) async throws
+    /// Runs a profile ("all" for every service). On a running project only
+    /// the difference starts and stops.
+    func runProfile(_ project: String, profile: String, mode: HunDaemonStartMode) async throws
+    func saveProfile(_ project: String, name: String, services: [String]) async throws
+    /// Throws the problem when `content` is not a config Hun can run.
+    func validateConfig(_ content: String) async throws
+    /// Replaces the .hun.yml in the project folder at `path`, once it validates.
+    func saveConfig(path: String, content: String) async throws
     func setProjectIcon(_ project: String, path: String) async throws
     func clearProjectIcon(_ project: String) async throws
     func stopProject(_ project: String) async throws
@@ -26,6 +34,7 @@ nonisolated protocol HunDaemonClientProtocol: AnyObject {
     func removeService(_ project: String, service: String) async throws
     func setMode(_ mode: HunMode, preferredProject: String?) async throws
     func logs(project: String, service: String?, lines: Int) async throws -> [HunDaemonLogLine]
+    func clearLogs(project: String, service: String?) async throws
     func subscribe(
         project: String,
         service: String?,
@@ -234,6 +243,9 @@ nonisolated struct HunDaemonProject: Decodable, Equatable {
     let startedAt: String?
     let services: [HunDaemonService]
     let configError: String?
+    let profiles: [HunDaemonProfile]
+    /// The profile Run uses; nil runs every service.
+    let profile: String?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -248,6 +260,8 @@ nonisolated struct HunDaemonProject: Decodable, Equatable {
         case startedAt = "started_at"
         case services
         case configError = "config_error"
+        case profiles
+        case profile
     }
 
     init(from decoder: Decoder) throws {
@@ -264,6 +278,8 @@ nonisolated struct HunDaemonProject: Decodable, Equatable {
         startedAt = try container.decodeIfPresent(String.self, forKey: .startedAt)
         services = try container.decodeIfPresent([HunDaemonService].self, forKey: .services) ?? []
         configError = try container.decodeIfPresent(String.self, forKey: .configError)
+        profiles = try container.decodeIfPresent([HunDaemonProfile].self, forKey: .profiles) ?? []
+        profile = try container.decodeIfPresent(String.self, forKey: .profile).flatMap { $0.isEmpty ? nil : $0 }
     }
 
     init(
@@ -278,7 +294,9 @@ nonisolated struct HunDaemonProject: Decodable, Equatable {
         lastNote: String?,
         startedAt: String?,
         services: [HunDaemonService],
-        configError: String?
+        configError: String?,
+        profiles: [HunDaemonProfile] = [],
+        profile: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -292,6 +310,22 @@ nonisolated struct HunDaemonProject: Decodable, Equatable {
         self.startedAt = startedAt
         self.services = services
         self.configError = configError
+        self.profiles = profiles
+        self.profile = profile
+    }
+}
+
+/// A named set of services from .hun.yml. `services` are the ones it lists;
+/// `resolved` adds their dependencies, which is everything it runs.
+nonisolated struct HunDaemonProfile: Decodable, Hashable, Sendable {
+    let name: String
+    let services: [String]
+    let resolved: [String]
+
+    init(name: String, services: [String], resolved: [String]) {
+        self.name = name
+        self.services = services
+        self.resolved = resolved
     }
 }
 
@@ -402,7 +436,7 @@ nonisolated struct HunDaemonLogLine: Decodable, Equatable {
 }
 
 nonisolated final class HunDaemonClient: HunDaemonClientProtocol, HunGitClientProtocol {
-    static let requiredProtocol = 16
+    static let requiredProtocol = 18
     private let socketPath: String
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -432,6 +466,22 @@ nonisolated final class HunDaemonClient: HunDaemonClientProtocol, HunGitClientPr
 
     func startService(_ project: String, service: String, mode: HunDaemonStartMode) async throws {
         try await send(HunDaemonRequest(action: "start_service", project: project, service: service, mode: mode.rawValue))
+    }
+
+    func runProfile(_ project: String, profile: String, mode: HunDaemonStartMode) async throws {
+        try await send(HunDaemonRequest(action: "start", project: project, mode: mode.rawValue, profile: profile))
+    }
+
+    func saveProfile(_ project: String, name: String, services: [String]) async throws {
+        try await send(HunDaemonRequest(action: "save_profile", project: project, profile: name, services: services))
+    }
+
+    func validateConfig(_ content: String) async throws {
+        try await send(HunDaemonRequest(action: "validate_config", content: content))
+    }
+
+    func saveConfig(path: String, content: String) async throws {
+        try await send(HunDaemonRequest(action: "save_config", path: path, content: content))
     }
 
     func setProjectIcon(_ project: String, path: String) async throws {
@@ -480,6 +530,10 @@ nonisolated final class HunDaemonClient: HunDaemonClientProtocol, HunGitClientPr
 
     func logs(project: String, service: String?, lines: Int) async throws -> [HunDaemonLogLine] {
         try await request(HunDaemonRequest(action: "logs", project: project, service: service, lines: lines))
+    }
+
+    func clearLogs(project: String, service: String?) async throws {
+        try await send(HunDaemonRequest(action: "clear_logs", project: project, service: service))
     }
 
     func gitStatus(project: String) async throws -> HunGitStatus {
@@ -854,6 +908,9 @@ nonisolated private struct HunDaemonRequest: Encodable {
     var lines: Int?
     var stash: Bool?
     var port: Int?
+    var profile: String?
+    var services: [String]?
+    var content: String?
 }
 
 nonisolated private struct HunDaemonEnvelope<T: Decodable>: Decodable {

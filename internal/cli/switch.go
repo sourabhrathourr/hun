@@ -11,6 +11,7 @@ import (
 
 func init() {
 	switchCmd.Flags().StringP("message", "m", "", "Note to save for current project before switching")
+	switchCmd.Flags().StringP("profile", "p", "", `Profile from .hun.yml to run, or "all" (default: the last one run)`)
 	rootCmd.AddCommand(switchCmd)
 }
 
@@ -21,6 +22,7 @@ var switchCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		project := args[0]
 		note, _ := cmd.Flags().GetString("message")
+		profile, _ := cmd.Flags().GetString("profile")
 
 		// Save note for current project if provided
 		if note != "" {
@@ -53,6 +55,7 @@ var switchCmd = &cobra.Command{
 			Action:  "start",
 			Project: project,
 			Mode:    "exclusive",
+			Profile: profile,
 		})
 		if err != nil {
 			return err

@@ -73,7 +73,7 @@ private func verifyExistingDaemonSurvivesProbe(firstResponse: String) async thro
     process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
     process.arguments = ["-u", "-c", """
 import json, os, socket, sys, threading, time
-home, mode = sys.argv[1:]
+home, mode, protocol = sys.argv[1:]
 server = socket.socket(socket.AF_UNIX)
 server.bind(home + '/daemon.sock')
 server.listen()
@@ -88,7 +88,7 @@ def reply(conn, index):
         if index == 0 and mode == 'slow':
             time.sleep(0.8)
         payload = {'ok': True, 'data': {
-            'status': 'pong', 'protocol': 16, 'version': 'test',
+            'status': 'pong', 'protocol': int(protocol), 'version': 'test',
             'commit': 'test', 'pid': os.getpid()
         }}
         conn.sendall(json.dumps(payload).encode() + bytes([10]))
@@ -101,7 +101,7 @@ while True:
     conn, _ = server.accept()
     threading.Thread(target=reply, args=(conn, index), daemon=True).start()
     index += 1
-""", home.path, firstResponse]
+""", home.path, firstResponse, String(HunDaemonClient.requiredProtocol)]
     // xcodebuild hands the test host DEVELOPER_DIR and DYLD_* for the selected
     // Xcode. With several Xcodes installed (as on CI), the /usr/bin/python3
     // shim then mixes their libraries and fails to load.

@@ -46,6 +46,7 @@ struct HunTerminalPanel: View {
     let onClose: () -> Void
 
     @State private var resizeHovering = false
+    @AppStorage(HunLayout.roundedPanelsKey) private var roundedPanels = HunLayout.roundedPanelsDefault
 
     var body: some View {
         @Bindable var session = session
@@ -62,9 +63,12 @@ struct HunTerminalPanel: View {
         }
         .background(AppTheme.appBackground)
         .overlay(alignment: .top) {
-            Rectangle()
-                .fill(AppTheme.dividerStrong)
-                .frame(height: 1)
+            // The rounded card draws its own border.
+            if !roundedPanels {
+                Rectangle()
+                    .fill(AppTheme.dividerStrong)
+                    .frame(height: 1)
+            }
         }
         .onAppear {
             session.startIfNeeded()
@@ -145,7 +149,7 @@ struct HunTerminalPanel: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
                 .background(
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    HunRoundedShape()
                         .fill(AppTheme.searchField)
                 )
 
@@ -229,7 +233,7 @@ private struct HunTerminalHeaderButton: View {
                 .foregroundStyle(hovering ? AppTheme.textPrimary : AppTheme.textTertiary)
                 .frame(width: 23, height: 23)
                 .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    HunRoundedShape()
                         .fill(hovering ? AppTheme.hover : Color.clear)
                 )
                 .contentShape(Rectangle())
@@ -282,8 +286,16 @@ private final class HunTerminalContainerView: NSView {
 
     func updateAppearance() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = NSColor(AppTheme.appBackground).cgColor
+            layer?.backgroundColor = HunTerminalContainerView.terminalBackground().cgColor
         }
+    }
+
+    /// The background exactly as the terminal paints its cells (SwiftTerm
+    /// converts colors to device RGB), so the margin around the terminal is
+    /// the same shade as the terminal itself.
+    static func terminalBackground() -> NSColor {
+        let background = NSColor(AppTheme.appBackground)
+        return background.usingColorSpace(.deviceRGB) ?? background
     }
 
     func embed(_ view: NSView) {
@@ -293,11 +305,13 @@ private final class HunTerminalContainerView: NSView {
         terminalView = view
         view.translatesAutoresizingMaskIntoConstraints = false
         addSubview(view)
+        // Inset so the output lines up with the header text; the trailing
+        // side leaves room for the scroller.
         NSLayoutConstraint.activate([
-            view.leadingAnchor.constraint(equalTo: leadingAnchor),
-            view.trailingAnchor.constraint(equalTo: trailingAnchor),
-            view.topAnchor.constraint(equalTo: topAnchor),
-            view.bottomAnchor.constraint(equalTo: bottomAnchor)
+            view.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            view.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            view.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            view.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6)
         ])
     }
 

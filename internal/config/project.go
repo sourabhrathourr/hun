@@ -17,16 +17,56 @@ func LoadProject(dir string) (*Project, error) {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 
+	proj, err := ParseProject(data)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return proj, nil
+}
+
+// ParseProject parses and validates .hun.yml contents.
+func ParseProject(data []byte) (*Project, error) {
 	var proj Project
 	if err := yaml.Unmarshal(data, &proj); err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", path, err)
+		return nil, err
 	}
-
 	if err := validateProject(&proj); err != nil {
-		return nil, fmt.Errorf("validating %s: %w", path, err)
+		return nil, err
 	}
-
 	return &proj, nil
+}
+
+// SaveProjectSource replaces dir's .hun.yml with contents, exactly as given,
+// once they parse and validate. The write is atomic, so a reader never sees
+// half a file.
+func SaveProjectSource(dir string, contents []byte) error {
+	if _, err := ParseProject(contents); err != nil {
+		return err
+	}
+	path := filepath.Join(dir, ".hun.yml")
+	mode := os.FileMode(0o644)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	}
+	tmp, err := os.CreateTemp(dir, ".hun.yml.*")
+	if err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(contents); err != nil {
+		tmp.Close()
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	if err := os.Chmod(tmp.Name(), mode); err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+	return nil
 }
 
 // ProjectExists checks if a .hun.yml file exists in the given directory.
@@ -89,6 +129,18 @@ func ProjectWithoutService(proj *Project, service string) (*Project, error) {
 	for _, svc := range updated.Services {
 		svc.DependsOn = withoutString(svc.DependsOn, service)
 	}
+	// Drop the service from profiles, and any profile it leaves empty.
+	profiles := updated.Profiles[:0]
+	for _, profile := range updated.Profiles {
+		if !profile.All {
+			profile.Services = withoutString(profile.Services, service)
+			if len(profile.Services) == 0 {
+				continue
+			}
+		}
+		profiles = append(profiles, profile)
+	}
+	updated.Profiles = profiles
 	if err := validateProject(updated); err != nil {
 		return nil, err
 	}
@@ -113,6 +165,13 @@ func cloneProject(proj *Project) *Project {
 			clone.DependsOn = append([]string(nil), svc.DependsOn...)
 		}
 		updated.Services[name] = &clone
+	}
+	if proj.Profiles != nil {
+		updated.Profiles = make(Profiles, len(proj.Profiles))
+		for i, profile := range proj.Profiles {
+			profile.Services = append([]string(nil), profile.Services...)
+			updated.Profiles[i] = profile
+		}
 	}
 	return &updated
 }
@@ -163,7 +222,7 @@ func validateProject(proj *Project) error {
 	if err := validateNoCycles(proj); err != nil {
 		return err
 	}
-	return nil
+	return validateProfiles(proj)
 }
 
 func validateNoCycles(proj *Project) error {

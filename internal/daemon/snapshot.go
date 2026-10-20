@@ -43,6 +43,18 @@ type SnapshotProject struct {
 	StartedAt   string            `json:"started_at,omitempty"`
 	Services    []SnapshotService `json:"services"`
 	ConfigError string            `json:"config_error,omitempty"`
+	// Profiles are the named service sets in .hun.yml, in file order.
+	// Profile is the one Run uses: the last one run, empty for every service.
+	Profiles []SnapshotProfile `json:"profiles,omitempty"`
+	Profile  string            `json:"profile,omitempty"`
+}
+
+type SnapshotProfile struct {
+	Name string `json:"name"`
+	// Services are the ones the profile lists; Resolved adds what they
+	// depend on, which is everything the profile runs.
+	Services []string `json:"services"`
+	Resolved []string `json:"resolved"`
 }
 
 type SnapshotService struct {
@@ -218,7 +230,7 @@ func (m *Manager) snapshotProject(name, path string, st *state.State, live map[s
 		project.Status = projectState.Status
 	}
 
-	proj, err := config.LoadProject(path)
+	proj, err := m.cachedProjectConfig(path)
 	if err != nil {
 		proj = nil
 		project.ConfigError = err.Error()
@@ -228,6 +240,10 @@ func (m *Manager) snapshotProject(name, path string, st *state.State, live map[s
 	} else {
 		project.Name = proj.Name
 		project.Services = servicesFromConfig(proj)
+		project.Profiles = profilesFromConfig(proj)
+		if _, ok := proj.Profile(projectState.Profile); ok {
+			project.Profile = projectState.Profile
+		}
 	}
 
 	byID := make(map[string]int, len(project.Services))
@@ -254,7 +270,10 @@ func (m *Manager) snapshotProject(name, path string, st *state.State, live map[s
 		}
 	}
 
-	externalRunning := applyObservedServices(name, proj, project.Services, attr)
+	// In Multitask a taken port isn't a problem: Hun starts the service on
+	// the next free one. Only Focus needs the configured port.
+	needsConfiguredPorts := st.Mode != "multitask"
+	externalRunning := applyObservedServices(name, proj, project.Services, attr, needsConfiguredPorts)
 
 	sort.Slice(project.Services, func(i, j int) bool {
 		return project.Services[i].Name < project.Services[j].Name
@@ -272,10 +291,10 @@ func (m *Manager) snapshotProject(name, path string, st *state.State, live map[s
 	return project
 }
 
-// applyObservedServices marks services running outside Hun and records what
-// holds the configured port of services that are not running. It reports
-// whether any service runs externally.
-func applyObservedServices(project string, proj *config.Project, services []SnapshotService, attr Attribution) bool {
+// applyObservedServices marks services running outside Hun and, when
+// reportConflicts is set, records what holds the configured port of services
+// that are not running. It reports whether any service runs externally.
+func applyObservedServices(project string, proj *config.Project, services []SnapshotService, attr Attribution, reportConflicts bool) bool {
 	externalRunning := false
 	for i := range services {
 		svc := &services[i]
@@ -297,7 +316,7 @@ func applyObservedServices(project string, proj *config.Project, services []Snap
 			externalRunning = true
 			continue
 		}
-		if proj == nil || proj.Services[svc.ID] == nil {
+		if !reportConflicts || proj == nil || proj.Services[svc.ID] == nil {
 			continue
 		}
 		port := proj.Services[svc.ID].Port
@@ -397,4 +416,49 @@ func cloneRegistry(registry map[string]string) map[string]string {
 		clone[name] = path
 	}
 	return clone
+}
+
+func profilesFromConfig(proj *config.Project) []SnapshotProfile {
+	profiles := make([]SnapshotProfile, 0, len(proj.Profiles))
+	for _, profile := range proj.Profiles {
+		targets, _ := proj.ProfileTargets(profile.Name)
+		resolved, _ := proj.ResolveProfile(profile.Name)
+		profiles = append(profiles, SnapshotProfile{
+			Name:     profile.Name,
+			Services: targets,
+			Resolved: resolved,
+		})
+	}
+	return profiles
+}
+
+type projectConfigCacheEntry struct {
+	modTime time.Time
+	size    int64
+	project *config.Project
+	err     error
+}
+
+// cachedProjectConfig loads a project's .hun.yml for snapshots, which run
+// every couple of seconds. The parsed config is reused until the file's
+// modification time or size changes. Callers must not modify the result.
+func (m *Manager) cachedProjectConfig(path string) (*config.Project, error) {
+	info, statErr := os.Stat(filepath.Join(path, ".hun.yml"))
+	if statErr != nil {
+		return config.LoadProject(path)
+	}
+	m.configMu.Lock()
+	entry, ok := m.configCache[path]
+	m.configMu.Unlock()
+	if ok && entry.modTime.Equal(info.ModTime()) && entry.size == info.Size() {
+		return entry.project, entry.err
+	}
+	proj, err := config.LoadProject(path)
+	m.configMu.Lock()
+	if m.configCache == nil {
+		m.configCache = make(map[string]projectConfigCacheEntry)
+	}
+	m.configCache[path] = projectConfigCacheEntry{modTime: info.ModTime(), size: info.Size(), project: proj, err: err}
+	m.configMu.Unlock()
+	return proj, err
 }

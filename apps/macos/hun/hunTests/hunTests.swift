@@ -502,6 +502,154 @@ struct hunTests {
         #expect(store.model.projects.first?.iconIsCustom == true)
     }
 
+    @Test func clearingLogsEmptiesTheViewAndTheDaemonBuffer() async throws {
+        let client = MockDaemonClient()
+        client.nextSnapshot = .fixture(activeProject: "app")
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        await store.refresh(force: true)
+        store.selectedLogScope = .combined
+        // Changing the scope reloads logs in the background; let it finish.
+        try await Task.sleep(for: .milliseconds(50))
+        let project = try #require(store.model.projects.first)
+        #expect(!store.logFeed.lines.isEmpty)
+
+        store.clearLogs(for: project)
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(store.logFeed.lines.isEmpty)
+        #expect(client.actions.contains("clear_logs:app:"))
+    }
+
+    @Test func snapshotDecodesProfilesAndToleratesOlderDaemons() throws {
+        let json = """
+        {"protocol":17,"mode":"multitask","scan_dirs":[],"projects":[
+          {"id":"shop","name":"shop","path":"/w/shop","status":"running","is_active":true,"profile":"app","services":[
+            {"id":"api","name":"api","pid":10,"port":8000,"status":"running","running":true,"ready":true},
+            {"id":"db","name":"db","pid":11,"port":5432,"status":"running","running":true,"ready":true},
+            {"id":"web","name":"web","pid":12,"port":3000,"status":"running","running":true,"ready":true},
+            {"id":"worker","name":"worker","pid":0,"port":0,"status":"stopped","running":false,"ready":false}
+          ],"profiles":[
+            {"name":"ui","services":["web"],"resolved":["web"]},
+            {"name":"app","services":["web","api"],"resolved":["api","db","web"]}
+          ]},
+          {"id":"old","name":"old","path":"/w/old","status":"stopped","is_active":false,"services":[]}
+        ]}
+        """
+        let snapshot = try JSONDecoder().decode(HunDaemonSnapshot.self, from: Data(json.utf8))
+
+        let shop = HunProject(snapshot: snapshot.projects[0], activeID: "shop")
+        #expect(shop.profile == "app")
+        #expect(shop.profiles.map(\.name) == ["ui", "app"])
+        #expect(shop.profileServices == ["api", "db", "web"])
+
+        let old = HunProject(snapshot: snapshot.projects[1], activeID: nil)
+        #expect(old.profiles.isEmpty)
+        #expect(old.profile == nil)
+        #expect(old.profileServices == nil)
+    }
+
+    @Test func runningAProfileAndSavingOneSendTheRightRequests() async throws {
+        let client = MockDaemonClient()
+        client.nextSnapshot = .fixture(activeProject: "app")
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        await store.refresh(force: true)
+        let project = try #require(store.model.projects.first)
+
+        store.run(project, profile: "ui")
+        store.run(project, profile: nil)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(client.actions.contains { $0.hasPrefix("profile:\(project.id):ui:") })
+        #expect(client.actions.contains { $0.hasPrefix("profile:\(project.id):all:") })
+
+        let running = project.services.filter { $0.status == .running || $0.status == .starting }.map(\.id)
+        store.saveRunningServicesAsProfile(named: "mine", for: project)
+        try await Task.sleep(for: .milliseconds(50))
+        if running.isEmpty {
+            #expect(!client.actions.contains { $0.hasPrefix("save_profile:") })
+        } else {
+            #expect(client.actions.contains("save_profile:\(project.id):mine:\(running.joined(separator: ","))"))
+        }
+    }
+
+    @Test func editingConfigOpensInHunAndSavesThroughTheDaemon() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("cfg-" + UUID().uuidString.prefix(8))
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try "name: shop\n".write(to: folder.appendingPathComponent(".hun.yml"), atomically: true, encoding: .utf8)
+
+        let client = MockDaemonClient()
+        client.nextSnapshot = HunDaemonSnapshot(
+            protocolVersion: 18, mode: "multitask", activeProject: nil, scanDirs: [], lastScanAt: nil,
+            projects: [HunDaemonProject(id: "shop", name: "shop", path: folder.path, status: "stopped", isActive: false, branch: nil, lastNote: nil, startedAt: nil, services: [], configError: nil)],
+            warnings: []
+        )
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        await store.refresh(force: true)
+        let project = try #require(store.model.projects.first)
+
+        store.openConfig(for: project)
+        let target = try #require(store.configEditor)
+        #expect(target.fileURL.path == folder.appendingPathComponent(".hun.yml").path)
+
+        #expect(await store.configProblem(in: "name: shop") == nil)
+        #expect(await store.saveConfig("name: shop\n# edited\n", for: target) == nil)
+        #expect(client.savedConfigs.map(\.path) == [folder.path])
+
+        client.configError = "yaml: line 3: mapping values are not allowed in this context"
+        #expect(await store.configProblem(in: "bad") == client.configError)
+        #expect(await store.saveConfig("bad", for: target) == client.configError)
+        #expect(HunConfigEditorSheet.lineNumber(in: client.configError!) == 3)
+        #expect(HunConfigEditorSheet.lineNumber(in: "at least one service is required") == nil)
+    }
+
+    private func daemonLine(_ text: String, service: String = "web") -> HunDaemonLogLine {
+        HunDaemonLogLine(timestamp: "2026-10-20T17:00:00.000Z", service: service, project: "app", text: text, isErr: false)
+    }
+
+    @Test func logFeedCapsTrimsAndIgnoresStaleSubscriptions() {
+        let feed = HunLogFeed()
+        feed.replace(with: (0..<10).map { HunLogLine(daemonLine("old \($0)")) })
+        let reloadGeneration = feed.generation
+        let stale = feed.beginSubscription()
+        let current = feed.beginSubscription()
+
+        feed.append([HunLogLine(daemonLine("from an old stream"))], subscription: stale)
+        #expect(feed.lines.count == 10)
+
+        let batch = (0..<HunLogFeed.capacity).map { HunLogLine(daemonLine("new \($0)")) }
+        feed.append(batch, subscription: current)
+        #expect(feed.lines.count == HunLogFeed.capacity)
+        #expect(feed.lines.first?.message == "new 0")
+        #expect(feed.lines.last?.message == "new \(HunLogFeed.capacity - 1)")
+        #expect(feed.lastSeq == 10 + HunLogFeed.capacity)
+        #expect(zip(feed.lines, feed.lines.dropFirst()).allSatisfy { $0.id < $1.id })
+        #expect(feed.generation == reloadGeneration, "appending must not force a full redraw")
+
+        feed.clear(service: "web")
+        #expect(feed.lines.isEmpty)
+        #expect(feed.generation == reloadGeneration + 1)
+    }
+
+    @Test func logBatcherDeliversBurstsInFewBatchesAndInOrder() async throws {
+        var batches: [[HunLogLine]] = []
+        let batcher = HunLogBatcher { batches.append($0) }
+        await Task.detached {
+            for i in 0..<2_000 { batcher.add(HunDaemonLogLine(timestamp: "", service: "web", project: "app", text: "\(i)", isErr: false)) }
+        }.value
+        try await Task.sleep(for: .milliseconds(200))
+
+        let delivered = batches.flatMap { $0 }.map(\.message)
+        #expect(delivered == (0..<2_000).map(String.init))
+        #expect(batches.count < 20, "2,000 lines arrived in \(batches.count) batches")
+    }
+
+    @Test func profileNamesAreChecked() {
+        #expect(HunProfile.problem(with: "  ") != nil)
+        #expect(HunProfile.problem(with: "all") != nil)
+        #expect(HunProfile.problem(with: "a:b") != nil)
+        #expect(HunProfile.problem(with: "web-only") == nil)
+    }
+
     @Test func renamedProjectKeepsItsTabAndSelection() async {
         func snapshot(id: String) -> HunDaemonSnapshot {
             HunDaemonSnapshot(
@@ -654,7 +802,7 @@ struct hunTests {
             configError: nil
         )
 
-        let project = HunProject(snapshot: snapshot, activeID: nil, logs: [])
+        let project = HunProject(snapshot: snapshot, activeID: nil)
 
         #expect(project.branch == nil)
     }
@@ -668,7 +816,7 @@ struct hunTests {
         "unmanaged":[{"pid":900,"command":"vite","port":5173,"ports":[5173],"cwd":"/w/scratch"}]}
         """
         let snapshot = try JSONDecoder().decode(HunDaemonSnapshot.self, from: Data(json.utf8))
-        let services = HunProject(snapshot: snapshot.projects[0], activeID: "otto", logs: []).services
+        let services = HunProject(snapshot: snapshot.projects[0], activeID: "otto").services
 
         let backend = try #require(services.first { $0.id == "backend" })
         #expect(backend.isExternal)
@@ -848,7 +996,7 @@ struct hunTests {
     }
 
     @Test func agentPromptIncludesProjectAndHunSkillInstructions() throws {
-        let project = HunProject(snapshot: .fixtureProject(path: "/tmp/projects/shop"), activeID: nil, logs: [])
+        let project = HunProject(snapshot: .fixtureProject(path: "/tmp/projects/shop"), activeID: nil)
         let prompt = HunAgentPromptBuilder.prompt(
             for: project,
             bundledSkillURL: URL(fileURLWithPath: "/Applications/hun.app/Contents/Resources/hun-skill/SKILL.md"),
@@ -1306,6 +1454,9 @@ struct hunTests {
     @Test func workspacePanelWidthPreservesNavigatorAndDetailSpace() {
         #expect(HunWorkspacePanelMetrics.clamp(120, availableWidth: 1_200) == 140)
         #expect(HunWorkspacePanelMetrics.clamp(900, availableWidth: 1_200) == 640)
+        // Dragged sizes land on whole points so text stays sharp.
+        #expect(HunWorkspacePanelMetrics.clamp(321.01953125, availableWidth: 1_200) == 321)
+        #expect(HunTerminalPanelMetrics.clamp(390.29296875, availableHeight: 700) == 390)
         #expect(HunWorkspacePanelMetrics.clamp(500, availableWidth: 700) == 500)
         #expect(HunWorkspacePanelMetrics.clamp(310, availableWidth: 1_200) == 310)
         #expect(HunWorkspacePanelMetrics.clamp(320, availableWidth: 310) == 141)
@@ -1844,6 +1995,26 @@ private final class MockDaemonClient: HunDaemonClientProtocol {
         actions.append("start:\(project):\(service):\(mode.rawValue)")
     }
 
+    func runProfile(_ project: String, profile: String, mode: HunDaemonStartMode) async throws {
+        actions.append("profile:\(project):\(profile):\(mode.rawValue)")
+    }
+
+    func saveProfile(_ project: String, name: String, services: [String]) async throws {
+        actions.append("save_profile:\(project):\(name):\(services.joined(separator: ","))")
+    }
+
+    var configError: String?
+    var savedConfigs: [(path: String, content: String)] = []
+
+    func validateConfig(_ content: String) async throws {
+        if let configError { throw HunDaemonError.daemon(configError) }
+    }
+
+    func saveConfig(path: String, content: String) async throws {
+        if let configError { throw HunDaemonError.daemon(configError) }
+        savedConfigs.append((path, content))
+    }
+
     func setProjectIcon(_ project: String, path: String) async throws {
         actions.append("icon:\(project):\(path)")
     }
@@ -1878,6 +2049,10 @@ private final class MockDaemonClient: HunDaemonClientProtocol {
 
     func removeProject(_ project: String) async throws {
         actions.append("remove_project:\(project)")
+    }
+
+    func clearLogs(project: String, service: String?) async throws {
+        actions.append("clear_logs:\(project):\(service ?? "")")
     }
 
     func setMode(_ mode: HunMode, preferredProject: String?) async throws {

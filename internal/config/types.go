@@ -4,6 +4,7 @@ package config
 type Project struct {
 	Name     string              `yaml:"name"`
 	Services map[string]*Service `yaml:"services"`
+	Profiles Profiles            `yaml:"profiles,omitempty"`
 	Hooks    Hooks               `yaml:"hooks,omitempty"`
 	Logs     LogsConfig          `yaml:"logs,omitempty"`
 	Detect   DetectConfig        `yaml:"detect,omitempty"`

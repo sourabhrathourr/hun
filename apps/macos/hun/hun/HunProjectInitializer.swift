@@ -61,6 +61,18 @@ nonisolated struct HunProjectInitReview: Identifiable, Hashable, Sendable {
     let commandOutput: String
     let createdConfig: Bool
 
+    /// The same review after its .hun.yml was edited.
+    func replacingConfig(with contents: String) -> HunProjectInitReview {
+        HunProjectInitReview(
+            name: name,
+            path: path,
+            configPath: configPath,
+            configContents: contents,
+            commandOutput: commandOutput,
+            createdConfig: createdConfig
+        )
+    }
+
     var serviceNames: [String] {
         var names: [String] = []
         var inServices = false

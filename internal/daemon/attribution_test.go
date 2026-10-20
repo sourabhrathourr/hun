@@ -147,7 +147,7 @@ func TestApplyObservedServicesMarksExternalAndConflicts(t *testing.T) {
 	}
 	attr := attribute(obs, []attributionProject{proj}, nil, nil)
 	services := servicesFromConfig(proj.Config)
-	if !applyObservedServices("otto", proj.Config, services, attr) {
+	if !applyObservedServices("otto", proj.Config, services, attr, true) {
 		t.Fatal("expected an external service")
 	}
 	byID := map[string]SnapshotService{}

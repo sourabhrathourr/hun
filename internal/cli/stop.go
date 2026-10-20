@@ -14,8 +14,8 @@ func init() {
 }
 
 var stopCmd = &cobra.Command{
-	Use:   "stop [project]",
-	Short: "Stop a project or all running projects",
+	Use:   "stop [project][:<service>]",
+	Short: "Stop a project, one of its services, or all running projects",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		all, _ := cmd.Flags().GetBool("all")
 
@@ -24,19 +24,21 @@ var stopCmd = &cobra.Command{
 			return err
 		}
 
-		project := ""
+		project, service := "", ""
 		if len(args) > 0 {
-			project = args[0]
+			project, service = parseTarget(args[0])
 		}
 
 		if !all && project == "" {
 			return fmt.Errorf("specify a project name or use --all")
 		}
 
-		resp, err := c.Send(daemon.Request{
-			Action:  "stop",
-			Project: project,
-		})
+		req := daemon.Request{Action: "stop", Project: project}
+		if service != "" {
+			req.Action = "stop_service"
+			req.Service = service
+		}
+		resp, err := c.Send(req)
 		if err != nil {
 			return err
 		}
@@ -46,6 +48,8 @@ var stopCmd = &cobra.Command{
 
 		if all || project == "" {
 			fmt.Println("All projects stopped.")
+		} else if service != "" {
+			fmt.Printf("%s Stopped %s:%s\n", checkmark(), project, service)
 		} else {
 			fmt.Printf("%s Stopped %s\n", checkmark(), project)
 		}

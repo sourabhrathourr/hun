@@ -75,7 +75,15 @@ services:
 
   database:
     cmd: docker compose up postgres
+
+profiles:
+  web: [frontend]
+  app: [frontend, backend]   # database comes along through depends_on
 ```
+
+Profiles are optional named sets of services. Run picks up the last profile
+you used, and switching profiles while a project runs only stops and starts
+the difference.
 
 Hun can detect Node.js, Go, Python, Docker Compose, and common monorepo
 structures. Project files stay portable between the macOS app and CLI.
@@ -104,6 +112,7 @@ hun onboard                 # Set up the first project
 hun                         # Open the optional TUI
 hun switch <project>        # Focus one project
 hun run <project>           # Run another project alongside it
+hun run <project> -p web    # Run one of its profiles
 hun status                  # Inspect running services
 hun logs <project>:<service>
 hun doctor

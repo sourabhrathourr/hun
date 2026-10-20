@@ -133,9 +133,9 @@ private struct HunLicenseGateView: View {
                     .padding(.horizontal, 12)
                     .frame(height: 40)
                     .background(AppTheme.searchField)
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .clipShape(HunRoundedShape())
                     .overlay {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        HunRoundedShape()
                             .stroke(AppTheme.dividerStrong, lineWidth: 1)
                     }
                     .focused($licenseFieldFocused)

@@ -12,10 +12,10 @@ Hun runs a project's dev services from `.hun.yml` and shows them, with their log
 When the project has a `.hun.yml` and you need a dev server, backend, worker, or database running, go through Hun instead of starting it yourself. Hun captures the logs where the user is looking and keeps ports from colliding across projects.
 
 - `hun status` shows what is running and on which ports, including services started outside Hun. Check it first, especially before assuming a port is free.
-- `hun run <project>` starts every service; `hun run <project>:<service>` starts one service and its dependencies.
+- `hun run <project>` starts the project's last-run profile (every service if none); `hun run <project> --profile <name>` runs a profile from `.hun.yml` (`--profile all` for everything); `hun run <project>:<service>` starts one service and its dependencies. Running a different profile while the project runs only stops and starts the difference.
 - `hun restart <project>:<service>` restarts one service. If the service was started outside Hun, this stops that instance and runs it under Hun.
 - `hun logs <project>:<service>` prints recent output; `hun tail <project>:<service>` follows it.
-- `hun stop <project>` stops a project, whoever started its services.
+- `hun stop <project>` stops a project, whoever started its services; `hun stop <project>:<service>` stops one service.
 
 Do not run `npm run dev`, `docker compose up`, `uvicorn`, and similar service commands directly for a Hun project unless the user asks you to. If a command fails because a port is in use, run `hun status` to see what holds it rather than killing processes yourself.
 
@@ -80,6 +80,10 @@ services:
     cmd: docker compose up postgres
     ready: "database system is ready"
 
+profiles:
+  web: [frontend]
+  app: [frontend, backend]   # postgres comes along through depends_on
+
 detect:
   version: v2
   profile: hybrid
@@ -88,6 +92,7 @@ detect:
 Supported project fields:
 - `name`
 - `services`
+- `profiles`: named sets of services to run together. Each is a list of services or `all`. List the services someone works on and let `depends_on` bring in their infrastructure. `all` is reserved as a name. Not related to `detect.profile`.
 - `hooks.pre_start`
 - `hooks.post_stop`
 - `logs.max_size`

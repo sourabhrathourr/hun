@@ -1,104 +1,105 @@
 import SwiftUI
 import AppKit
 
+/// The menu bar panel: what's running, a quick way to run or stop anything,
+/// and the way into the dashboard.
 struct MenuBarView: View {
     @Environment(HunStore.self) private var store
-    @AppStorage("hun.menu.collapsedWorkspaceGroups") private var collapsedWorkspaceGroupsData = ""
+    @State private var query = ""
 
-    private var workspaceGroups: [(name: String, projects: [HunProject])] {
-        let grouped = Dictionary(grouping: store.model.projects) { project -> String in
-            let parts = project.path.split(separator: "/")
-            guard parts.count >= 2 else { return "Projects" }
-            return String(parts[parts.count - 2])
-        }
-        return grouped
-            .map { (humanize($0.key), $0.value.sorted { $0.name < $1.name }) }
-            .sorted { $0.name < $1.name }
+    private var projects: [HunProject] {
+        store.model.projects.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
-    private func humanize(_ s: String) -> String {
-        s.replacingOccurrences(of: "-", with: " ")
-            .replacingOccurrences(of: "_", with: " ")
-            .capitalized
+    private var running: [HunProject] {
+        projects.filter { $0.status != .stopped || store.projectAction(for: $0) == .stopProject }
     }
+
+    private var others: [HunProject] {
+        let rest = projects.filter { project in !running.contains { $0.id == project.id } }
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return rest }
+        return rest.filter { $0.name.localizedCaseInsensitiveContains(q) }
+    }
+
+    /// Search appears once the list is long enough to need it.
+    private var showsSearch: Bool { projects.count - running.count > 6 }
 
     var body: some View {
-        let mode = Binding(
-            get: { store.displayedMode },
-            set: { store.changeMode($0, preferredProject: nil) }
-        )
         VStack(spacing: 0) {
-            MenuBarHeader(mode: mode, isModePending: store.isChangingMode)
-
-            divider
-
-            FocusBanner(
-                focused: store.focusedProject,
-                mode: store.globalMode,
-                pendingAction: store.focusedProject.flatMap { store.projectAction(for: $0) },
-                onStop: {
-                    if let project = store.focusedProject {
-                        store.stop(project)
-                    }
-                }
+            MenuHeader(
+                runningCount: running.filter { $0.status != .crashed }.count,
+                crashedCount: running.filter { $0.status == .crashed }.count,
+                mode: Binding(
+                    get: { store.displayedMode },
+                    set: { store.changeMode($0, preferredProject: nil) }
+                ),
+                isModePending: store.isChangingMode
             )
 
-            divider
-
-            SleekMenuScrollView(maxHeight: 292) {
-                VStack(spacing: 14) {
-                    ForEach(workspaceGroups, id: \.name) { group in
-                        WorkspaceSection(
-                            title: group.name,
-                            projects: group.projects,
-                            mode: store.globalMode,
-                            isCollapsed: isWorkspaceGroupCollapsed(group.name),
-                            pendingAction: { store.projectAction(for: $0) },
-                            onToggleCollapse: { toggleWorkspaceGroup(group.name) },
-                            onSwitch: { store.focus($0) },
-                            onRun: { store.run($0) },
-                            onStop: { store.stop($0) }
-                        )
+            if projects.isEmpty {
+                MenuEmptyState()
+            } else {
+                SleekMenuScrollView(maxHeight: 380) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        if !running.isEmpty {
+                            MenuSectionLabel(title: "Running")
+                            ForEach(running) { project in
+                                row(project)
+                            }
+                        }
+                        if !running.isEmpty && !(others.isEmpty && query.isEmpty) {
+                            Spacer().frame(height: 10)
+                        }
+                        if showsSearch {
+                            MenuSearchField(text: $query)
+                                .padding(.horizontal, 4)
+                                .padding(.bottom, 6)
+                        }
+                        if !others.isEmpty {
+                            if !running.isEmpty || showsSearch {
+                                MenuSectionLabel(title: "Projects")
+                            }
+                            ForEach(others) { project in
+                                row(project)
+                            }
+                        } else if !query.isEmpty {
+                            Text("No projects match")
+                                .font(.system(size: 12))
+                                .foregroundStyle(AppTheme.textTertiary)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                        }
                     }
+                    .padding(.horizontal, 6)
+                    .padding(.top, 2)
+                    .padding(.bottom, 6)
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 10)
             }
 
-            divider
-
-            MenuBarFooter()
+            MenuDivider()
+            MenuFooter()
         }
-        .frame(width: 320)
+        .frame(width: 340)
         .background(AppTheme.menuBackground)
         .task {
             await store.refresh(force: true)
         }
     }
 
-    private var divider: some View {
-        Rectangle().fill(AppTheme.divider).frame(height: 1)
-    }
-
-    private var collapsedWorkspaceGroups: Set<String> {
-        Set(collapsedWorkspaceGroupsData.split(separator: "\n").map(String.init))
-    }
-
-    private func isWorkspaceGroupCollapsed(_ title: String) -> Bool {
-        collapsedWorkspaceGroups.contains(title)
-    }
-
-    private func toggleWorkspaceGroup(_ title: String) {
-        var groups = collapsedWorkspaceGroups
-        if groups.contains(title) {
-            groups.remove(title)
-        } else {
-            groups.insert(title)
-        }
-
-        withAnimation(.easeOut(duration: 0.14)) {
-            collapsedWorkspaceGroupsData = groups.sorted().joined(separator: "\n")
-        }
+    private func row(_ project: HunProject) -> some View {
+        MenuProjectRow(
+            project: project,
+            mode: store.globalMode,
+            pendingAction: store.projectAction(for: project),
+            onOpen: {
+                store.selectProject(project.id)
+                hunApp.openDashboard()
+            },
+            onRun: { store.globalMode == .focus ? store.focus(project) : store.run(project) },
+            onStop: { store.stop(project) },
+            onRestart: { store.restart(project) }
+        )
     }
 }
 
@@ -398,127 +399,253 @@ private struct MenuScrollIndicator: View {
     }
 }
 
-private struct MenuBarHeader: View {
+// MARK: - Header
+
+private struct MenuHeader: View {
+    let runningCount: Int
+    let crashedCount: Int
     @Binding var mode: HunMode
     let isModePending: Bool
 
     var body: some View {
-        HStack(spacing: 10) {
-            Text("hun")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(AppTheme.textPrimary)
-            Spacer()
-            ModeSegmented(mode: $mode, isPending: isModePending)
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Hun")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(AppTheme.textPrimary)
+                Text(summary)
+                    .font(.system(size: 11))
+                    .foregroundStyle(AppTheme.textTertiary)
+                    .contentTransition(.numericText())
+            }
+            Spacer(minLength: 8)
+            MenuModeSwitch(mode: $mode, isPending: isModePending)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 14)
+        .padding(.top, 12)
+        .padding(.bottom, 10)
+    }
+
+    private var summary: String {
+        let running: String
+        switch runningCount {
+        case 0: running = crashedCount == 0 ? "Nothing running" : "Nothing else running"
+        case 1: running = "1 project running"
+        default: running = "\(runningCount) projects running"
+        }
+        guard crashedCount > 0 else { return running }
+        return "\(running) · \(crashedCount) crashed"
     }
 }
 
-private struct ModeSegmented: View {
+private struct MenuModeSwitch: View {
     @Binding var mode: HunMode
     let isPending: Bool
 
     var body: some View {
         HStack(spacing: 0) {
             ForEach(HunMode.allCases, id: \.self) { option in
+                let active = mode == option
                 Button {
                     withAnimation(.easeOut(duration: 0.12)) { mode = option }
                 } label: {
                     Text(option.title)
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(mode == option ? AppTheme.textPrimary : AppTheme.textSecondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(
-                            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .fill(mode == option ? AppTheme.modeSelectorActive : Color.clear)
-                        )
+                        .foregroundStyle(active ? AppTheme.textPrimary : AppTheme.textSecondary)
+                        .padding(.horizontal, 9)
+                        .frame(maxHeight: .infinity)
+                        .background(HunRoundedShape().fill(active ? AppTheme.tabActive : Color.clear))
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .help(option.helpText)
             }
         }
         .padding(2)
-        .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(AppTheme.modeSelectorBackground)
-        )
+        .frame(height: 24)
+        .background(HunRoundedShape().fill(AppTheme.searchField))
         .disabled(isPending)
+        .opacity(isPending ? 0.6 : 1)
     }
 }
 
-private struct FocusBanner: View {
-    let focused: HunProject?
+// MARK: - Rows
+
+private struct MenuSectionLabel: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(AppTheme.textTertiary)
+            // Lines up with the project icons below.
+            .padding(.horizontal, 8)
+            .padding(.top, 6)
+            .padding(.bottom, 4)
+    }
+}
+
+/// One project. The row opens it in the dashboard; its action (run, switch,
+/// stop, restart) appears on hover, and stays while it's in progress.
+private struct MenuProjectRow: View {
+    let project: HunProject
     let mode: HunMode
     let pendingAction: HunActionKind?
+    let onOpen: () -> Void
+    let onRun: () -> Void
     let onStop: () -> Void
+    let onRestart: () -> Void
+    @State private var hovering = false
+
+    private var isRunning: Bool { project.status == .running || project.status == .starting }
 
     var body: some View {
         HStack(spacing: 10) {
-            if let focused {
-                ProjectAvatar(project: focused)
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(focused.name)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(AppTheme.textPrimary)
-                        Text(mode == .focus ? "focused" : "active")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(AppTheme.textTertiary)
-                            .textCase(.uppercase)
-                            .tracking(0.5)
-                    }
-                    Text(metaLine(focused))
+            ProjectIconView(
+                name: project.name,
+                iconPath: project.iconPath,
+                size: 20,
+                cornerRadius: 5,
+                emphasized: false,
+                status: project.status
+            )
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(project.name)
+                    .font(.system(size: 13, weight: isRunning ? .medium : .regular))
+                    .foregroundStyle(isRunning || hovering ? AppTheme.textPrimary : AppTheme.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if let detail {
+                    Text(detail)
                         .font(.system(size: 11))
-                        .foregroundStyle(AppTheme.textSecondary)
+                        .foregroundStyle(detailColor)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
-                Spacer(minLength: 0)
-                if focused.status == .running || pendingAction == .stopProject {
-                    BannerStopButton(
-                        isLoading: pendingAction == .stopProject,
-                        action: onStop
-                    )
-                }
-            } else {
-                Image(systemName: "moon.zzz")
-                    .font(.system(size: 14))
-                    .foregroundStyle(AppTheme.textTertiary)
-                    .frame(width: 28, height: 28)
-                    .background(
-                        RoundedRectangle(cornerRadius: 5)
-                            .fill(AppTheme.searchField)
-                    )
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("No active project")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(AppTheme.textSecondary)
-                    Text(mode.helpText)
-                        .font(.system(size: 11))
-                        .foregroundStyle(AppTheme.textTertiary)
-                }
-                Spacer(minLength: 0)
             }
+
+            Spacer(minLength: 6)
+
+            trailing
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 8)
+        .frame(minHeight: detail == nil ? 32 : 42)
+        .background(HunRoundedShape().fill(hovering ? AppTheme.rowHover : Color.clear))
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onOpen)
+        .onHover { hovering = $0 }
+        .help("Open \(project.name) in Hun")
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction(named: "Open in Hun", onOpen)
     }
 
-    private func metaLine(_ project: HunProject) -> String {
+    /// Running projects say what's running; stopped ones stay one line.
+    private var detail: String? {
+        if let pendingAction { return pendingAction.statusText }
         switch project.status {
-        case _ where pendingAction == .stopProject:
-            return "Stopping..."
         case .running:
-            return "Running"
-        case .crashed: return "Crashed · needs restart"
-        case .stopped: return "Stopped"
+            let count = project.services.filter { $0.status == .running || $0.status == .starting }.count
+            let services = count == 1 ? "1 service" : "\(count) services"
+            return [project.profile, services].compactMap { $0 }.joined(separator: " · ")
         case .starting: return "Starting…"
+        case .crashed: return "Crashed"
+        case .stopped: return nil
+        }
+    }
+
+    private var detailColor: Color {
+        project.status == .crashed && pendingAction == nil ? AppTheme.danger : AppTheme.textTertiary
+    }
+
+    /// The first running service that serves a page.
+    private var webService: HunService? {
+        project.services.first { $0.status == .running && $0.browserURL != nil }
+    }
+
+    @ViewBuilder
+    private var trailing: some View {
+        HStack(spacing: 4) {
+            if let service = webService, let url = service.browserURL, pendingAction == nil {
+                MenuPortChip(port: service.port, url: url, serviceName: service.name)
+            }
+            if let pendingAction {
+                MenuIconButton(systemImage: icon(for: pendingAction), help: pendingAction.progressTitle, isLoading: true) {}
+            } else if project.status == .crashed {
+                // Restart stays in view; Stop clears the crash.
+                if hovering {
+                    MenuIconButton(systemImage: "stop.fill", help: "Stop \(project.name)", tone: .danger, action: onStop)
+                }
+                MenuIconButton(systemImage: "arrow.clockwise", help: "Restart \(project.name)", action: onRestart)
+            } else if hovering {
+                action
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var action: some View {
+        switch project.status {
+        case .running, .starting:
+            MenuIconButton(systemImage: "stop.fill", help: "Stop \(project.name)", tone: .danger, action: onStop)
+        case .crashed:
+            MenuIconButton(systemImage: "arrow.clockwise", help: "Restart \(project.name)", action: onRestart)
+        case .stopped:
+            MenuIconButton(
+                systemImage: mode == .focus ? "bolt.fill" : "play.fill",
+                help: mode == .focus ? "Switch to \(project.name)" : "Run \(project.name)",
+                action: onRun
+            )
+        }
+    }
+
+    private func icon(for action: HunActionKind) -> String {
+        switch action {
+        case .stopProject, .stopService: return "stop.fill"
+        case .restartProject, .restartService: return "arrow.clockwise"
+        default: return "play.fill"
         }
     }
 }
 
-private struct BannerStopButton: View {
-    let isLoading: Bool
+/// The port a running project serves, opening it in the browser.
+private struct MenuPortChip: View {
+    let port: Int
+    let url: URL
+    let serviceName: String
+    @State private var hovering = false
+
+    var body: some View {
+        Button {
+            NSWorkspace.shared.open(url)
+        } label: {
+            HStack(spacing: 3) {
+                Text(verbatim: ":\(port)")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 8, weight: .bold))
+                    .opacity(hovering ? 1 : 0.6)
+            }
+            .foregroundStyle(hovering ? AppTheme.textPrimary : AppTheme.textSecondary)
+            .padding(.horizontal, 7)
+            .frame(height: 22)
+            .background(HunRoundedShape().fill(hovering ? AppTheme.hover : AppTheme.searchField))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help("Open \(serviceName) at \(url.absoluteString)")
+    }
+}
+
+private struct MenuIconButton: View {
+    enum Tone { case neutral, danger }
+
+    let systemImage: String
+    let help: String
+    var tone: Tone = .neutral
+    var isLoading = false
     let action: () -> Void
     @State private var hovering = false
 
@@ -529,325 +656,110 @@ private struct BannerStopButton: View {
                     ProgressView()
                         .progressViewStyle(.circular)
                         .controlSize(.mini)
-                        .scaleEffect(0.58)
-                        .frame(width: 12, height: 12)
+                        .scaleEffect(0.55)
                 } else {
-                    Image(systemName: "stop.fill")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(hovering ? AppTheme.danger : AppTheme.textSecondary)
+                    Image(systemName: systemImage)
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(foreground)
                 }
             }
-            .frame(width: 24, height: 24)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(hovering ? AppTheme.danger.opacity(0.12) : AppTheme.buttonFill)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(hovering ? AppTheme.danger.opacity(0.35) : AppTheme.divider, lineWidth: 1)
-            )
+            .frame(width: 24, height: 22)
+            .background(HunRoundedShape().fill(background))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(isLoading)
         .onHover { hovering = $0 }
-        .help(isLoading ? "Stopping" : "Stop project")
-    }
-}
-
-private struct WorkspaceSection: View {
-    let title: String
-    let projects: [HunProject]
-    let mode: HunMode
-    let isCollapsed: Bool
-    let pendingAction: (HunProject) -> HunActionKind?
-    let onToggleCollapse: () -> Void
-    let onSwitch: (HunProject) -> Void
-    let onRun: (HunProject) -> Void
-    let onStop: (HunProject) -> Void
-    @State private var hoveringHeader = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Button(action: onToggleCollapse) {
-                HStack(spacing: 6) {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(AppTheme.textTertiary)
-                        .frame(width: 10)
-                        .rotationEffect(.degrees(isCollapsed ? -90 : 0))
-                    Image(systemName: "folder.fill")
-                        .font(.system(size: 10, weight: .regular))
-                        .foregroundStyle(AppTheme.textTertiary)
-                    Text(title)
-                        .font(.system(size: 10.5, weight: .semibold))
-                        .foregroundStyle(AppTheme.textTertiary)
-                        .textCase(.uppercase)
-                        .tracking(0.5)
-                    Spacer()
-                }
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-                .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(hoveringHeader ? AppTheme.hover : Color.clear)
-                )
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .onHover { hoveringHeader = $0 }
-            .help(isCollapsed ? "Expand \(title)" : "Collapse \(title)")
-
-            if !isCollapsed {
-                ForEach(projects) { project in
-                    MenuBarProjectRow(
-                        project: project,
-                        mode: mode,
-                        pendingAction: pendingAction(project),
-                        onSwitch: { onSwitch(project) },
-                        onRun: { onRun(project) },
-                        onStop: { onStop(project) }
-                    )
-                }
-            }
-        }
-    }
-}
-
-private struct MenuBarProjectRow: View {
-    let project: HunProject
-    let mode: HunMode
-    let pendingAction: HunActionKind?
-    let onSwitch: () -> Void
-    let onRun: () -> Void
-    let onStop: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        HStack(spacing: 10) {
-            ProjectAvatar(project: project)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(project.name)
-                    .font(.system(size: 13, weight: project.isActive ? .medium : .regular))
-                    .foregroundStyle(AppTheme.textPrimary)
-                Text(secondary)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(AppTheme.textTertiary)
-                    .lineLimit(1)
-            }
-
-            Spacer(minLength: 4)
-
-            if let pendingAction {
-                QuickActionButton(
-                    title: pendingButtonTitle(for: pendingAction),
-                    systemImage: pendingButtonIcon(for: pendingAction),
-                    style: pendingAction == .stopProject ? .danger : .primary,
-                    isLoading: true,
-                    isDisabled: true,
-                    action: {}
-                )
-            } else if hovering {
-                primaryAction
-            }
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 5)
-        .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(hovering ? AppTheme.hover : Color.clear)
-        )
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
+        .help(help)
+        .accessibilityLabel(help)
     }
 
-    @ViewBuilder
-    private var primaryAction: some View {
-        if project.status == .running {
-            QuickActionButton(title: "Stop", systemImage: "stop.fill", style: .danger, action: onStop)
-        } else if mode == .focus {
-            QuickActionButton(title: "Switch", systemImage: "bolt.fill", style: .primary, action: onSwitch)
-        } else {
-            QuickActionButton(title: "Run", systemImage: "play.fill", style: .primary, action: onRun)
-        }
-    }
-
-    private var secondary: String {
-        switch project.status {
-        case _ where pendingAction != nil:
-            return pendingAction?.statusText ?? "Working..."
-        case .running: return "Running"
-        case .stopped: return "Stopped"
-        case .crashed: return "Crashed"
-        case .starting: return "Starting…"
-        }
-    }
-
-    private func pendingButtonTitle(for action: HunActionKind) -> String {
-        switch action {
-        case .startProject:
-            return mode == .focus ? "Switch" : "Run"
-        case .stopProject:
-            return "Stop"
-        case .restartProject:
-            return "Restart"
-        default:
-            return "Run"
-        }
-    }
-
-    private func pendingButtonIcon(for action: HunActionKind) -> String {
-        switch action {
-        case .startProject:
-            return mode == .focus ? "bolt.fill" : "play.fill"
-        case .stopProject:
-            return "stop.fill"
-        case .restartProject:
-            return "arrow.clockwise"
-        default:
-            return "play.fill"
-        }
-    }
-}
-
-private enum QuickActionStyle { case primary, danger }
-
-private struct QuickActionButton: View {
-    let title: String
-    let systemImage: String
-    let style: QuickActionStyle
-    var isLoading = false
-    var isDisabled = false
-    let action: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 5) {
-                if isLoading {
-                    ProgressView()
-                        .progressViewStyle(.circular)
-                        .controlSize(.mini)
-                        .scaleEffect(0.55)
-                        .frame(width: 9, height: 9)
-                } else {
-                    Image(systemName: systemImage)
-                        .font(.system(size: 9, weight: .semibold))
-                        .frame(width: 9, height: 9)
-                }
-                Text(title)
-                    .font(.system(size: 11, weight: .medium))
-            }
-            .foregroundStyle(textColor)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(background)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .stroke(border, lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
-        .disabled(isDisabled)
-        .opacity(isDisabled && !isLoading ? 0.55 : 1)
-        .onHover { hovering = $0 }
-    }
-
-    private var textColor: Color {
-        switch style {
-        case .primary: return .white
-        case .danger: return hovering ? AppTheme.danger : AppTheme.textSecondary
-        }
+    private var foreground: Color {
+        guard hovering else { return AppTheme.textSecondary }
+        return tone == .danger ? AppTheme.danger : AppTheme.textPrimary
     }
 
     private var background: Color {
-        switch style {
-        case .primary: return AppTheme.accent.opacity(hovering ? 1 : 0.92)
-        case .danger: return hovering ? AppTheme.danger.opacity(0.12) : AppTheme.buttonFill
-        }
-    }
-
-    private var border: Color {
-        switch style {
-        case .primary: return Color.white.opacity(0.10)
-        case .danger: return hovering ? AppTheme.danger.opacity(0.4) : AppTheme.divider
-        }
+        guard hovering else { return AppTheme.searchField }
+        return tone == .danger ? AppTheme.danger.opacity(0.14) : AppTheme.hover
     }
 }
 
-private struct ProjectAvatar: View {
-    let project: HunProject
+private struct MenuSearchField: View {
+    @Binding var text: String
 
     var body: some View {
-        ProjectIconView(
-            name: project.name,
-            iconPath: project.iconPath,
-            size: 22,
-            cornerRadius: 5,
-            emphasized: project.isActive,
-            status: project.status
-        )
-    }
-}
-
-private struct MenuBarFooter: View {
-    var body: some View {
-        VStack(spacing: 0) {
-            FooterRow(
-                title: "Open Dashboard",
-                systemImage: "macwindow",
-                shortcut: "⌘D",
-                action: { hunApp.openDashboard() }
-            )
-            FooterRow(
-                title: "Quit hun",
-                systemImage: "power",
-                shortcut: "⌘Q",
-                action: { NSApp.terminate(nil) }
-            )
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(AppTheme.textTertiary)
+            TextField("Find a project", text: $text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 6)
+        .frame(height: 26)
+        .background(HunRoundedShape().fill(AppTheme.selectedFill))
     }
 }
 
-private struct FooterRow: View {
-    let title: String
-    let systemImage: String
-    let shortcut: String
-    let action: () -> Void
-    @State private var hovering = false
+private struct MenuEmptyState: View {
+    var body: some View {
+        VStack(spacing: 6) {
+            Text("No projects yet")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(AppTheme.textSecondary)
+            Text("Add one from the dashboard to run it from here.")
+                .font(.system(size: 11.5))
+                .foregroundStyle(AppTheme.textTertiary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 28)
+    }
+}
+
+// MARK: - Footer
+
+private struct MenuDivider: View {
+    var body: some View {
+        Rectangle().fill(AppTheme.divider).frame(height: 1)
+    }
+}
+
+private struct MenuFooter: View {
+    @State private var hoveringOpen = false
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(AppTheme.textSecondary)
-                    .frame(width: 14)
-                Text(title)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(AppTheme.textPrimary)
-                Spacer()
-                Text(shortcut)
-                    .font(.system(size: 10.5, weight: .regular, design: .rounded))
-                    .foregroundStyle(AppTheme.textTertiary)
-                    .monospacedDigit()
+        HStack(spacing: 4) {
+            Button {
+                hunApp.openDashboard()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "macwindow")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(AppTheme.textSecondary)
+                    Text("Open Hun")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(AppTheme.textPrimary)
+                    Spacer(minLength: 8)
+                    Text("⌘D")
+                        .font(.system(size: 11))
+                        .foregroundStyle(AppTheme.textTertiary)
+                }
+                .padding(.horizontal, 8)
+                .frame(height: 30)
+                .background(HunRoundedShape().fill(hoveringOpen ? AppTheme.rowHover : Color.clear))
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(hovering ? AppTheme.hover : Color.clear)
-            )
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .onHover { hoveringOpen = $0 }
+
+            MenuIconButton(systemImage: "power", help: "Quit Hun (⌘Q)") {
+                NSApp.terminate(nil)
+            }
         }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 6)
     }
 }
 

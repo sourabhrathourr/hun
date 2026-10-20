@@ -29,11 +29,13 @@ type Manager struct {
 	discoveryScanDirs []string
 	discoveryWarnings []string
 	iconCache         map[string]projectIconCacheEntry
+	configCache       map[string]projectConfigCacheEntry
 	observer          observer
 
-	mu      sync.RWMutex
-	stateMu sync.Mutex
-	iconMu  sync.Mutex
+	mu       sync.RWMutex
+	stateMu  sync.Mutex
+	iconMu   sync.Mutex
+	configMu sync.Mutex
 	st      *state.State
 }
 
@@ -158,6 +160,21 @@ func (m *Manager) StateSnapshot() *state.State {
 
 // StartProject starts all services for a project.
 func (m *Manager) StartProject(projectName string, projConfig *config.Project, projectPath string, exclusive bool) error {
+	return m.StartProfile(projectName, "", projConfig, projectPath, exclusive)
+}
+
+// StartProfile starts the services a profile runs, in dependency order. The
+// empty profile runs every service.
+func (m *Manager) StartProfile(projectName, profile string, projConfig *config.Project, projectPath string, exclusive bool) error {
+	wanted, err := projConfig.ResolveProfile(profile)
+	if err != nil {
+		return err
+	}
+	include := make(map[string]bool, len(wanted))
+	for _, name := range wanted {
+		include[name] = true
+	}
+
 	m.mu.Lock()
 	if _, exists := m.processes[projectName]; exists {
 		m.mu.Unlock()
@@ -193,7 +210,10 @@ func (m *Manager) StartProject(projectName string, projConfig *config.Project, p
 
 	started := make(map[string]*Process)
 	dependentCount := make(map[string]int)
-	for _, svc := range projConfig.Services {
+	for name, svc := range projConfig.Services {
+		if !include[name] {
+			continue
+		}
 		for _, dep := range svc.DependsOn {
 			dependentCount[dep]++
 		}
@@ -214,6 +234,9 @@ func (m *Manager) StartProject(projectName string, projConfig *config.Project, p
 	}
 
 	for _, svcName := range order {
+		if !include[svcName] {
+			continue
+		}
 		svcConfig := projConfig.Services[svcName]
 		proc, err := m.startConfiguredService(projectName, svcName, svcConfig, projectPath, !exclusive, 0, dependentCount[svcName] > 0)
 		if errors.Is(err, errServiceRunningExternally) {
@@ -226,7 +249,75 @@ func (m *Manager) StartProject(projectName string, projConfig *config.Project, p
 	}
 
 	m.setProjectRunning(projectName, projectPath, m.refreshProjectOffset(projectName), exclusive)
+	m.rememberProfile(projectName, profile)
 	return nil
+}
+
+// ApplyProfile makes a running project run exactly a profile's services. Only
+// the difference changes: services outside the profile stop, missing ones
+// start, and the ones both share keep running.
+func (m *Manager) ApplyProfile(projectName, profile string, projConfig *config.Project, projectPath string, exclusive bool) error {
+	wanted, err := projConfig.ResolveProfile(profile)
+	if err != nil {
+		return err
+	}
+	include := make(map[string]bool, len(wanted))
+	for _, name := range wanted {
+		include[name] = true
+	}
+
+	running := m.StatusWithExternal()[projectName]
+	var extra []string
+	for name, info := range running {
+		if info.Running && !include[name] {
+			extra = append(extra, name)
+		}
+	}
+	sort.Strings(extra)
+	for _, name := range extra {
+		// Not StopService: the project stays up while it switches.
+		if err := m.stopService(projectName, name); err != nil {
+			return fmt.Errorf("stopping service %s: %w", name, err)
+		}
+	}
+
+	order, err := topoSort(projConfig)
+	if err != nil {
+		return err
+	}
+	for _, name := range order {
+		if !include[name] || running[name].Running {
+			continue
+		}
+		if err := m.StartService(projectName, name, projConfig, projectPath, exclusive); err != nil {
+			return err
+		}
+	}
+
+	m.setProjectRunning(projectName, projectPath, m.refreshProjectOffset(projectName), exclusive)
+	m.rememberProfile(projectName, profile)
+	return nil
+}
+
+// RememberedProfile is the profile a project last ran, if its .hun.yml still
+// defines it. The empty string means every service.
+func (m *Manager) RememberedProfile(projectName string, projConfig *config.Project) string {
+	profile := m.StateSnapshot().Projects[projectName].Profile
+	if _, ok := projConfig.Profile(profile); !ok {
+		return ""
+	}
+	return profile
+}
+
+func (m *Manager) rememberProfile(projectName, profile string) {
+	if profile == config.AllServicesProfile {
+		profile = ""
+	}
+	_ = m.mutateState(func(st *state.State) {
+		ps := st.Projects[projectName]
+		ps.Profile = profile
+		st.Projects[projectName] = ps
+	})
 }
 
 // StartService starts one service and any services it depends on.
@@ -546,8 +637,39 @@ func (m *Manager) stopProject(projectName string, includeExternal bool) error {
 	return nil
 }
 
-// StopService stops a single service in a running project.
+// StopService stops a single service in a running project. Stopping the last
+// running service stops the project, so it no longer reads as running.
 func (m *Manager) StopService(projectName, serviceName string) error {
+	if err := m.stopService(projectName, serviceName); err != nil {
+		return err
+	}
+	m.stopProjectIfIdle(projectName)
+	return nil
+}
+
+// stopProjectIfIdle stops a project once none of its services run, whether
+// Hun started them or not.
+func (m *Manager) stopProjectIfIdle(projectName string) {
+	m.mu.RLock()
+	procs, exists := m.processes[projectName]
+	for _, proc := range procs {
+		if proc.IsRunning() {
+			m.mu.RUnlock()
+			return
+		}
+	}
+	m.mu.RUnlock()
+	if len(m.attribution(freshObservationAge).Services[projectName]) > 0 {
+		return
+	}
+	if exists {
+		_ = m.stopProject(projectName, false)
+	} else {
+		m.setProjectStopped(projectName)
+	}
+}
+
+func (m *Manager) stopService(projectName, serviceName string) error {
 	m.mu.RLock()
 	procs, projectExists := m.processes[projectName]
 	proc := procs[serviceName]
@@ -743,6 +865,11 @@ func (m *Manager) GetLogs(project, service string, lines int) []LogLine {
 	return m.logs.GetLines(project, service, lines)
 }
 
+// ClearLogs empties the buffered logs of a service, or of the whole project.
+func (m *Manager) ClearLogs(project, service string) {
+	m.logs.ClearBuffers(project, service)
+}
+
 // Subscribe creates a new log subscriber.
 func (m *Manager) Subscribe(project, service string) *Subscriber {
 	return m.subscribers.Subscribe(project, service)
@@ -759,6 +886,20 @@ func (m *Manager) IsRunning(project string) bool {
 	defer m.mu.RUnlock()
 	_, exists := m.processes[project]
 	return exists
+}
+
+// HasLiveServices reports whether any of a project's Hun-run processes is
+// still alive. A project whose services all crashed or exited is still known
+// to the manager (IsRunning) but has nothing left running.
+func (m *Manager) HasLiveServices(project string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, proc := range m.processes[project] {
+		if proc.IsRunning() {
+			return true
+		}
+	}
+	return false
 }
 
 // IsServiceRunning checks if one service is currently running.
