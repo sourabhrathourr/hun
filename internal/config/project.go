@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -33,6 +34,26 @@ func ProjectExists(dir string) bool {
 	path := filepath.Join(dir, ".hun.yml")
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// ProjectFolderGone reports whether a registered project's folder no longer
+// exists. A missing .hun.yml (say, on a branch that lacks it) does not count,
+// and neither does a folder on an unmounted volume, so switching branches or
+// ejecting a drive never unregisters a project.
+func ProjectFolderGone(dir string) bool {
+	if dir == "" {
+		return true
+	}
+	if _, err := os.Stat(dir); err == nil || !os.IsNotExist(err) {
+		return false
+	}
+	if rest, ok := strings.CutPrefix(filepath.Clean(dir), "/Volumes/"); ok {
+		volume := "/Volumes/" + strings.SplitN(rest, "/", 2)[0]
+		if _, err := os.Stat(volume); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // WriteProject writes a Project config to .hun.yml in the given directory.

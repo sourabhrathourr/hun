@@ -15,6 +15,11 @@ import (
 	"time"
 )
 
+const (
+	defaultStopGrace = 5 * time.Second
+	dockerStopGrace  = 15 * time.Second
+)
+
 // Process represents a single running service process.
 type Process struct {
 	Name             string
@@ -23,10 +28,11 @@ type Process struct {
 	Env              map[string]string
 	PortEnv          string
 	ReadyPattern     string
-	observedPort     int  // currently reported to status and UI
-	basePort         int  // configured port before any availability fallback
-	launchPort       int  // port selected and requested at process launch
-	allowRuntimePort bool // multitask services may adopt another verified owned listener
+	observedPort     int           // currently reported to status and UI
+	basePort         int           // configured port before any availability fallback
+	launchPort       int           // port selected and requested at process launch
+	allowRuntimePort bool          // multitask services may adopt another verified owned listener
+	stopGrace        time.Duration // SIGTERM grace before SIGKILL; defaults to defaultStopGrace
 
 	cmd       *exec.Cmd
 	stdin     io.Closer
@@ -284,7 +290,11 @@ func (p *Process) Stop() error {
 		return fmt.Errorf("sending SIGTERM to %s: %w", p.Name, err)
 	}
 
-	if waitForProcessExit(exited, 5*time.Second) {
+	grace := p.stopGrace
+	if grace <= 0 {
+		grace = defaultStopGrace
+	}
+	if waitForProcessExit(exited, grace) {
 		return nil
 	}
 

@@ -121,17 +121,7 @@ func processGroupListeningTCPPorts(processGroupID int) (map[int]bool, error) {
 		if len(line) < 2 || line[0] != 'n' {
 			continue
 		}
-		endpoint := line[1:]
-		colon := strings.LastIndex(endpoint, ":")
-		if colon < 0 {
-			continue
-		}
-		rawPort := endpoint[colon+1:]
-		if end := strings.IndexFunc(rawPort, func(r rune) bool { return r < '0' || r > '9' }); end >= 0 {
-			rawPort = rawPort[:end]
-		}
-		port, parseErr := strconv.Atoi(rawPort)
-		if parseErr == nil && port > 0 && port <= 65535 {
+		if port := parseLsofEndpointPort(line[1:]); port > 0 {
 			ports[port] = true
 		}
 	}

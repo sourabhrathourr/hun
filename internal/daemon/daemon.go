@@ -90,6 +90,10 @@ func (d *Daemon) Run() error {
 		os.Exit(0)
 	}()
 
+	// Warm the machine observation so the first dashboard snapshot does not
+	// wait on a scan.
+	go d.manager.observer.get(observationMaxAge)
+
 	// Recover previously running projects from persisted state in background.
 	// The daemon should start serving socket requests immediately.
 	go func() {

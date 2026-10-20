@@ -12,11 +12,29 @@ import (
 	"github.com/sourabhrathourr/hun/internal/state"
 )
 
-// Result describes one reconciliation pass over configured scan roots.
+// Result describes one scan over the configured roots.
 type Result struct {
 	ScanDirs []string
-	Projects map[string]string // project name -> project directory
+	Projects []FoundProject // sorted by path
 	Warnings []string
+}
+
+// FoundProject is a folder with a valid .hun.yml.
+type FoundProject struct {
+	Name string // the name: field in .hun.yml
+	Path string
+}
+
+// Changes reports how Reconcile changed the registry.
+type Changes struct {
+	Added   []string
+	Removed []string          // folders that no longer exist
+	Renamed map[string]string // old key → new key
+}
+
+// Dirty reports whether the registry changed.
+func (c Changes) Dirty() bool {
+	return len(c.Added) > 0 || len(c.Removed) > 0 || len(c.Renamed) > 0
 }
 
 var skippedDirs = map[string]bool{
@@ -34,68 +52,124 @@ var skippedDirs = map[string]bool{
 	"vendor":       true,
 }
 
-// ReconcileState discovers valid .hun.yml projects and mutates st's registry.
-// Callers own persistence and any runtime side effects such as stopping removed
-// projects before saving.
+// ReconcileState scans the configured roots and applies the result to st.
+// Callers own persistence. Projects marked running in st keep their key.
 func ReconcileState(st *state.State) (Result, bool, error) {
 	global, err := config.LoadGlobal()
 	if err != nil {
 		return Result{}, false, err
 	}
-	result, err := Scan(global, st.Registry)
+	result, err := Scan(global)
 	if err != nil {
 		return result, false, err
 	}
+	changes := Reconcile(st, result, func(key string) bool {
+		return st.Projects[key].Status == "running"
+	})
+	return result, changes.Dirty(), nil
+}
 
-	dirty := false
-	for name, path := range st.Registry {
-		if path == "" || !config.ProjectExists(path) {
-			delete(st.Registry, name)
-			delete(st.Projects, name)
-			if st.ActiveProject == name {
-				st.ActiveProject = ""
-			}
-			dirty = true
-		}
-	}
+// Reconcile applies a scan to st, keyed by folder rather than by name:
+//   - projects whose folder is gone are unregistered; a missing .hun.yml alone
+//     (another branch, a regenerated file) keeps the project;
+//   - a folder registered twice keeps one key;
+//   - a project follows a changed `name:` once busy reports it is not running
+//     and the new name is free;
+//   - newly found folders are registered unless the user removed them.
+func Reconcile(st *state.State, result Result, busy func(key string) bool) Changes {
+	changes := Changes{Renamed: make(map[string]string)}
 
-	names := make([]string, 0, len(result.Projects))
-	for name := range result.Projects {
-		names = append(names, name)
+	keys := make([]string, 0, len(st.Registry))
+	for key := range st.Registry {
+		keys = append(keys, key)
 	}
-	sort.Strings(names)
-	for _, name := range names {
-		path := result.Projects[name]
-		if current, ok := st.Registry[name]; ok && current != "" && config.ProjectExists(current) {
+	sort.Strings(keys)
+
+	byPath := make(map[string][]string)
+	names := make(map[string]string)
+	for _, key := range keys {
+		path := st.Registry[key]
+		if config.ProjectFolderGone(path) {
+			st.ForgetProject(key)
+			changes.Removed = append(changes.Removed, key)
 			continue
 		}
-		st.Registry[name] = path
-		dirty = true
+		canonical := canonicalPath(path)
+		byPath[canonical] = append(byPath[canonical], key)
+		if proj, err := config.LoadProject(path); err == nil {
+			names[key] = proj.Name
+		}
+	}
+
+	// Earlier versions registered a renamed project a second time.
+	for _, dupes := range byPath {
+		if len(dupes) < 2 {
+			continue
+		}
+		keep := dupes[0]
+		for _, key := range dupes {
+			if busy(key) {
+				keep = key
+				break
+			}
+			if key == names[key] {
+				keep = key
+			}
+		}
+		for _, key := range dupes {
+			if key != keep && !busy(key) {
+				st.ForgetProject(key)
+				changes.Removed = append(changes.Removed, key)
+			}
+		}
+	}
+
+	for _, key := range keys {
+		name := names[key]
+		if name == "" || name == key || busy(key) {
+			continue
+		}
+		if _, exists := st.Registry[key]; !exists {
+			continue
+		}
+		if st.RenameProject(key, name) {
+			changes.Renamed[key] = name
+		}
+	}
+
+	for _, found := range result.Projects {
+		if _, ok := st.KeyForPath(found.Path); ok || st.IsIgnored(found.Path) {
+			continue
+		}
+		changes.Added = append(changes.Added, st.RegisterPath(found.Name, found.Path))
 	}
 
 	if st.ActiveProject == "" {
-		for name, ps := range st.Projects {
-			if ps.Status == "running" {
-				if _, ok := st.Registry[name]; ok {
-					st.ActiveProject = name
+		for _, key := range keys {
+			if st.Projects[key].Status == "running" {
+				if _, ok := st.Registry[key]; ok {
+					st.ActiveProject = key
 					break
 				}
 			}
 		}
 	}
-
-	return result, dirty, nil
+	return changes
 }
 
-// Scan finds valid .hun.yml files below configured roots.
-func Scan(global *config.Global, registry map[string]string) (Result, error) {
-	roots := scanDirs(global, registry)
-	result := Result{
-		ScanDirs: roots,
-		Projects: make(map[string]string),
+func canonicalPath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
 	}
+	return filepath.Clean(path)
+}
 
-	candidates := make(map[string][]string)
+// Scan finds valid .hun.yml files below the configured roots.
+func Scan(global *config.Global) (Result, error) {
+	roots := scanDirs(global)
+	result := Result{ScanDirs: roots}
+
+	seen := make(map[string]bool)
 	for _, root := range roots {
 		if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 			if err != nil {
@@ -120,51 +194,37 @@ func Scan(global *config.Global, registry map[string]string) (Result, error) {
 				return nil
 			}
 
-			projectDir := filepath.Dir(path)
+			projectDir := filepath.Clean(filepath.Dir(path))
+			if seen[projectDir] {
+				return nil
+			}
+			seen[projectDir] = true
 			proj, loadErr := config.LoadProject(projectDir)
 			if loadErr != nil {
 				result.Warnings = append(result.Warnings, fmt.Sprintf("skipping %s: %v", path, loadErr))
 				return nil
 			}
-			candidates[proj.Name] = append(candidates[proj.Name], projectDir)
+			result.Projects = append(result.Projects, FoundProject{Name: proj.Name, Path: projectDir})
 			return nil
 		}); err != nil {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("scanning %s: %v", root, err))
 		}
 	}
 
-	names := make([]string, 0, len(candidates))
-	for name := range candidates {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	for _, name := range names {
-		paths := uniqueSortedPaths(candidates[name])
-		if len(paths) == 0 {
-			continue
-		}
-
-		chosen := paths[0]
-		if current, ok := registry[name]; ok && containsPath(paths, current) {
-			chosen = current
-		}
-		result.Projects[name] = chosen
-
-		for _, path := range paths {
-			if path == chosen {
-				continue
-			}
-			result.Warnings = append(result.Warnings, fmt.Sprintf("project %q also found at %s; using %s", name, path, chosen))
-		}
-	}
-
+	sort.Slice(result.Projects, func(i, j int) bool {
+		return result.Projects[i].Path < result.Projects[j].Path
+	})
 	return result, nil
 }
 
-func scanDirs(global *config.Global, registry map[string]string) []string {
+// scanDirs returns the configured scan roots, or the default developer
+// folders. Folders of individually added projects are never scanned: they
+// are already registered, and scanning their parents would pull in
+// unrelated projects (and walk folders such as ~/Desktop or ~ itself).
+func scanDirs(global *config.Global) []string {
 	seen := make(map[string]bool)
-	add := func(path string, requireExists bool, dirs *[]string) {
+	dirs := make([]string, 0)
+	add := func(path string) {
 		expanded := expandHome(strings.TrimSpace(path))
 		if expanded == "" {
 			return
@@ -177,39 +237,22 @@ func scanDirs(global *config.Global, registry map[string]string) []string {
 		if seen[clean] {
 			return
 		}
-		if requireExists {
-			info, err := os.Stat(clean)
-			if err != nil || !info.IsDir() {
-				return
-			}
+		if info, err := os.Stat(clean); err != nil || !info.IsDir() {
+			return
 		}
 		seen[clean] = true
-		*dirs = append(*dirs, clean)
+		dirs = append(dirs, clean)
 	}
 
-	dirs := make([]string, 0)
 	if global != nil && len(global.ScanDirs) > 0 {
 		for _, dir := range global.ScanDirs {
-			add(dir, true, &dirs)
+			add(dir)
 		}
 		return dirs
 	}
-
 	for _, dir := range []string{"~/side-projects", "~/projects", "~/dev", "~/work"} {
-		add(dir, true, &dirs)
+		add(dir)
 	}
-
-	registryPaths := make([]string, 0, len(registry))
-	for _, path := range registry {
-		if path != "" {
-			registryPaths = append(registryPaths, path)
-		}
-	}
-	sort.Strings(registryPaths)
-	for _, path := range registryPaths {
-		add(filepath.Dir(path), true, &dirs)
-	}
-
 	return dirs
 }
 
@@ -233,29 +276,4 @@ func shouldSkipDir(name string) bool {
 		return true
 	}
 	return strings.HasPrefix(name, ".") && name != "."
-}
-
-func uniqueSortedPaths(paths []string) []string {
-	seen := make(map[string]bool, len(paths))
-	out := make([]string, 0, len(paths))
-	for _, path := range paths {
-		clean := filepath.Clean(path)
-		if seen[clean] {
-			continue
-		}
-		seen[clean] = true
-		out = append(out, clean)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func containsPath(paths []string, target string) bool {
-	clean := filepath.Clean(target)
-	for _, path := range paths {
-		if filepath.Clean(path) == clean {
-			return true
-		}
-	}
-	return false
 }

@@ -71,7 +71,7 @@ func commandNeedsDocker(command string) bool {
 		if !expectingCommand {
 			continue
 		}
-		if isShellAssignment(token) || isCommandWrapper(token) || strings.HasPrefix(token, "-") {
+		if isShellAssignment(token) || isCommandWrapper(token) || isShellKeyword(token) || strings.HasPrefix(token, "-") {
 			continue
 		}
 		if isDockerExecutableToken(token) {
@@ -174,6 +174,17 @@ func isShellAssignment(token string) bool {
 func isCommandWrapper(token string) bool {
 	switch token {
 	case "command", "env", "exec", "nohup", "sudo":
+		return true
+	default:
+		return false
+	}
+}
+
+// isShellKeyword reports keywords that precede a command, as in
+// `if ...; then docker compose up; fi`.
+func isShellKeyword(token string) bool {
+	switch token {
+	case "if", "then", "else", "elif", "do", "while", "until", "!", "{":
 		return true
 	default:
 		return false

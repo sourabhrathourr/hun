@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/sourabhrathourr/hun/internal/config"
@@ -18,7 +21,9 @@ type State struct {
 	Mode          string                  `json:"mode"`
 	ActiveProject string                  `json:"active_project,omitempty"`
 	Projects      map[string]ProjectState `json:"projects"`
-	Registry      map[string]string       `json:"registry"` // name → path
+	Registry      map[string]string       `json:"registry"` // project key → path
+	// Ignored lists folders the user removed, so discovery leaves them out.
+	Ignored []string `json:"ignored,omitempty"`
 
 	mu   sync.Mutex `json:"-"`
 	path string     `json:"-"`
@@ -155,7 +160,7 @@ func pruneStaleRegistryEntries(s *State) bool {
 
 	dirty := false
 	for name, path := range s.Registry {
-		if path == "" || !config.ProjectExists(path) {
+		if config.ProjectFolderGone(path) {
 			delete(s.Registry, name)
 			delete(s.Projects, name)
 			if s.ActiveProject == name {
@@ -184,4 +189,178 @@ func pruneStaleRegistryEntries(s *State) bool {
 	}
 
 	return dirty
+}
+
+// KeyForPath returns the key a folder is registered under.
+func (s *State) KeyForPath(path string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.keyForPathLocked(path)
+}
+
+func (s *State) keyForPathLocked(path string) (string, bool) {
+	keys := make([]string, 0, len(s.Registry))
+	for key := range s.Registry {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if SamePath(s.Registry[key], path) {
+			return key, true
+		}
+	}
+	return "", false
+}
+
+// RegisterPath registers a folder and returns its key. A folder that is
+// already registered keeps its key. Otherwise the key is name, or a variant
+// derived from the folder when another folder already uses name, so clones,
+// worktrees and same-named folders can all be added. Registering a folder also
+// undoes an earlier removal of it.
+func (s *State) RegisterPath(name, path string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path = filepath.Clean(path)
+	s.unignoreLocked(path)
+	if key, ok := s.keyForPathLocked(path); ok {
+		return key
+	}
+	key := UniqueKey(name, path, func(candidate string) bool {
+		_, taken := s.Registry[candidate]
+		return taken
+	})
+	s.Registry[key] = path
+	ps := s.Projects[key]
+	if ps.Path == "" {
+		ps.Path = path
+	}
+	s.Projects[key] = ps
+	return key
+}
+
+// RemoveProject unregisters key and remembers its folder so discovery does
+// not add it back. It returns the folder.
+func (s *State) RemoveProject(key string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path, ok := s.Registry[key]
+	if !ok {
+		return "", false
+	}
+	s.dropLocked(key)
+	s.unignoreLocked(path)
+	s.Ignored = append(s.Ignored, filepath.Clean(path))
+	sort.Strings(s.Ignored)
+	return path, true
+}
+
+// ForgetProject unregisters key without remembering its folder, for
+// projects whose folder is gone or that duplicate another registration.
+func (s *State) ForgetProject(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dropLocked(key)
+}
+
+// RenameProject moves a registration and its saved state to newKey.
+func (s *State) RenameProject(oldKey, newKey string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path, ok := s.Registry[oldKey]
+	if !ok || oldKey == newKey {
+		return false
+	}
+	if _, taken := s.Registry[newKey]; taken {
+		return false
+	}
+	delete(s.Registry, oldKey)
+	s.Registry[newKey] = path
+	if ps, ok := s.Projects[oldKey]; ok {
+		delete(s.Projects, oldKey)
+		s.Projects[newKey] = ps
+	}
+	if s.ActiveProject == oldKey {
+		s.ActiveProject = newKey
+	}
+	return true
+}
+
+// IsIgnored reports whether the user removed this folder from Hun.
+func (s *State) IsIgnored(path string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, ignored := range s.Ignored {
+		if SamePath(ignored, path) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *State) unignoreLocked(path string) {
+	kept := s.Ignored[:0]
+	for _, ignored := range s.Ignored {
+		if !SamePath(ignored, path) {
+			kept = append(kept, ignored)
+		}
+	}
+	s.Ignored = kept
+}
+
+func (s *State) dropLocked(key string) {
+	delete(s.Registry, key)
+	delete(s.Projects, key)
+	if s.ActiveProject == key {
+		s.ActiveProject = ""
+	}
+}
+
+// UniqueKey picks a project key for a folder: name when it is free, then the
+// folder's own name, then "<parent>-<name>", then numbered variants.
+func UniqueKey(name, path string, taken func(string) bool) string {
+	name = sanitizeKey(name)
+	if name == "" {
+		name = sanitizeKey(filepath.Base(path))
+	}
+	base := sanitizeKey(filepath.Base(path))
+	parent := sanitizeKey(filepath.Base(filepath.Dir(path)))
+	candidates := []string{name}
+	if base != "" && base != name {
+		candidates = append(candidates, base)
+	}
+	if parent != "" && parent != "." && parent != string(filepath.Separator) {
+		candidates = append(candidates, parent+"-"+name)
+	}
+	for _, candidate := range candidates {
+		if candidate != "" && !taken(candidate) {
+			return candidate
+		}
+	}
+	for i := 2; ; i++ {
+		candidate := name + "-" + strconv.Itoa(i)
+		if !taken(candidate) {
+			return candidate
+		}
+	}
+}
+
+// sanitizeKey keeps keys usable in `hun run <project>:<service>`.
+func sanitizeKey(name string) string {
+	name = strings.TrimSpace(name)
+	return strings.NewReplacer(":", "-", "/", "-").Replace(name)
+}
+
+// SamePath reports whether two paths name the same folder, resolving
+// symlinks such as /var → /private/var.
+func SamePath(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if a == b {
+		return true
+	}
+	ra, errA := filepath.EvalSymlinks(a)
+	rb, errB := filepath.EvalSymlinks(b)
+	return errA == nil && errB == nil && ra == rb
 }

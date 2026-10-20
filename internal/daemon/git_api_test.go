@@ -79,82 +79,10 @@ func TestGitStatusReportsBranchDivergenceAndWorkingTreeChanges(t *testing.T) {
 	}
 }
 
-func TestGitActionsExposeDiffStageCommitAndBranchSwitching(t *testing.T) {
+func TestGitBranchActionsCreateListAndSwitch(t *testing.T) {
 	daemon, repository := newGitTestDaemon(t)
 	writeGitTestFile(t, repository, "tracked.txt", "first\nsecond\n")
-
-	diffResponse := daemon.HandleRequest(Request{
-		Action:  "git_diff",
-		Project: "repo",
-		Path:    "tracked.txt",
-	})
-	if !diffResponse.OK {
-		t.Fatalf("git_diff response error: %s", diffResponse.Error)
-	}
-	var diff struct {
-		Content string `json:"content"`
-	}
-	if err := json.Unmarshal(diffResponse.Data, &diff); err != nil {
-		t.Fatalf("unmarshal diff: %v", err)
-	}
-	if !containsLine(diff.Content, "+second") {
-		t.Fatalf("diff does not contain added line:\n%s", diff.Content)
-	}
-
-	stageResponse := daemon.HandleRequest(Request{
-		Action:  "git_stage",
-		Project: "repo",
-		Path:    "tracked.txt",
-	})
-	if !stageResponse.OK {
-		t.Fatalf("git_stage response error: %s", stageResponse.Error)
-	}
-
-	stagedDiffResponse := daemon.HandleRequest(Request{
-		Action:  "git_diff",
-		Project: "repo",
-		Path:    "tracked.txt",
-		Staged:  true,
-	})
-	if !stagedDiffResponse.OK {
-		t.Fatalf("staged git_diff response error: %s", stagedDiffResponse.Error)
-	}
-	if err := json.Unmarshal(stagedDiffResponse.Data, &diff); err != nil {
-		t.Fatalf("unmarshal staged diff: %v", err)
-	}
-	if !containsLine(diff.Content, "+second") {
-		t.Fatalf("staged diff does not contain added line:\n%s", diff.Content)
-	}
-
-	unstageResponse := daemon.HandleRequest(Request{
-		Action:  "git_unstage",
-		Project: "repo",
-		Path:    "tracked.txt",
-	})
-	if !unstageResponse.OK {
-		t.Fatalf("git_unstage response error: %s", unstageResponse.Error)
-	}
-	if output := runGitTest(t, repository, "diff", "--cached", "--name-only"); output != "" {
-		t.Fatalf("cached changes after unstage = %q", output)
-	}
-
-	if response := daemon.HandleRequest(Request{
-		Action:  "git_stage",
-		Project: "repo",
-		Path:    "tracked.txt",
-	}); !response.OK {
-		t.Fatalf("second git_stage response error: %s", response.Error)
-	}
-	if response := daemon.HandleRequest(Request{
-		Action:  "git_commit",
-		Project: "repo",
-		Message: "Update tracked file",
-	}); !response.OK {
-		t.Fatalf("git_commit response error: %s", response.Error)
-	}
-	if subject := runGitTest(t, repository, "log", "-1", "--pretty=%s"); subject != "Update tracked file\n" {
-		t.Fatalf("commit subject = %q", subject)
-	}
+	runGitTest(t, repository, "commit", "-am", "Update tracked file")
 
 	if response := daemon.HandleRequest(Request{
 		Action:  "git_create_branch",
@@ -197,96 +125,13 @@ func TestGitActionsExposeDiffStageCommitAndBranchSwitching(t *testing.T) {
 	}
 }
 
-func TestGitStageAllStagesTrackedAndUntrackedChanges(t *testing.T) {
-	daemon, repository := newGitTestDaemon(t)
-	writeGitTestFile(t, repository, "tracked.txt", "updated\n")
-	writeGitTestFile(t, repository, "untracked.txt", "new\n")
-
-	response := daemon.HandleRequest(Request{
-		Action:  "git_stage_all",
-		Project: "repo",
-	})
-	if !response.OK {
-		t.Fatalf("git_stage_all response error: %s", response.Error)
-	}
-
-	staged := runGitTest(t, repository, "diff", "--cached", "--name-only")
-	if !containsLine(staged, "tracked.txt") || !containsLine(staged, "untracked.txt") {
-		t.Fatalf("staged files = %q, want tracked.txt and untracked.txt", staged)
-	}
-	if unstaged := runGitTest(t, repository, "diff", "--name-only"); unstaged != "" {
-		t.Fatalf("unstaged files after git_stage_all = %q", unstaged)
-	}
-
-	var diff GitDiff
-	diffResponse := daemon.HandleRequest(Request{
-		Action:  "git_diff",
-		Project: "repo",
-		Path:    "untracked.txt",
-		Staged:  true,
-	})
-	if !diffResponse.OK {
-		t.Fatalf("staged git_diff for added file response error: %s", diffResponse.Error)
-	}
-	if err := json.Unmarshal(diffResponse.Data, &diff); err != nil {
-		t.Fatalf("unmarshal staged added-file diff: %v", err)
-	}
-	if !containsLine(diff.Content, "+new") {
-		t.Fatalf("staged added-file diff does not contain content:\n%s", diff.Content)
-	}
-}
-
-func TestCappedGitOutputRetainsOnlyItsLimitAndSignalsCancellation(t *testing.T) {
-	cancellations := 0
-	output := cappedGitOutput{
-		limit:   5,
-		onLimit: func() { cancellations++ },
-	}
-
-	written, err := output.Write([]byte("123456789"))
-	if err != nil {
-		t.Fatalf("write capped output: %v", err)
-	}
-	if written != 9 {
-		t.Fatalf("reported bytes written = %d, want 9", written)
-	}
-	if got := output.buffer.String(); got != "12345" {
-		t.Fatalf("captured output = %q, want %q", got, "12345")
-	}
-	if !output.truncated || cancellations != 1 {
-		t.Fatalf(
-			"truncated = %v, cancellations = %d, want true and 1",
-			output.truncated,
-			cancellations,
-		)
-	}
-
-	_, _ = output.Write([]byte("more"))
-	if got := output.buffer.String(); got != "12345" {
-		t.Fatalf("captured output after overflow = %q, want unchanged", got)
-	}
-	if cancellations != 1 {
-		t.Fatalf("cancellations after repeated overflow = %d, want 1", cancellations)
-	}
-}
-
-func TestGitRemoteActionsFetchPullAndPushThroughConfiguredRemote(t *testing.T) {
+func TestGitFetchReportsRemoteCommits(t *testing.T) {
 	daemon, repository := newGitTestDaemon(t)
 	remote := t.TempDir()
 	runGitTest(t, remote, "init", "--bare")
 	runGitTest(t, repository, "remote", "add", "origin", remote)
 	runGitTest(t, repository, "push", "-u", "origin", "main")
 	runGitTest(t, remote, "symbolic-ref", "HEAD", "refs/heads/main")
-
-	writeGitTestFile(t, repository, "local.txt", "from local\n")
-	runGitTest(t, repository, "add", "local.txt")
-	runGitTest(t, repository, "commit", "-m", "Local change")
-	if response := daemon.HandleRequest(Request{
-		Action:  "git_push",
-		Project: "repo",
-	}); !response.OK {
-		t.Fatalf("git_push response error: %s", response.Error)
-	}
 
 	clone := t.TempDir()
 	runGitTest(t, clone, "clone", remote, ".")
@@ -315,171 +160,26 @@ func TestGitRemoteActionsFetchPullAndPushThroughConfiguredRemote(t *testing.T) {
 		t.Fatalf("behind after fetch = %d, want 1", fetchedStatus.Behind)
 	}
 
+}
+
+func TestGitSwitchBranchCanStashLocalChanges(t *testing.T) {
+	daemon, repository := newGitTestDaemon(t)
+	runGitTest(t, repository, "branch", "feature")
+	writeGitTestFile(t, repository, "tracked.txt", "uncommitted\n")
+
 	if response := daemon.HandleRequest(Request{
-		Action:  "git_pull",
+		Action:  "git_switch_branch",
 		Project: "repo",
+		Branch:  "feature",
+		Stash:   true,
 	}); !response.OK {
-		t.Fatalf("git_pull response error: %s", response.Error)
+		t.Fatalf("git_switch_branch response error: %s", response.Error)
 	}
-	if contents, err := os.ReadFile(filepath.Join(repository, "remote.txt")); err != nil ||
-		string(contents) != "from remote\n" {
-		t.Fatalf("pulled remote file = %q, %v", contents, err)
+	if branch := runGitTest(t, repository, "branch", "--show-current"); branch != "feature\n" {
+		t.Fatalf("current branch = %q", branch)
 	}
-}
-
-func TestGitUpdateBranchProtectsAndRestoresLocalChanges(t *testing.T) {
-	daemon, repository := newGitTestDaemon(t)
-	remote := t.TempDir()
-	runGitTest(t, remote, "init", "--bare")
-	runGitTest(t, repository, "remote", "add", "origin", remote)
-	runGitTest(t, repository, "push", "-u", "origin", "main")
-	runGitTest(t, remote, "symbolic-ref", "HEAD", "refs/heads/main")
-
-	clone := t.TempDir()
-	runGitTest(t, clone, "clone", remote, ".")
-	runGitTest(t, clone, "config", "user.name", "Hun Remote")
-	runGitTest(t, clone, "config", "user.email", "remote@example.test")
-	writeGitTestFile(t, clone, "remote.txt", "from remote\n")
-	runGitTest(t, clone, "add", "remote.txt")
-	runGitTest(t, clone, "commit", "-m", "Remote change")
-	runGitTest(t, clone, "push", "origin", "main")
-
-	writeGitTestFile(t, repository, "tracked.txt", "older saved work\n")
-	runGitTest(t, repository, "stash", "push", "-m", "Existing user stash")
-	existingStash := strings.TrimSpace(runGitTest(t, repository, "rev-parse", "refs/stash"))
-
-	writeGitTestFile(t, repository, "tracked.txt", "local staged\n")
-	runGitTest(t, repository, "add", "tracked.txt")
-	writeGitTestFile(t, repository, "tracked.txt", "local unstaged\n")
-	writeGitTestFile(t, repository, "untracked.txt", "keep me\n")
-
-	response := daemon.HandleRequest(Request{
-		Action:  "git_update_branch",
-		Project: "repo",
-		Stash:   true,
-	})
-	if !response.OK {
-		t.Fatalf("git_update_branch response error: %s", response.Error)
-	}
-
-	var result GitUpdateResult
-	if err := json.Unmarshal(response.Data, &result); err != nil {
-		t.Fatalf("unmarshal update result: %v", err)
-	}
-	if result.UpdatedCommits != 1 || !result.ProtectedChanges || !result.RestoredChanges {
-		t.Fatalf("update result = %+v, want one commit with protected and restored changes", result)
-	}
-	if contents, err := os.ReadFile(filepath.Join(repository, "remote.txt")); err != nil ||
-		string(contents) != "from remote\n" {
-		t.Fatalf("updated remote file = %q, %v", contents, err)
-	}
-	if contents, err := os.ReadFile(filepath.Join(repository, "tracked.txt")); err != nil ||
-		string(contents) != "local unstaged\n" {
-		t.Fatalf("restored tracked file = %q, %v", contents, err)
-	}
-	if contents, err := os.ReadFile(filepath.Join(repository, "untracked.txt")); err != nil ||
-		string(contents) != "keep me\n" {
-		t.Fatalf("restored untracked file = %q, %v", contents, err)
-	}
-	if diff := runGitTest(t, repository, "diff", "--cached", "--", "tracked.txt"); !strings.Contains(diff, "+local staged") {
-		t.Fatalf("staged state was not restored:\n%s", diff)
-	}
-	if diff := runGitTest(t, repository, "diff", "--", "tracked.txt"); !strings.Contains(diff, "+local unstaged") {
-		t.Fatalf("unstaged state was not restored:\n%s", diff)
-	}
-	if remainingStash := strings.TrimSpace(runGitTest(t, repository, "rev-parse", "refs/stash")); remainingStash != existingStash {
-		t.Fatalf("existing stash changed from %q to %q", existingStash, remainingStash)
-	}
-	if stashList := runGitTest(t, repository, "stash", "list"); strings.Count(strings.TrimSpace(stashList), "\n") != 0 {
-		t.Fatalf("successful update changed the existing stash list: %q", stashList)
-	}
-}
-
-func TestGitUpdateBranchRefusesToGuessWhenHistoryDiverged(t *testing.T) {
-	daemon, repository := newGitTestDaemon(t)
-	remote := t.TempDir()
-	runGitTest(t, remote, "init", "--bare")
-	runGitTest(t, repository, "remote", "add", "origin", remote)
-	runGitTest(t, repository, "push", "-u", "origin", "main")
-	runGitTest(t, remote, "symbolic-ref", "HEAD", "refs/heads/main")
-
-	writeGitTestFile(t, repository, "local.txt", "local commit\n")
-	runGitTest(t, repository, "add", "local.txt")
-	runGitTest(t, repository, "commit", "-m", "Local change")
-	localHead := runGitTest(t, repository, "rev-parse", "HEAD")
-
-	clone := t.TempDir()
-	runGitTest(t, clone, "clone", remote, ".")
-	runGitTest(t, clone, "config", "user.name", "Hun Remote")
-	runGitTest(t, clone, "config", "user.email", "remote@example.test")
-	writeGitTestFile(t, clone, "remote.txt", "remote commit\n")
-	runGitTest(t, clone, "add", "remote.txt")
-	runGitTest(t, clone, "commit", "-m", "Remote change")
-	runGitTest(t, clone, "push", "origin", "main")
-
-	response := daemon.HandleRequest(Request{
-		Action:  "git_update_branch",
-		Project: "repo",
-		Stash:   true,
-	})
-	if response.OK || !strings.Contains(response.Error, "rebase or merge") {
-		t.Fatalf("git_update_branch response = %+v, want diverged-history guidance", response)
-	}
-	if head := runGitTest(t, repository, "rev-parse", "HEAD"); head != localHead {
-		t.Fatalf("local HEAD changed from %q to %q", localHead, head)
-	}
-	if _, err := os.Stat(filepath.Join(repository, "remote.txt")); !os.IsNotExist(err) {
-		t.Fatalf("diverged update modified the working tree: %v", err)
-	}
-}
-
-func TestGitUpdateBranchStopsWhenSubmoduleChangesCannotBeStashed(t *testing.T) {
-	daemon, repository := newGitTestDaemon(t)
-	submodule := t.TempDir()
-	runGitTest(t, submodule, "init", "-b", "main")
-	runGitTest(t, submodule, "config", "user.name", "Hun Dependency")
-	runGitTest(t, submodule, "config", "user.email", "dependency@example.test")
-	writeGitTestFile(t, submodule, "dependency.txt", "committed\n")
-	runGitTest(t, submodule, "add", "dependency.txt")
-	runGitTest(t, submodule, "commit", "-m", "Dependency")
-	runGitTest(t, repository, "-c", "protocol.file.allow=always", "submodule", "add", submodule, "dependency")
-	runGitTest(t, repository, "commit", "-m", "Add dependency")
-
-	remote := t.TempDir()
-	runGitTest(t, remote, "init", "--bare")
-	runGitTest(t, repository, "remote", "add", "origin", remote)
-	runGitTest(t, repository, "push", "-u", "origin", "main")
-	runGitTest(t, remote, "symbolic-ref", "HEAD", "refs/heads/main")
-
-	clone := t.TempDir()
-	runGitTest(t, clone, "clone", remote, ".")
-	runGitTest(t, clone, "config", "user.name", "Hun Remote")
-	runGitTest(t, clone, "config", "user.email", "remote@example.test")
-	writeGitTestFile(t, clone, "remote.txt", "remote commit\n")
-	runGitTest(t, clone, "add", "remote.txt")
-	runGitTest(t, clone, "commit", "-m", "Remote change")
-	runGitTest(t, clone, "push", "origin", "main")
-
-	writeGitTestFile(t, repository, "dependency/dependency.txt", "uncommitted dependency work\n")
-	localHead := runGitTest(t, repository, "rev-parse", "HEAD")
-	response := daemon.HandleRequest(Request{
-		Action:  "git_update_branch",
-		Project: "repo",
-		Stash:   true,
-	})
-
-	if response.OK || !strings.Contains(response.Error, "did not create a safety stash") {
-		t.Fatalf("git_update_branch response = %+v, want unstashable-work error", response)
-	}
-	if head := runGitTest(t, repository, "rev-parse", "HEAD"); head != localHead {
-		t.Fatalf("local HEAD changed from %q to %q", localHead, head)
-	}
-	if contents, err := os.ReadFile(filepath.Join(repository, "dependency", "dependency.txt")); err != nil ||
-		string(contents) != "uncommitted dependency work\n" {
-		t.Fatalf("submodule work changed = %q, %v", contents, err)
-	}
-	if _, err := os.Stat(filepath.Join(repository, "remote.txt")); !os.IsNotExist(err) {
-		t.Fatalf("blocked update modified the working tree: %v", err)
+	if stashes := runGitTest(t, repository, "stash", "list"); stashes == "" {
+		t.Fatal("local changes were not stashed")
 	}
 }
 

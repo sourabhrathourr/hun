@@ -75,13 +75,26 @@ final class HunLicenseManager {
     init(
         configuration: HunLicenseConfiguration = .current,
         service: HunLicenseServing? = nil,
-        store: HunLicenseStoring = HunKeychainLicenseStore(),
+        store: HunLicenseStoring = HunLicenseStores.default,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.configuration = configuration
         self.service = service ?? HunDodoLicenseService(baseURL: configuration.apiBaseURL)
         self.store = store
         self.now = now
+        // A license validated within the offline grace period opens the app on
+        // the first frame; restore() then confirms it with the server.
+        if let stored = try? store.load(), mayUseCachedLicense(stored) {
+            state = .active(stored.session(isOffline: false))
+        }
+    }
+
+    private func mayUseCachedLicense(_ stored: HunStoredLicense) -> Bool {
+        HunLicensePolicy.mayUseOffline(
+            lastValidatedAt: stored.lastValidatedAt,
+            now: now(),
+            configuration: configuration
+        )
     }
 
     var isLicensed: Bool {
@@ -95,12 +108,15 @@ final class HunLicenseManager {
     }
 
     func restore() async {
-        state = .checking
         errorMessage = nil
 
         guard let stored = try? store.load() else {
             state = .needsActivation
             return
+        }
+        let mayUseCached = mayUseCachedLicense(stored)
+        if !mayUseCached {
+            state = .checking
         }
 
         do {
@@ -120,11 +136,7 @@ final class HunLicenseManager {
             try store.save(refreshed)
             state = .active(refreshed.session(isOffline: false))
         } catch {
-            if HunLicensePolicy.mayUseOffline(
-                lastValidatedAt: stored.lastValidatedAt,
-                now: now(),
-                configuration: configuration
-            ) {
+            if mayUseCached {
                 state = .active(stored.session(isOffline: true))
             } else {
                 state = .unavailable(
@@ -439,6 +451,50 @@ nonisolated protocol HunLicenseStoring: Sendable {
     func load() throws -> HunStoredLicense?
     func save(_ license: HunStoredLicense) throws
     func delete() throws
+}
+
+enum HunLicenseStores {
+#if DEBUG
+    /// Debug builds are re-signed on every build, so the Keychain treats each
+    /// one as a new app and asks for the login password. Keep the dev license
+    /// in a private file instead.
+    static let `default`: HunLicenseStoring = HunFileLicenseStore(
+        url: HunPaths.homeURL.appendingPathComponent("license.json"),
+        migratingFrom: HunKeychainLicenseStore()
+    )
+#else
+    static let `default`: HunLicenseStoring = HunKeychainLicenseStore()
+#endif
+}
+
+struct HunFileLicenseStore: HunLicenseStoring {
+    let url: URL
+    /// Where a license saved by an earlier build lives; copied over once.
+    var migratingFrom: HunLicenseStoring? = nil
+
+    func load() throws -> HunStoredLicense? {
+        if let data = try? Data(contentsOf: url) {
+            return try JSONDecoder().decode(HunStoredLicense.self, from: data)
+        }
+        guard let previous = try migratingFrom?.load() else { return nil }
+        try save(previous)
+        try? migratingFrom?.delete()
+        return previous
+    }
+
+    func save(_ license: HunStoredLicense) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try JSONEncoder().encode(license).write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+
+    func delete() throws {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        try FileManager.default.removeItem(at: url)
+    }
 }
 
 struct HunKeychainLicenseStore: HunLicenseStoring {

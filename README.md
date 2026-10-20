@@ -18,7 +18,7 @@ terminals, viewing logs, and managing Git workflows.
 - Start, stop, and restart project services from one native interface.
 - Open terminal sessions alongside the project they belong to.
 - Search live service logs without opening another terminal pane.
-- Review Git changes, inspect diffs, and draft commit messages.
+- Switch Git branches from the project header.
 - Keep important controls available from the menu bar.
 - Run one focused project or several projects side by side.
 

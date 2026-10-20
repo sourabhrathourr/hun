@@ -74,6 +74,9 @@ var statusCmd = &cobra.Command{
 				if info.Port > 0 {
 					port = fmt.Sprintf(":%d", info.Port)
 				}
+				if info.External {
+					statusStr += " (outside hun)"
+				}
 				fmt.Printf("  %-20s %s %-6s %s\n", svc, readyMark, port, statusStr)
 			}
 			fmt.Println()

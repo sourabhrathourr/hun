@@ -1,11 +1,27 @@
 ---
 name: hun
-description: Use when creating, validating, or updating .hun.yml files for Hun projects, especially when inspecting a repository to decide local, Docker Compose, or hybrid service orchestration.
+description: Use when starting, stopping, restarting, or checking dev servers and services in a project that has a .hun.yml, and when creating, validating, or updating .hun.yml files, especially when inspecting a repository to decide local, Docker Compose, or hybrid service orchestration.
 ---
 
-# Hun Config
+# Hun
 
-Use this skill to create or improve `.hun.yml` for a development project. Hun runs project services from this file, so treat it as an operational contract: infer carefully, ask when the run strategy is ambiguous, and validate before finishing.
+Hun runs a project's dev services from `.hun.yml` and shows them, with their logs, in one place. Use this skill both to run services through Hun and to create or improve `.hun.yml`. Treat `.hun.yml` as an operational contract: infer carefully, ask when the run strategy is ambiguous, and validate before finishing.
+
+## Running services
+
+When the project has a `.hun.yml` and you need a dev server, backend, worker, or database running, go through Hun instead of starting it yourself. Hun captures the logs where the user is looking and keeps ports from colliding across projects.
+
+- `hun status` shows what is running and on which ports, including services started outside Hun. Check it first, especially before assuming a port is free.
+- `hun run <project>` starts every service; `hun run <project>:<service>` starts one service and its dependencies.
+- `hun restart <project>:<service>` restarts one service. If the service was started outside Hun, this stops that instance and runs it under Hun.
+- `hun logs <project>:<service>` prints recent output; `hun tail <project>:<service>` follows it.
+- `hun stop <project>` stops a project, whoever started its services.
+
+Do not run `npm run dev`, `docker compose up`, `uvicorn`, and similar service commands directly for a Hun project unless the user asks you to. If a command fails because a port is in use, run `hun status` to see what holds it rather than killing processes yourself.
+
+The project name is the `name` field in `.hun.yml`.
+
+The rest of this skill covers creating and improving `.hun.yml`.
 
 ## Workflow
 

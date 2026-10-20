@@ -16,8 +16,10 @@ var rootCmd = &cobra.Command{
 	Long:  "hun.sh manages your development services, captures logs, and lets you switch between projects instantly.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if st, err := state.Load(); err == nil {
-			if _, dirty, reconcileErr := discovery.ReconcileState(st); reconcileErr == nil && dirty {
-				_ = st.Save()
+			if !daemonOwnsState() {
+				if _, dirty, reconcileErr := discovery.ReconcileState(st); reconcileErr == nil && dirty {
+					_ = st.Save()
+				}
 			}
 			if shouldPromptAutoOnboard(isInteractiveTerminal(), len(st.Registry)) {
 				ok, confirmErr := confirmPrompt("No projects registered. Start onboarding now? [Y/n] ")

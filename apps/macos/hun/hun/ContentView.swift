@@ -14,7 +14,7 @@ struct ContentView: View {
     @State private var collapsedSections: Set<String> = []
     @State private var presentedSheet: DashboardSheet?
     @State private var terminalController = HunTerminalController()
-    @State private var gitWorkspace = HunGitWorkspaceModel()
+    @State private var branchSwitcher = HunBranchModel()
     @FocusState private var sidebarSearchFocused: Bool
     private let sidebarWidth: CGFloat = 250
 
@@ -79,14 +79,9 @@ struct ContentView: View {
                 sidebarRevealLayer
             }
 
-            if gitWorkspace.isBranchPickerPresented {
-                HunGitBranchDialogOverlay(model: gitWorkspace)
+            if branchSwitcher.isBranchPickerPresented {
+                HunGitBranchDialogOverlay(model: branchSwitcher)
                     .zIndex(20)
-            }
-
-            if gitWorkspace.isUpdateBranchPresented {
-                HunGitUpdateBranchDialogOverlay(model: gitWorkspace)
-                    .zIndex(21)
             }
         }
         .background(AppTheme.appBackground)
@@ -102,8 +97,11 @@ struct ContentView: View {
         .ignoresSafeArea(.container, edges: .top)
         .animation(.spring(response: 0.34, dampingFraction: 0.86), value: sidebarDocked)
         .animation(.spring(response: 0.32, dampingFraction: 0.88), value: sidebarRevealed)
-        .animation(.easeOut(duration: 0.14), value: gitWorkspace.isBranchPickerPresented)
-        .animation(.easeOut(duration: 0.14), value: gitWorkspace.isUpdateBranchPresented)
+        .animation(.easeOut(duration: 0.14), value: branchSwitcher.isBranchPickerPresented)
+        // A branch switched from Hun shows in the header without waiting for the next poll.
+        .onChange(of: branchSwitcher.status?.branch) { _, _ in
+            store.refreshNow()
+        }
         .focusedSceneValue(
             \.hunTerminalCommand,
             HunTerminalCommandAction(
@@ -167,7 +165,12 @@ struct ContentView: View {
             Rectangle().fill(AppTheme.divider).frame(height: 1)
 
             if let lastError = store.lastError {
-                ErrorBanner(message: lastError, onDismiss: { store.clearLastError() })
+                ErrorBanner(
+                    message: lastError,
+                    actionTitle: store.portConflict == nil ? nil : "Stop it & retry",
+                    onAction: { store.resolvePortConflict() },
+                    onDismiss: { store.clearLastError() }
+                )
                 Rectangle().fill(AppTheme.divider).frame(height: 1)
             }
 
@@ -208,7 +211,7 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 ProjectDetailView(
                     project: project,
-                    gitWorkspace: gitWorkspace,
+                    onOpenBranchSwitcher: { branchSwitcher.isBranchPickerPresented = true },
                     mode: store.globalMode,
                     pendingAction: store.projectAction(for: project),
                     logSearch: $logSearch,
@@ -226,7 +229,9 @@ struct ContentView: View {
                     onRunService: { service in store.run(service, in: project) },
                     onRestartService: { service in store.restart(service, in: project) },
                     onStopService: { service in store.stop(service, in: project) },
-                    onRemoveService: { service in store.remove(service, from: project) }
+                    onRemoveService: { service in store.remove(service, from: project) },
+                    onStopHolderAndRun: { service in store.stopHolderAndRun(service, in: project) },
+                    isServiceBusy: { service in store.serviceAction(for: service, in: project) != nil }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -252,9 +257,8 @@ struct ContentView: View {
                 reduceMotion ? nil : .easeOut(duration: 0.16),
                 value: terminalController.isPresented
             )
-            .task(id: project.id) {
-                await gitWorkspace.monitor(projectID: project.id)
-            }
+            .onAppear { branchSwitcher.select(projectID: project.id) }
+            .onChange(of: project.id) { _, id in branchSwitcher.select(projectID: id) }
         }
     }
 
@@ -268,7 +272,11 @@ struct ContentView: View {
             collapsedSections: $collapsedSections,
             onSelectProject: openProject,
             onToggleSidebar: { if docked { collapseSidebar() } else { dockSidebar() } },
-            onSettings: { presentedSheet = .settings }
+            onSettings: { presentedSheet = .settings },
+            unmanaged: store.model.unmanaged,
+            onStopUnmanaged: { process in store.stop(process) },
+            onAddUnmanaged: { process in store.addProject(from: process) },
+            onRemoveProject: { project in store.remove(project) }
         )
     }
 
@@ -418,6 +426,10 @@ private struct SidebarColumnView: View {
     let onSelectProject: (String) -> Void
     let onToggleSidebar: () -> Void
     let onSettings: () -> Void
+    let unmanaged: [HunUnmanagedProcess]
+    let onStopUnmanaged: (HunUnmanagedProcess) -> Void
+    let onAddUnmanaged: (HunUnmanagedProcess) -> Void
+    let onRemoveProject: (HunProject) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -434,7 +446,11 @@ private struct SidebarColumnView: View {
                 activeID: activeID,
                 collapsedSections: $collapsedSections,
                 onSelectProject: onSelectProject,
-                onSettings: onSettings
+                onSettings: onSettings,
+                unmanaged: unmanaged,
+                onStopUnmanaged: onStopUnmanaged,
+                onAddUnmanaged: onAddUnmanaged,
+                onRemoveProject: onRemoveProject
             )
         }
     }
@@ -466,6 +482,12 @@ private struct SidebarView: View {
     @Binding var collapsedSections: Set<String>
     let onSelectProject: (String) -> Void
     let onSettings: () -> Void
+    let unmanaged: [HunUnmanagedProcess]
+    let onStopUnmanaged: (HunUnmanagedProcess) -> Void
+    let onAddUnmanaged: (HunUnmanagedProcess) -> Void
+    let onRemoveProject: (HunProject) -> Void
+
+    private static let elsewhereSectionID = "__running_elsewhere__"
 
     private var allProjects: [HunProject] {
         workspaceGroups.flatMap { $0.projects }
@@ -494,6 +516,9 @@ private struct SidebarView: View {
                             title: group.name,
                             projects: filtered(group.projects)
                         )
+                    }
+                    if !unmanaged.isEmpty {
+                        runningElsewhereSection
                     }
                 }
                 .padding(.horizontal, 6)
@@ -534,7 +559,34 @@ private struct SidebarView: View {
                         SidebarProjectRow(
                             project: project,
                             selected: project.id == activeID,
-                            onTap: { onSelectProject(project.id) }
+                            onTap: { onSelectProject(project.id) },
+                            onRemove: { onRemoveProject(project) }
+                        )
+                    }
+                }
+                .padding(.top, 2)
+            }
+        }
+    }
+
+    /// Dev servers Hun can see but no registered service accounts for.
+    @ViewBuilder
+    private var runningElsewhereSection: some View {
+        let id = Self.elsewhereSectionID
+        let collapsed = collapsedSections.contains(id)
+        VStack(alignment: .leading, spacing: 1) {
+            SidebarSectionHeader(
+                title: "Running elsewhere",
+                isCollapsed: collapsed,
+                onToggle: { withAnimation(.easeOut(duration: 0.15)) { toggle(id) } }
+            )
+            if !collapsed {
+                VStack(spacing: 1) {
+                    ForEach(unmanaged) { process in
+                        UnmanagedProcessRow(
+                            process: process,
+                            onStop: { onStopUnmanaged(process) },
+                            onAddProject: process.project == nil ? { onAddUnmanaged(process) } : nil
                         )
                     }
                 }
@@ -606,6 +658,8 @@ private struct SidebarSearchField: View {
 
 private struct ErrorBanner: View {
     let message: String
+    var actionTitle: String? = nil
+    var onAction: () -> Void = {}
     let onDismiss: () -> Void
     @State private var hovering = false
 
@@ -620,6 +674,9 @@ private struct ErrorBanner: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer()
+            if let actionTitle {
+                InlineActionButton(title: actionTitle, action: onAction)
+            }
             Button(action: onDismiss) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .bold))
@@ -633,6 +690,27 @@ private struct ErrorBanner: View {
         .padding(.horizontal, 16)
         .frame(height: 30)
         .background(AppTheme.warning.opacity(0.08))
+    }
+}
+
+/// A compact text button for actions inside banners and rows.
+private struct InlineActionButton: View {
+    let title: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(title, action: action)
+            .buttonStyle(.plain)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(AppTheme.textPrimary)
+            .padding(.horizontal, 8)
+            .frame(height: 20)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(hovering ? AppTheme.hover : AppTheme.selection)
+            )
+            .onHover { hovering = $0 }
     }
 }
 
@@ -689,6 +767,65 @@ private struct HunUpdateBanner: View {
     }
 }
 
+private struct UnmanagedProcessRow: View {
+    let process: HunUnmanagedProcess
+    let onStop: () -> Void
+    let onAddProject: (() -> Void)?
+    @State private var hovering = false
+
+    private var url: URL? {
+        URL(string: "http://localhost:\(process.port)")
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(AppTheme.success.opacity(0.7))
+                .frame(width: 6, height: 6)
+                .padding(.leading, 22)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("\(process.command) :\(process.port)")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(AppTheme.textPrimary)
+                    .lineLimit(1)
+                Text(process.project.map { "\($0) · not in .hun.yml" } ?? HunPortHolder.abbreviate(process.cwd))
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(AppTheme.textTertiary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+            }
+            Spacer(minLength: 4)
+            if hovering {
+                if let url {
+                    ToolbarIconButton(systemImage: "arrow.up.right", helpText: "Open \(url.absoluteString)") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                ToolbarIconButton(systemImage: "stop.fill", helpText: "Stop this process", action: onStop)
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(hovering ? AppTheme.hover : Color.clear)
+        )
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .help("pid \(process.pid) · \(process.cwd)")
+        .contextMenu {
+            if let url {
+                Button("Open \(url.absoluteString)") { NSWorkspace.shared.open(url) }
+            }
+            if let onAddProject {
+                Button("Add Project to Hun…", action: onAddProject)
+            }
+            Divider()
+            Button("Stop Process", role: .destructive, action: onStop)
+        }
+    }
+}
+
 private struct SidebarSectionHeader: View {
     let title: String
     let isCollapsed: Bool
@@ -730,7 +867,9 @@ private struct SidebarProjectRow: View {
     let project: HunProject
     let selected: Bool
     let onTap: () -> Void
+    let onRemove: () -> Void
     @State private var hovering = false
+    @State private var confirmingRemoval = false
 
     var body: some View {
         Button(action: onTap) {
@@ -762,6 +901,22 @@ private struct SidebarProjectRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+        .help(project.path)
+        .contextMenu {
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: project.path)])
+            }
+            Divider()
+            Button("Remove from Hun…", role: .destructive) { confirmingRemoval = true }
+        }
+        .confirmationDialog(
+            "Remove \(project.name) from Hun?",
+            isPresented: $confirmingRemoval
+        ) {
+            Button("Remove", role: .destructive, action: onRemove)
+        } message: {
+            Text("Hun stops its services and stops listing it. The folder and its .hun.yml are not touched; add it again any time.")
+        }
     }
 
     private var textColor: Color {
@@ -1118,7 +1273,7 @@ private struct ProjectDetailView: View {
     private var servicesPanelWidth = Double(HunWorkspacePanelMetrics.servicesDefaultWidth)
 
     let project: HunProject
-    let gitWorkspace: HunGitWorkspaceModel
+    let onOpenBranchSwitcher: () -> Void
     let mode: HunMode
     let pendingAction: HunActionKind?
     @Binding var logSearch: String
@@ -1137,6 +1292,8 @@ private struct ProjectDetailView: View {
     let onRestartService: (HunService) -> Void
     let onStopService: (HunService) -> Void
     let onRemoveService: (HunService) -> Void
+    let onStopHolderAndRun: (HunService) -> Void
+    let isServiceBusy: (HunService) -> Bool
 
     private var selectedService: HunService? {
         project.services.first { $0.id == selectedServiceID }
@@ -1146,7 +1303,7 @@ private struct ProjectDetailView: View {
         VStack(spacing: 0) {
             ProjectHeaderView(
                 project: project,
-                gitWorkspace: gitWorkspace,
+                onOpenBranchSwitcher: onOpenBranchSwitcher,
                 mode: mode,
                 pendingAction: pendingAction,
                 onFocus: onFocus,
@@ -1161,47 +1318,39 @@ private struct ProjectDetailView: View {
 
             Rectangle().fill(AppTheme.divider).frame(height: 1)
 
-            HunProjectWorkspaceSwitcher(model: gitWorkspace)
-
-            Rectangle().fill(AppTheme.divider).frame(height: 1)
-
-            if gitWorkspace.isWorkspacePresented {
-                HunGitWorkspaceView(project: project, model: gitWorkspace)
-                    .transition(.opacity)
-            } else {
-                HunResizableWorkspaceSplit(
-                    preferredWidth: $servicesPanelWidth,
-                    accessibilityLabel: "Resize services panel"
-                ) {
-                    ServicesPanelView(
-                        services: project.services,
-                        selectedID: $selectedServiceID,
-                        selectedScope: $selectedLogScope,
-                        onOpenConfig: onOpenConfig,
-                        onRun: onRunService,
-                        onRestart: onRestartService,
-                        onStop: onStopService,
-                        onRemove: onRemoveService
-                    )
-                    .background(AppTheme.appBackground)
-                } detail: {
-                    LogsPanelView(
-                        selectedService: selectedService,
-                        scope: $selectedLogScope,
-                        logs: visibleLogs,
-                        searchText: $logSearch
-                    )
-                }
-                .transition(.opacity)
+            HunResizableWorkspaceSplit(
+                preferredWidth: $servicesPanelWidth,
+                accessibilityLabel: "Resize services panel"
+            ) {
+                ServicesPanelView(
+                    services: project.services,
+                    selectedID: $selectedServiceID,
+                    selectedScope: $selectedLogScope,
+                    onOpenConfig: onOpenConfig,
+                    onRun: onRunService,
+                    onRestart: onRestartService,
+                    onStop: onStopService,
+                    onRemove: onRemoveService,
+                    onStopHolderAndRun: onStopHolderAndRun,
+                    isBusy: isServiceBusy
+                )
+                .background(AppTheme.appBackground)
+            } detail: {
+                LogsPanelView(
+                    selectedService: selectedService,
+                    scope: $selectedLogScope,
+                    logs: visibleLogs,
+                    searchText: $logSearch,
+                    onRestartService: onRestartService
+                )
             }
         }
-        .animation(.easeOut(duration: 0.14), value: gitWorkspace.isWorkspacePresented)
     }
 }
 
 private struct ProjectHeaderView: View {
     let project: HunProject
-    let gitWorkspace: HunGitWorkspaceModel
+    let onOpenBranchSwitcher: () -> Void
     let mode: HunMode
     let pendingAction: HunActionKind?
     let onFocus: () -> Void
@@ -1262,8 +1411,8 @@ private struct ProjectHeaderView: View {
 
                 HStack(spacing: 14) {
                     StatusMetaItem(status: project.status)
-                    if project.branch != nil || gitWorkspace.status?.isRepository == true {
-                        HunRepositoryStatusCapsule(project: project, model: gitWorkspace)
+                    if let branch = project.branch {
+                        HunRepositoryStatusCapsule(branch: branch, onOpen: onOpenBranchSwitcher)
                     }
                     MetaItem(icon: "folder", text: collapsePath(project.path))
                 }
@@ -1520,6 +1669,8 @@ private struct ServicesPanelView: View {
     let onRestart: (HunService) -> Void
     let onStop: (HunService) -> Void
     let onRemove: (HunService) -> Void
+    let onStopHolderAndRun: (HunService) -> Void
+    let isBusy: (HunService) -> Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1558,7 +1709,9 @@ private struct ServicesPanelView: View {
                             onRestart: { onRestart(service) },
                             onStop: { onStop(service) },
                             onRemove: { onRemove(service) },
-                            onOpenConfig: onOpenConfig
+                            onOpenConfig: onOpenConfig,
+                            onStopHolderAndRun: { onStopHolderAndRun(service) },
+                            busy: isBusy(service)
                         )
                     }
                 }
@@ -1579,6 +1732,8 @@ private struct ServiceRowView: View {
     let onStop: () -> Void
     let onRemove: () -> Void
     let onOpenConfig: () -> Void
+    let onStopHolderAndRun: () -> Void
+    let busy: Bool
     @State private var hovering = false
 
     var body: some View {
@@ -1590,10 +1745,24 @@ private struct ServiceRowView: View {
                         Text(service.name)
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(AppTheme.textPrimary)
+                        if service.isExternal {
+                            Text("outside Hun")
+                                .font(.system(size: 9.5, weight: .medium))
+                                .foregroundStyle(AppTheme.textSecondary)
+                                .padding(.horizontal, 5)
+                                .frame(height: 15)
+                                .background(Capsule().fill(AppTheme.selection))
+                                .help(service.externalSourceText + ". Restart to run it in Hun with logs.")
+                        }
                         Spacer()
-                        Text(service.status.title.lowercased())
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(AppTheme.textTertiary)
+                        if busy {
+                            ProgressView()
+                                .controlSize(.mini)
+                        } else {
+                            Text(service.status.title.lowercased())
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(AppTheme.textTertiary)
+                        }
                     }
                     Text(service.command)
                         .font(.system(size: 11, design: .monospaced))
@@ -1607,6 +1776,21 @@ private struct ServiceRowView: View {
                             icon: service.ready ? "checkmark.circle" : "circle.dashed",
                             text: service.ready ? "ready" : "waiting"
                         )
+                    }
+                    if let holder = service.conflict {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 9.5))
+                                .foregroundStyle(AppTheme.warning)
+                            Text("Port \(holder.port) held by \(holder.summary)")
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(AppTheme.textSecondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Spacer(minLength: 4)
+                            InlineActionButton(title: "Stop it & run", action: onStopHolderAndRun)
+                                .disabled(busy)
+                        }
                     }
                 }
                 .padding(10)
@@ -1693,6 +1877,7 @@ private struct LogsPanelView: View {
     @Binding var scope: LogScope
     let logs: [HunLogLine]
     @Binding var searchText: String
+    var onRestartService: (HunService) -> Void = { _ in }
 
     @State private var copyConfirmCount: Int = 0
     @State private var copyConfirmStamp: Date?
@@ -1734,7 +1919,9 @@ private struct LogsPanelView: View {
 
             Rectangle().fill(AppTheme.divider).frame(height: 1)
 
-            if logs.isEmpty {
+            if logs.isEmpty, scope == .service, let service = selectedService, service.isExternal {
+                ExternalLogsEmptyState(service: service, onRestart: { onRestartService(service) })
+            } else if logs.isEmpty {
                 LogsEmptyState()
             } else {
                 LogsTailContainer(
@@ -1902,6 +2089,34 @@ private struct LogsEmptyState: View {
             Text("Output from this service will appear here.")
                 .font(.system(size: 11))
                 .foregroundStyle(AppTheme.textTertiary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Shown for a service started outside Hun: its output went to whatever
+/// started it, so Hun can only show logs after it restarts the service.
+private struct ExternalLogsEmptyState: View {
+    let service: HunService
+    let onRestart: () -> Void
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "arrow.triangle.branch")
+                .font(.system(size: 22, weight: .light))
+                .foregroundStyle(AppTheme.textTertiary)
+            Text("Started outside Hun")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(AppTheme.textSecondary)
+            Text(service.isDocker
+                ? "Restart to attach Hun to this container and stream its logs here."
+                : "Its output goes to the terminal or tool that started it. Restart to run it in Hun and capture logs here.")
+                .font(.system(size: 11))
+                .foregroundStyle(AppTheme.textTertiary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 300)
+            InlineActionButton(title: "Restart in Hun", action: onRestart)
+                .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

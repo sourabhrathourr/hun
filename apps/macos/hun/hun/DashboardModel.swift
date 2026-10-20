@@ -45,6 +45,8 @@ final class HunStore {
     var isAddingProject = false
     var pendingProjectReview: HunProjectInitReview?
     var lastError: String?
+    /// Set when the last action failed because something else holds a port.
+    var portConflict: HunPortConflict?
     var pendingActions: Set<HunActionKey> = []
     var daemonInfo: HunDaemonInfo?
     var daemonSettingsError: String?
@@ -143,8 +145,12 @@ final class HunStore {
     func start() async {
         guard !hasStarted else { return }
         hasStarted = true
-        installAgentSkillIfPossible()
+        // Paint from the daemon's cached registry (a few ms), then rescan
+        // project folders. Installing the agent skill copies files, so it
+        // waits until the dashboard is on screen.
+        await refresh(force: false)
         await refresh(force: true)
+        installAgentSkillIfPossible()
         startPolling()
     }
 
@@ -154,6 +160,7 @@ final class HunStore {
 
     func clearLastError() {
         lastError = nil
+        portConflict = nil
     }
 
     func refreshDaemonInfo() async {
@@ -184,6 +191,20 @@ final class HunStore {
             daemonSettingsError = error.localizedDescription
             isConnected = false
         }
+    }
+
+    /// Adds the repository a running dev server belongs to.
+    func addProject(from process: HunUnmanagedProcess) {
+        var url = URL(fileURLWithPath: process.cwd, isDirectory: true)
+        var candidate = url
+        while candidate.path != "/" {
+            if FileManager.default.fileExists(atPath: candidate.appendingPathComponent(".git").path) {
+                url = candidate
+                break
+            }
+            candidate.deleteLastPathComponent()
+        }
+        Task { await addProject(at: url) }
     }
 
     func addProject(at url: URL) async {
@@ -421,6 +442,39 @@ final class HunStore {
         }
     }
 
+    /// Stops whatever holds a stopped service's port, then runs the service.
+    func stopHolderAndRun(_ service: HunService, in project: HunProject) {
+        guard let holder = service.conflict else { return }
+        perform(key: .service(project.id, service.id, .startService)) { [self] in
+            try await self.client.freePort(holder.port)
+            try await self.client.startService(project.id, service: service.id, mode: self.globalMode.daemonMode)
+        }
+    }
+
+    /// Stops the holder named by the last port conflict, then retries the action that hit it.
+    func resolvePortConflict() {
+        guard let conflict = portConflict else { return }
+        portConflict = nil
+        lastError = nil
+        perform(key: conflict.key) { [self] in
+            try await self.client.freePort(conflict.holder.port)
+            try await conflict.retry()
+        }
+    }
+
+    /// Unregisters a project; its folder and files are left alone.
+    func remove(_ project: HunProject) {
+        perform(key: .project(project.id, .stopProject)) { [self] in
+            try await self.client.removeProject(project.id)
+        }
+    }
+
+    func stop(_ process: HunUnmanagedProcess) {
+        perform { [self] in
+            try await self.client.freePort(process.port)
+        }
+    }
+
     func remove(_ service: HunService, from project: HunProject) {
         perform(key: .service(project.id, service.id, .removeService)) { [self] in
             try await self.client.removeService(project.id, service: service.id)
@@ -469,9 +523,15 @@ final class HunStore {
             do {
                 try await operation()
                 lastError = nil
+                portConflict = nil
+                await refresh(force: true)
+            } catch HunDaemonError.portConflict(let message, let holder) {
+                lastError = message
+                portConflict = HunPortConflict(holder: holder, key: key, retry: operation)
                 await refresh(force: true)
             } catch {
                 lastError = error.localizedDescription
+                portConflict = nil
             }
         }
     }
@@ -513,12 +573,26 @@ final class HunStore {
         let projects = snapshot.projects.map { project in
             HunProject(snapshot: project, activeID: snapshot.activeProject, logs: logsByProject[project.id] ?? [])
         }
+        // A project renamed in .hun.yml comes back under a new ID; keep its
+        // tab and selection by matching the folder.
+        let previousPaths = Dictionary(model.projects.map { ($0.id, $0.path) }, uniquingKeysWith: { first, _ in first })
+        let idsByPath = Dictionary(projects.map { ($0.path, $0.id) }, uniquingKeysWith: { first, _ in first })
+        let currentIDs = Set(projects.map(\.id))
+        func followRename(_ id: HunProject.ID) -> HunProject.ID {
+            guard !currentIDs.contains(id), let path = previousPaths[id], let renamed = idsByPath[path] else { return id }
+            return renamed
+        }
+        openTabIDs = openTabIDs.map(followRename)
+        if let selected = selectedProjectID {
+            selectedProjectID = followRename(selected)
+        }
         model = HunDashboardModel(
             projects: projects,
             selectedProjectID: selectedProjectID,
             selectedServiceID: selectedServiceID,
             warnings: snapshot.warnings,
-            scanDirs: snapshot.scanDirs
+            scanDirs: snapshot.scanDirs,
+            unmanaged: snapshot.unmanaged
         )
 
         let validIDs = Set(projects.map(\.id))
@@ -699,8 +773,17 @@ nonisolated struct HunDashboardModel {
     var selectedServiceID: HunService.ID?
     var warnings: [String]
     var scanDirs: [String]
+    /// Dev servers listening on ports that no registered service accounts for.
+    var unmanaged: [HunUnmanagedProcess] = []
 
     static let empty = HunDashboardModel(projects: [], selectedProjectID: nil, selectedServiceID: nil, warnings: [], scanDirs: [])
+}
+
+/// A failed action and the process holding the port it needed.
+struct HunPortConflict {
+    let holder: HunPortHolder
+    let key: HunActionKey?
+    let retry: () async throws -> Void
 }
 
 nonisolated struct HunProject: Identifiable, Hashable {
@@ -760,6 +843,12 @@ nonisolated struct HunService: Identifiable, Hashable {
     var pid: Int
     var port: Int
     var ready: Bool
+    /// Running, but started outside Hun (a terminal, an agent, Docker Desktop).
+    var isExternal: Bool
+    var isDocker: Bool
+    var container: String?
+    /// What holds the configured port while this service is stopped.
+    var conflict: HunPortHolder?
 
     init(snapshot: HunDaemonService) {
         id = snapshot.id
@@ -769,6 +858,17 @@ nonisolated struct HunService: Identifiable, Hashable {
         pid = snapshot.pid
         port = snapshot.port
         ready = snapshot.ready
+        isExternal = snapshot.origin == "external"
+        isDocker = snapshot.runtime == "docker"
+        container = snapshot.container
+        conflict = snapshot.conflict
+    }
+
+    var externalSourceText: String {
+        if isDocker, let container, !container.isEmpty {
+            return "Started outside Hun · Docker container \(container)"
+        }
+        return pid > 0 ? "Started outside Hun · pid \(pid)" : "Started outside Hun"
     }
 
     var pidText: String {
@@ -780,7 +880,7 @@ nonisolated struct HunService: Identifiable, Hashable {
     }
 
     var browserURL: URL? {
-        guard status == .running, pid > 0, port > 0 else { return nil }
+        guard status == .running, pid > 0 || isExternal, port > 0 else { return nil }
         var components = URLComponents()
         components.scheme = "http"
         components.host = "localhost"

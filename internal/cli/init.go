@@ -2,13 +2,16 @@ package cli
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/sourabhrathourr/hun/internal/client"
 	"github.com/sourabhrathourr/hun/internal/config"
+	"github.com/sourabhrathourr/hun/internal/daemon"
 	"github.com/sourabhrathourr/hun/internal/detect"
 	"github.com/sourabhrathourr/hun/internal/state"
 	"github.com/spf13/cobra"
@@ -111,27 +114,56 @@ var initCmd = &cobra.Command{
 	},
 }
 
+// registerProject registers dir and reports the key it got. A running
+// daemon owns state.json, so the change goes through it; otherwise the file
+// is edited directly.
 func registerProject(name, dir string) error {
-	st, err := state.Load()
+	key, err := registerProjectPath(name, dir)
 	if err != nil {
 		return err
 	}
-
-	if st.IsRegistered(name) {
-		existingPath := st.Registry[name]
-		if existingPath != dir {
-			return fmt.Errorf("project %q already registered at %s", name, existingPath)
-		}
-		fmt.Printf("Project %s already registered.\n", name)
-		return nil
+	if key != name {
+		fmt.Printf("%s Registered project: %s (another folder already uses %q)\n", checkmark(), key, name)
+	} else {
+		fmt.Printf("%s Registered project: %s\n", checkmark(), key)
 	}
-
-	st.Register(name, dir)
-	if err := st.Save(); err != nil {
-		return err
-	}
-	fmt.Printf("%s Registered project: %s\n", checkmark(), name)
 	return nil
+}
+
+// daemonOwnsState reports whether a running daemon owns state.json, in which
+// case the CLI must not rewrite the registry behind its back.
+func daemonOwnsState() bool {
+	c, err := client.New()
+	return err == nil && c.Running()
+}
+
+func registerProjectPath(name, dir string) (string, error) {
+	if c, err := client.New(); err == nil && c.Running() {
+		resp, err := c.Send(daemon.Request{Action: "register_project", Path: dir})
+		if err != nil {
+			return "", err
+		}
+		if !resp.OK {
+			return "", fmt.Errorf("%s", resp.Error)
+		}
+		var payload struct {
+			Project string `json:"project"`
+		}
+		if err := json.Unmarshal(resp.Data, &payload); err != nil {
+			return "", err
+		}
+		return payload.Project, nil
+	}
+
+	st, err := state.Load()
+	if err != nil {
+		return "", err
+	}
+	key := st.RegisterPath(name, dir)
+	if err := st.Save(); err != nil {
+		return "", err
+	}
+	return key, nil
 }
 
 func detectedToProject(name string, result detect.Result) *config.Project {

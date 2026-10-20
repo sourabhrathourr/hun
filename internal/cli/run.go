@@ -13,22 +13,27 @@ func init() {
 }
 
 var runCmd = &cobra.Command{
-	Use:   "run <project>",
-	Short: "Start a project alongside others (Multitask Mode with port offset)",
+	Use:   "run <project>[:<service>]",
+	Short: "Start a project or one service alongside others (Multitask Mode with port offset)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		project := args[0]
+		project, service := parseTarget(args[0])
 
 		c, err := client.New()
 		if err != nil {
 			return err
 		}
 
-		resp, err := c.Send(daemon.Request{
+		req := daemon.Request{
 			Action:  "start",
 			Project: project,
 			Mode:    "parallel",
-		})
+		}
+		if service != "" {
+			req.Action = "start_service"
+			req.Service = service
+		}
+		resp, err := c.Send(req)
 		if err != nil {
 			return err
 		}
@@ -36,7 +41,11 @@ var runCmd = &cobra.Command{
 			return fmt.Errorf("%s", resp.Error)
 		}
 
-		fmt.Printf("%s Started %s in parallel\n", checkmark(), project)
+		if service != "" {
+			fmt.Printf("%s Started %s:%s in parallel\n", checkmark(), project, service)
+		} else {
+			fmt.Printf("%s Started %s in parallel\n", checkmark(), project)
+		}
 		return nil
 	},
 }

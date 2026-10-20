@@ -21,6 +21,8 @@ nonisolated protocol HunDaemonClientProtocol: AnyObject {
     func stopService(_ project: String, service: String) async throws
     func restartProject(_ project: String) async throws
     func restartService(_ project: String, service: String) async throws
+    func freePort(_ port: Int) async throws
+    func removeProject(_ project: String) async throws
     func removeService(_ project: String, service: String) async throws
     func setMode(_ mode: HunMode, preferredProject: String?) async throws
     func logs(project: String, service: String?, lines: Int) async throws -> [HunDaemonLogLine]
@@ -35,17 +37,9 @@ nonisolated protocol HunDaemonClientProtocol: AnyObject {
 nonisolated protocol HunGitClientProtocol: AnyObject {
     func gitStatus(project: String) async throws -> HunGitStatus
     func gitBranches(project: String) async throws -> [HunGitBranch]
-    func gitDiff(project: String, path: String, staged: Bool) async throws -> HunGitDiff
-    func gitStage(project: String, path: String) async throws -> HunGitStatus
-    func gitStageAll(project: String) async throws -> HunGitStatus
-    func gitUnstage(project: String, path: String) async throws -> HunGitStatus
-    func gitCommit(project: String, message: String) async throws -> HunGitStatus
     func gitCreateBranch(project: String, branch: String) async throws -> HunGitStatus
     func gitSwitchBranch(project: String, branch: String, stash: Bool) async throws -> HunGitStatus
     func gitFetch(project: String) async throws -> HunGitStatus
-    func gitPull(project: String) async throws -> HunGitStatus
-    func gitUpdateBranch(project: String, protectLocalChanges: Bool) async throws -> HunGitUpdateResult
-    func gitPush(project: String) async throws -> HunGitStatus
 }
 
 nonisolated struct HunDaemonInfo: Decodable, Equatable {
@@ -177,6 +171,7 @@ nonisolated struct HunDaemonSnapshot: Decodable, Equatable {
     let projects: [HunDaemonProject]
     let warnings: [String]
     let lifecycleBusy: Bool
+    let unmanaged: [HunUnmanagedProcess]
 
     enum CodingKeys: String, CodingKey {
         case protocolVersion = "protocol"
@@ -187,6 +182,7 @@ nonisolated struct HunDaemonSnapshot: Decodable, Equatable {
         case projects
         case warnings
         case lifecycleBusy = "lifecycle_busy"
+        case unmanaged
     }
 
     init(
@@ -197,7 +193,8 @@ nonisolated struct HunDaemonSnapshot: Decodable, Equatable {
         lastScanAt: String?,
         projects: [HunDaemonProject],
         warnings: [String],
-        lifecycleBusy: Bool = false
+        lifecycleBusy: Bool = false,
+        unmanaged: [HunUnmanagedProcess] = []
     ) {
         self.protocolVersion = protocolVersion
         self.mode = mode
@@ -207,6 +204,7 @@ nonisolated struct HunDaemonSnapshot: Decodable, Equatable {
         self.projects = projects
         self.warnings = warnings
         self.lifecycleBusy = lifecycleBusy
+        self.unmanaged = unmanaged
     }
 
     init(from decoder: Decoder) throws {
@@ -219,6 +217,7 @@ nonisolated struct HunDaemonSnapshot: Decodable, Equatable {
         projects = try container.decodeIfPresent([HunDaemonProject].self, forKey: .projects) ?? []
         warnings = try container.decodeIfPresent([String].self, forKey: .warnings) ?? []
         lifecycleBusy = try container.decodeIfPresent(Bool.self, forKey: .lifecycleBusy) ?? false
+        unmanaged = try container.decodeIfPresent([HunUnmanagedProcess].self, forKey: .unmanaged) ?? []
     }
 }
 
@@ -305,6 +304,85 @@ nonisolated struct HunDaemonService: Decodable, Equatable {
     let status: String
     let running: Bool
     let ready: Bool
+    /// "hun" when Hun runs it, "external" when it was started elsewhere.
+    var origin: String? = nil
+    /// "process" or "docker".
+    var runtime: String? = nil
+    var container: String? = nil
+    /// What holds the configured port while the service is stopped.
+    var conflict: HunPortHolder? = nil
+}
+
+extension HunDaemonService {
+    enum CodingKeys: String, CodingKey {
+        case id, name, cmd, pid, port, status, running, ready, origin, runtime, container, conflict
+    }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        cmd = try container.decodeIfPresent(String.self, forKey: .cmd)
+        pid = try container.decode(Int.self, forKey: .pid)
+        port = try container.decode(Int.self, forKey: .port)
+        status = try container.decode(String.self, forKey: .status)
+        running = try container.decode(Bool.self, forKey: .running)
+        ready = try container.decode(Bool.self, forKey: .ready)
+        origin = try container.decodeIfPresent(String.self, forKey: .origin)
+        runtime = try container.decodeIfPresent(String.self, forKey: .runtime)
+        self.container = try container.decodeIfPresent(String.self, forKey: .container)
+        conflict = try container.decodeIfPresent(HunPortHolder.self, forKey: .conflict)
+    }
+}
+
+/// Whatever is listening on a port: a process, a container, or a service.
+nonisolated struct HunPortHolder: Decodable, Hashable, Sendable {
+    let port: Int
+    var pid: Int? = nil
+    var command: String? = nil
+    var cwd: String? = nil
+    var project: String? = nil
+    var service: String? = nil
+    var container: String? = nil
+    var managed: Bool? = nil
+
+    /// Short human description, e.g. "node · ~/scratch/demo".
+    var summary: String {
+        if let container, !container.isEmpty {
+            if let project, let service, !project.isEmpty, !service.isEmpty {
+                return "\(project)/\(service) container"
+            }
+            return "container \(container)"
+        }
+        var parts: [String] = []
+        if let project, let service, !project.isEmpty, !service.isEmpty {
+            parts.append("\(project)/\(service)")
+        }
+        parts.append(command.flatMap { $0.isEmpty ? nil : $0 } ?? "a process")
+        if let cwd, !cwd.isEmpty, cwd != "/" {
+            parts.append(HunPortHolder.abbreviate(cwd))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    static func abbreviate(_ path: String) -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if path == home { return "~" }
+        if path.hasPrefix(home + "/") { return "~" + path.dropFirst(home.count) }
+        return path
+    }
+}
+
+/// A dev server listening on a port that no registered service accounts for.
+nonisolated struct HunUnmanagedProcess: Decodable, Hashable, Identifiable {
+    let pid: Int
+    let command: String
+    let port: Int
+    var ports: [Int]? = nil
+    let cwd: String
+    var project: String? = nil
+
+    var id: Int { pid }
 }
 
 nonisolated struct HunDaemonLogLine: Decodable, Equatable {
@@ -324,7 +402,7 @@ nonisolated struct HunDaemonLogLine: Decodable, Equatable {
 }
 
 nonisolated final class HunDaemonClient: HunDaemonClientProtocol, HunGitClientProtocol {
-    static let requiredProtocol = 15
+    static let requiredProtocol = 16
     private let socketPath: String
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -384,6 +462,14 @@ nonisolated final class HunDaemonClient: HunDaemonClientProtocol, HunGitClientPr
         try await send(HunDaemonRequest(action: "remove_service", project: project, service: service))
     }
 
+    func freePort(_ port: Int) async throws {
+        try await send(HunDaemonRequest(action: "free_port", port: port))
+    }
+
+    func removeProject(_ project: String) async throws {
+        try await send(HunDaemonRequest(action: "remove_project", project: project))
+    }
+
     func setMode(_ mode: HunMode, preferredProject: String?) async throws {
         try await send(HunDaemonRequest(
             action: "focus",
@@ -404,31 +490,6 @@ nonisolated final class HunDaemonClient: HunDaemonClientProtocol, HunGitClientPr
         try await request(HunDaemonRequest(action: "git_branches", project: project))
     }
 
-    func gitDiff(project: String, path: String, staged: Bool) async throws -> HunGitDiff {
-        try await request(HunDaemonRequest(
-            action: "git_diff",
-            project: project,
-            path: path,
-            staged: staged
-        ))
-    }
-
-    func gitStage(project: String, path: String) async throws -> HunGitStatus {
-        try await request(HunDaemonRequest(action: "git_stage", project: project, path: path))
-    }
-
-    func gitStageAll(project: String) async throws -> HunGitStatus {
-        try await request(HunDaemonRequest(action: "git_stage_all", project: project))
-    }
-
-    func gitUnstage(project: String, path: String) async throws -> HunGitStatus {
-        try await request(HunDaemonRequest(action: "git_unstage", project: project, path: path))
-    }
-
-    func gitCommit(project: String, message: String) async throws -> HunGitStatus {
-        try await request(HunDaemonRequest(action: "git_commit", project: project, message: message))
-    }
-
     func gitCreateBranch(project: String, branch: String) async throws -> HunGitStatus {
         try await request(HunDaemonRequest(action: "git_create_branch", project: project, branch: branch))
     }
@@ -444,25 +505,6 @@ nonisolated final class HunDaemonClient: HunDaemonClientProtocol, HunGitClientPr
 
     func gitFetch(project: String) async throws -> HunGitStatus {
         try await request(HunDaemonRequest(action: "git_fetch", project: project))
-    }
-
-    func gitPull(project: String) async throws -> HunGitStatus {
-        try await request(HunDaemonRequest(action: "git_pull", project: project))
-    }
-
-    func gitUpdateBranch(
-        project: String,
-        protectLocalChanges: Bool
-    ) async throws -> HunGitUpdateResult {
-        try await request(HunDaemonRequest(
-            action: "git_update_branch",
-            project: project,
-            stash: protectLocalChanges
-        ))
-    }
-
-    func gitPush(project: String) async throws -> HunGitStatus {
-        try await request(HunDaemonRequest(action: "git_push", project: project))
     }
 
     func subscribe(
@@ -504,7 +546,11 @@ nonisolated final class HunDaemonClient: HunDaemonClientProtocol, HunGitClientPr
         }.value
         let envelope = try decoder.decode(HunDaemonEnvelope<T>.self, from: responseData)
         guard envelope.ok else {
-            throw HunDaemonError.daemon(envelope.error ?? "unknown daemon error")
+            let message = envelope.error ?? "unknown daemon error"
+            if let conflict = envelope.conflict {
+                throw HunDaemonError.portConflict(message, conflict)
+            }
+            throw HunDaemonError.daemon(message)
         }
         guard let data = envelope.data else {
             throw HunDaemonError.missingData
@@ -804,23 +850,24 @@ nonisolated private struct HunDaemonRequest: Encodable {
     var service: String?
     var path: String?
     var branch: String?
-    var message: String?
     var mode: String?
     var lines: Int?
-    var staged: Bool?
     var stash: Bool?
+    var port: Int?
 }
 
 nonisolated private struct HunDaemonEnvelope<T: Decodable>: Decodable {
     let ok: Bool
     let error: String?
     let data: T?
+    let conflict: HunPortHolder?
 }
 
 nonisolated private struct StatusPayload: Decodable {}
 
 nonisolated enum HunDaemonError: Error, LocalizedError, Sendable {
     case daemon(String)
+    case portConflict(String, HunPortHolder)
     case missingData
     case socket(String)
     case binaryNotFound
@@ -828,6 +875,8 @@ nonisolated enum HunDaemonError: Error, LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .daemon(let message):
+            return message
+        case .portConflict(let message, _):
             return message
         case .missingData:
             return "daemon response did not include data"

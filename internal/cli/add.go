@@ -37,14 +37,9 @@ var addCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-
-		if st.IsRegistered(proj.Name) {
-			existingPath := st.Registry[proj.Name]
-			if existingPath == dir {
-				fmt.Printf("Project %s already registered.\n", proj.Name)
-				return nil
-			}
-			return fmt.Errorf("project name %q already taken by %s", proj.Name, existingPath)
+		if key, ok := st.KeyForPath(dir); ok {
+			fmt.Printf("Project %s already registered.\n", key)
+			return nil
 		}
 
 		autoApprove, _ := cmd.Flags().GetBool("yes")
@@ -62,11 +57,11 @@ var addCmd = &cobra.Command{
 			}
 		}
 
-		st.Register(proj.Name, dir)
-		if err := st.Save(); err != nil {
+		key, err := registerProjectPath(proj.Name, dir)
+		if err != nil {
 			return err
 		}
-		fmt.Printf("%s Registered project: %s (%s)\n", checkmark(), proj.Name, dir)
+		fmt.Printf("%s Registered project: %s (%s)\n", checkmark(), key, dir)
 		return nil
 	},
 }

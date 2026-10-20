@@ -64,7 +64,8 @@ func TestLoadPrunesRegistryEntriesWithoutProjectConfig(t *testing.T) {
 		t.Fatalf("write valid config: %v", err)
 	}
 
-	missingDir := t.TempDir()
+	missingDir := filepath.Join(t.TempDir(), "deleted")
+	branchDir := t.TempDir() // folder exists, .hun.yml only on another branch
 
 	hunDir := filepath.Join(home, ".hun")
 	if err := os.MkdirAll(hunDir, 0o755); err != nil {
@@ -76,10 +77,12 @@ func TestLoadPrunesRegistryEntriesWithoutProjectConfig(t *testing.T) {
   "active_project": "missing",
   "projects": {
     "keep": {"status":"stopped"},
+    "branch": {"status":"stopped","icon_path":"/icon.png"},
     "missing": {"status":"running"}
   },
   "registry": {
     "keep": "` + validDir + `",
+    "branch": "` + branchDir + `",
     "missing": "` + missingDir + `"
   }
 }`
@@ -92,7 +95,10 @@ func TestLoadPrunesRegistryEntriesWithoutProjectConfig(t *testing.T) {
 		t.Fatalf("load: %v", err)
 	}
 	if _, ok := st.Registry["missing"]; ok {
-		t.Fatalf("expected missing project removed from registry")
+		t.Fatalf("expected project with deleted folder removed from registry")
+	}
+	if st.Registry["branch"] != branchDir || st.Projects["branch"].IconPath != "/icon.png" {
+		t.Fatalf("project whose .hun.yml is only missing must keep its registration and settings: %+v", st.Projects["branch"])
 	}
 	if _, ok := st.Projects["missing"]; ok {
 		t.Fatalf("expected missing project removed from projects map")

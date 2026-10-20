@@ -25,6 +25,9 @@ type Snapshot struct {
 	Projects      []SnapshotProject `json:"projects"`
 	Warnings      []string          `json:"warnings,omitempty"`
 	LifecycleBusy bool              `json:"lifecycle_busy,omitempty"`
+	// Unmanaged lists dev processes listening on ports that no registered
+	// service accounts for.
+	Unmanaged []SnapshotProcess `json:"unmanaged,omitempty"`
 }
 
 type SnapshotProject struct {
@@ -51,6 +54,13 @@ type SnapshotService struct {
 	Status  string `json:"status"`
 	Running bool   `json:"running"`
 	Ready   bool   `json:"ready"`
+	// Origin is "hun" when this daemon runs the service and "external" when
+	// it was started elsewhere (a terminal, an agent, Docker Desktop).
+	Origin    string `json:"origin,omitempty"`
+	Runtime   string `json:"runtime,omitempty"` // "process" or "docker"
+	Container string `json:"container,omitempty"`
+	// Conflict names what holds the configured port of a stopped service.
+	Conflict *PortHolder `json:"conflict,omitempty"`
 }
 
 func (m *Manager) Snapshot(forceDiscovery bool) (Snapshot, error) {
@@ -59,7 +69,7 @@ func (m *Manager) Snapshot(forceDiscovery bool) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 
-	return m.buildSnapshot(result, m.lastScanAt()), nil
+	return m.buildSnapshot(result, m.lastScanAt(), forceDiscovery), nil
 }
 
 // CachedSnapshot returns the last known registry without running discovery.
@@ -74,12 +84,19 @@ func (m *Manager) CachedSnapshot() Snapshot {
 	lastScanAt := m.lastDiscoveryScan
 	m.stateMu.Unlock()
 
-	return m.buildSnapshot(result, lastScanAt)
+	return m.buildSnapshot(result, lastScanAt, false)
 }
 
-func (m *Manager) buildSnapshot(result discovery.Result, lastScanAt time.Time) Snapshot {
+// buildSnapshot assembles the dashboard model. Only a forced refresh waits
+// for a fresh machine scan; regular polls use the last one so they return in
+// milliseconds.
+func (m *Manager) buildSnapshot(result discovery.Result, lastScanAt time.Time, freshObservation bool) Snapshot {
 	st := m.StateSnapshot()
 	status := m.Status()
+	attr := m.staleAttribution()
+	if freshObservation {
+		attr = m.attribution(observationMaxAge)
+	}
 
 	snapshot := Snapshot{
 		Protocol:      CurrentProtocolVersion,
@@ -88,6 +105,7 @@ func (m *Manager) buildSnapshot(result discovery.Result, lastScanAt time.Time) S
 		ScanDirs:      append([]string(nil), result.ScanDirs...),
 		LastScanAt:    lastScanAt,
 		Warnings:      append([]string(nil), result.Warnings...),
+		Unmanaged:     attr.Unmanaged,
 	}
 	if snapshot.Mode == "" {
 		snapshot.Mode = "focus"
@@ -100,7 +118,7 @@ func (m *Manager) buildSnapshot(result discovery.Result, lastScanAt time.Time) S
 	sort.Strings(names)
 
 	for _, name := range names {
-		project := m.snapshotProject(name, st.Registry[name], st, status[name])
+		project := m.snapshotProject(name, st.Registry[name], st, status[name], attr)
 		snapshot.Projects = append(snapshot.Projects, project)
 	}
 
@@ -114,18 +132,10 @@ func (m *Manager) ReconcileDiscovery(force bool) (discovery.Result, error) {
 	if !force && !m.lastDiscoveryScan.IsZero() && now.Sub(m.lastDiscoveryScan) < discoveryCacheTTL {
 		result := discovery.Result{
 			ScanDirs: append([]string(nil), m.discoveryScanDirs...),
-			Projects: make(map[string]string),
 			Warnings: append([]string(nil), m.discoveryWarnings...),
 		}
 		m.stateMu.Unlock()
 		return result, nil
-	}
-
-	onDisk, err := state.Load()
-	if err == nil {
-		for name, path := range onDisk.Registry {
-			m.st.Registry[name] = path
-		}
 	}
 	current := cloneRegistry(m.st.Registry)
 	m.stateMu.Unlock()
@@ -134,69 +144,40 @@ func (m *Manager) ReconcileDiscovery(force bool) (discovery.Result, error) {
 	if err != nil {
 		return discovery.Result{}, err
 	}
-	result, err := discovery.Scan(global, current)
+	result, err := discovery.Scan(global)
 	if err != nil {
 		return result, err
 	}
 
-	removals := make([]string, 0)
-	for name, path := range current {
-		if path == "" || !config.ProjectExists(path) {
-			removals = append(removals, name)
-		}
+	// Stop running projects whose folder was deleted before unregistering them.
+	names := make([]string, 0, len(current))
+	for name := range current {
+		names = append(names, name)
 	}
-	sort.Strings(removals)
-
-	for _, name := range removals {
-		if m.IsRunning(name) {
+	sort.Strings(names)
+	for _, name := range names {
+		if config.ProjectFolderGone(current[name]) && m.IsRunning(name) {
 			if err := m.StopProject(name); err != nil {
 				result.Warnings = append(result.Warnings, fmt.Sprintf("stopping removed project %q: %v", name, err))
 			}
 		}
 	}
 
+	// Running projects keep their key until they stop. Collect them before
+	// taking stateMu: Status() takes mu before stateMu.
+	running := make(map[string]bool)
+	m.mu.RLock()
+	for name := range m.processes {
+		running[name] = true
+	}
+	m.mu.RUnlock()
+
 	m.stateMu.Lock()
-	dirty := false
-	for _, name := range removals {
-		delete(m.st.Registry, name)
-		delete(m.st.Projects, name)
-		if m.st.ActiveProject == name {
-			m.st.ActiveProject = ""
-		}
-		dirty = true
-	}
-
-	names := make([]string, 0, len(result.Projects))
-	for name := range result.Projects {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		path := result.Projects[name]
-		currentPath, exists := m.st.Registry[name]
-		if exists && currentPath != "" && config.ProjectExists(currentPath) {
-			continue
-		}
-		m.st.Registry[name] = path
-		dirty = true
-	}
-
-	if m.st.ActiveProject == "" {
-		for name, ps := range m.st.Projects {
-			if ps.Status == "running" {
-				if _, ok := m.st.Registry[name]; ok {
-					m.st.ActiveProject = name
-					dirty = true
-					break
-				}
-			}
-		}
-	}
-
+	changes := discovery.Reconcile(m.st, result, func(key string) bool { return running[key] })
 	m.lastDiscoveryScan = now
 	m.discoveryScanDirs = append([]string(nil), result.ScanDirs...)
 	m.discoveryWarnings = append([]string(nil), result.Warnings...)
-	if dirty {
+	if changes.Dirty() {
 		err = m.st.Save()
 	}
 	m.stateMu.Unlock()
@@ -212,7 +193,7 @@ func (m *Manager) lastScanAt() time.Time {
 	return m.lastDiscoveryScan
 }
 
-func (m *Manager) snapshotProject(name, path string, st *state.State, live map[string]ServiceInfo) SnapshotProject {
+func (m *Manager) snapshotProject(name, path string, st *state.State, live map[string]ServiceInfo, attr Attribution) SnapshotProject {
 	projectState := st.Projects[name]
 	// Read the branch live so it reflects local checkouts without needing a
 	// restart; fall back to the last persisted value if the working tree
@@ -239,7 +220,11 @@ func (m *Manager) snapshotProject(name, path string, st *state.State, live map[s
 
 	proj, err := config.LoadProject(path)
 	if err != nil {
+		proj = nil
 		project.ConfigError = err.Error()
+		if !config.ProjectExists(path) {
+			project.ConfigError = "No .hun.yml in this folder. It may be on another branch."
+		}
 	} else {
 		project.Name = proj.Name
 		project.Services = servicesFromConfig(proj)
@@ -259,6 +244,7 @@ func (m *Manager) snapshotProject(name, path string, st *state.State, live map[s
 			Status:  normalizeServiceStatus(info),
 			Running: info.Running,
 			Ready:   info.Ready,
+			Origin:  "hun",
 		}
 		if idx, ok := byID[serviceName]; ok {
 			svc.Cmd = project.Services[idx].Cmd
@@ -268,11 +254,13 @@ func (m *Manager) snapshotProject(name, path string, st *state.State, live map[s
 		}
 	}
 
+	externalRunning := applyObservedServices(name, proj, project.Services, attr)
+
 	sort.Slice(project.Services, func(i, j int) bool {
 		return project.Services[i].Name < project.Services[j].Name
 	})
 
-	if len(live) > 0 {
+	if len(live) > 0 || externalRunning {
 		project.Status = "running"
 	}
 	for _, service := range project.Services {
@@ -282,6 +270,46 @@ func (m *Manager) snapshotProject(name, path string, st *state.State, live map[s
 		}
 	}
 	return project
+}
+
+// applyObservedServices marks services running outside Hun and records what
+// holds the configured port of services that are not running. It reports
+// whether any service runs externally.
+func applyObservedServices(project string, proj *config.Project, services []SnapshotService, attr Attribution) bool {
+	externalRunning := false
+	for i := range services {
+		svc := &services[i]
+		if svc.Running {
+			continue
+		}
+		if ext, ok := attr.external(project, svc.ID); ok {
+			svc.PID = ext.PID
+			svc.Port = ext.Port
+			svc.Status = "running"
+			svc.Running = true
+			svc.Ready = true
+			svc.Origin = "external"
+			svc.Runtime = "process"
+			if ext.Docker {
+				svc.Runtime = "docker"
+				svc.Container = ext.Container.Name
+			}
+			externalRunning = true
+			continue
+		}
+		if proj == nil || proj.Services[svc.ID] == nil {
+			continue
+		}
+		port := proj.Services[svc.ID].Port
+		if port <= 0 {
+			continue
+		}
+		if holder, ok := attr.Holders[port]; ok && !holder.Managed && !(holder.Project == project && holder.Service == svc.ID) {
+			conflict := holder
+			svc.Conflict = &conflict
+		}
+	}
+	return externalRunning
 }
 
 func servicesFromConfig(proj *config.Project) []SnapshotService {

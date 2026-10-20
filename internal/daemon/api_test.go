@@ -273,15 +273,26 @@ func TestDiscoveryRemovalStopsRunningProject(t *testing.T) {
 	}
 	waitForServiceRunning(t, m, "remove-running", "web")
 
+	// Only .hun.yml going away (another branch) keeps the project running.
 	if err := os.Remove(filepath.Join(projectDir, ".hun.yml")); err != nil {
 		t.Fatalf("remove .hun.yml: %v", err)
 	}
+	if _, err := m.ReconcileDiscovery(true); err != nil {
+		t.Fatalf("reconcile discovery: %v", err)
+	}
+	if !m.IsRunning("remove-running") {
+		t.Fatal("project stopped although only its .hun.yml was missing")
+	}
 
+	// Deleting the folder stops and unregisters it.
+	if err := os.RemoveAll(projectDir); err != nil {
+		t.Fatalf("delete project folder: %v", err)
+	}
 	if _, err := m.ReconcileDiscovery(true); err != nil {
 		t.Fatalf("reconcile discovery: %v", err)
 	}
 	if m.IsRunning("remove-running") {
-		t.Fatal("expected running project stopped after config removal")
+		t.Fatal("expected running project stopped after its folder was deleted")
 	}
 	snap := m.StateSnapshot()
 	if _, ok := snap.Registry["remove-running"]; ok {

@@ -88,7 +88,7 @@ def reply(conn, index):
         if index == 0 and mode == 'slow':
             time.sleep(0.8)
         payload = {'ok': True, 'data': {
-            'status': 'pong', 'protocol': 15, 'version': 'test',
+            'status': 'pong', 'protocol': 16, 'version': 'test',
             'commit': 'test', 'pid': os.getpid()
         }}
         conn.sendall(json.dumps(payload).encode() + bytes([10]))

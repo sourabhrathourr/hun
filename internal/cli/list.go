@@ -21,11 +21,13 @@ var listCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if _, dirty, err := discovery.ReconcileState(st); err != nil {
-			return err
-		} else if dirty {
-			if err := st.Save(); err != nil {
+		if !daemonOwnsState() {
+			if _, dirty, err := discovery.ReconcileState(st); err != nil {
 				return err
+			} else if dirty {
+				if err := st.Save(); err != nil {
+					return err
+				}
 			}
 		}
 
