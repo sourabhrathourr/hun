@@ -443,20 +443,22 @@ final class HunStore {
         }
     }
 
-    /// Runs a profile, or every service for nil. A stopped project starts it
-    /// in the current mode; a running one switches to it, changing only the
-    /// services that differ.
-    func run(_ project: HunProject, profile: String?) {
-        let isRunning = project.status == .running || project.status == .starting
+    /// Chooses a profile, or every service for nil. A running project switches
+    /// to it, changing only the services that differ; a stopped one stays
+    /// stopped and runs it next time.
+    func chooseProfile(_ profile: String?, for project: HunProject) {
+        let name = profile ?? HunProfile.allServices
+        guard project.status == .running || project.status == .starting else {
+            perform(key: .project(project.id, .switchProfile)) { [self] in
+                try await self.client.selectProfile(project.id, profile: name)
+            }
+            return
+        }
         if globalMode == .focus {
             selectProject(project.id)
         }
-        perform(key: .project(project.id, isRunning ? .switchProfile : .startProject)) { [self] in
-            try await self.client.runProfile(
-                project.id,
-                profile: profile ?? HunProfile.allServices,
-                mode: self.globalMode.daemonMode
-            )
+        perform(key: .project(project.id, .switchProfile)) { [self] in
+            try await self.client.runProfile(project.id, profile: name, mode: self.globalMode.daemonMode)
         }
     }
 

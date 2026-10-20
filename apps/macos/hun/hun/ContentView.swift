@@ -242,7 +242,7 @@ struct ContentView: View {
                     logFeed: store.logFeed,
                     onFocus: { store.focus(project) },
                     onRun: { store.run(project) },
-                    onRunProfile: { profile in store.run(project, profile: profile) },
+                    onRunProfile: { profile in store.chooseProfile(profile, for: project) },
                     onSaveProfile: { name in store.saveRunningServicesAsProfile(named: name, for: project) },
                     onRestart: { store.restart(project) },
                     onStop: { store.stop(project) },
@@ -1824,8 +1824,8 @@ private struct MetaItem: View {
 
 enum ActionStyle { case primary, secondary, danger }
 
-/// Picks which of a project's profiles runs. Choosing one runs it: a stopped
-/// project starts it, a running one switches, changing only what differs.
+/// Picks which of a project's profiles runs. A running project switches,
+/// changing only what differs; a stopped one runs it the next time it starts.
 private struct ProfileMenu: View {
     let project: HunProject
     let isSwitching: Bool

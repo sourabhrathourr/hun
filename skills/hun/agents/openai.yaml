@@ -1,6 +1,6 @@
 interface:
   display_name: "Hun"
-  short_description: "Run project services through Hun and maintain .hun.yml"
-  default_prompt: "Use $hun to inspect this repo and create or improve .hun.yml."
+  short_description: "Run dev services through Hun and set up .hun.yml and profiles"
+  default_prompt: "Use $hun to set up .hun.yml for this project."
 policy:
   allow_implicit_invocation: true

@@ -82,9 +82,6 @@ struct MenuBarView: View {
         }
         .frame(width: 340)
         .background(AppTheme.menuBackground)
-        .task {
-            await store.refresh(force: true)
-        }
     }
 
     private func row(_ project: HunProject) -> some View {

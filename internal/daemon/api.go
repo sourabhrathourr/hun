@@ -141,6 +141,8 @@ func (d *Daemon) HandleRequest(req Request) Response {
 		return d.handleFocus(req)
 	case "save_profile":
 		return d.handleSaveProfile(req)
+	case "select_profile":
+		return d.handleSelectProfile(req)
 	case "validate_config":
 		if _, err := config.ParseProject([]byte(req.Content)); err != nil {
 			return errorResponse(err.Error())
@@ -183,7 +185,7 @@ func (d *Daemon) acquireLifecycle(timeout time.Duration) bool {
 func serializesLifecycle(action string) bool {
 	switch action {
 	case "start", "start_service", "stop", "stop_service", "remove_service", "restart", "focus",
-		"register_project", "add_project", "remove_project", "free_port", "save_profile", "save_config":
+		"register_project", "add_project", "remove_project", "free_port", "save_profile", "select_profile", "save_config":
 		return true
 	default:
 		return false
@@ -276,6 +278,27 @@ func (d *Daemon) handleSaveProfile(req Request) Response {
 	}
 	d.manager.rememberProfile(req.Project, name)
 	return successResponse(map[string]string{"status": "profile_saved", "profile": name})
+}
+
+// handleSelectProfile makes a profile the one Run uses next, without starting
+// anything; switching a running project goes through start instead.
+func (d *Daemon) handleSelectProfile(req Request) Response {
+	if req.Project == "" {
+		return errorResponse("project name required")
+	}
+	path, ok := d.manager.ProjectPath(req.Project)
+	if !ok {
+		return errorResponse(fmt.Sprintf("project %q not in registry", req.Project))
+	}
+	proj, err := config.LoadProject(path)
+	if err != nil {
+		return errorResponse(err.Error())
+	}
+	if _, err := proj.ResolveProfile(req.Profile); err != nil {
+		return errorResponse(err.Error())
+	}
+	d.manager.rememberProfile(req.Project, req.Profile)
+	return successResponse(map[string]string{"status": "profile_selected", "profile": req.Profile})
 }
 
 // handleSaveConfig replaces a project's .hun.yml with edited source, after

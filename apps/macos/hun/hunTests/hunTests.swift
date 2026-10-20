@@ -555,8 +555,8 @@ struct hunTests {
         await store.refresh(force: true)
         let project = try #require(store.model.projects.first)
 
-        store.run(project, profile: "ui")
-        store.run(project, profile: nil)
+        store.chooseProfile("ui", for: project)
+        store.chooseProfile(nil, for: project)
         try await Task.sleep(for: .milliseconds(50))
         #expect(client.actions.contains { $0.hasPrefix("profile:\(project.id):ui:") })
         #expect(client.actions.contains { $0.hasPrefix("profile:\(project.id):all:") })
@@ -569,6 +569,23 @@ struct hunTests {
         } else {
             #expect(client.actions.contains("save_profile:\(project.id):mine:\(running.joined(separator: ","))"))
         }
+    }
+
+    @Test func choosingAProfileForAStoppedProjectDoesNotStartIt() async throws {
+        let client = MockDaemonClient()
+        client.nextSnapshot = HunDaemonSnapshot(
+            protocolVersion: 19, mode: "multitask", activeProject: nil, scanDirs: [], lastScanAt: nil,
+            projects: [HunDaemonProject(id: "shop", name: "shop", path: "/w/shop", status: "stopped", isActive: false, branch: nil, lastNote: nil, startedAt: nil, services: [], configError: nil)],
+            warnings: []
+        )
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        await store.refresh(force: true)
+        let project = try #require(store.model.projects.first)
+
+        store.chooseProfile("ui", for: project)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(client.actions.contains("select_profile:shop:ui"))
+        #expect(!client.actions.contains { $0.hasPrefix("profile:") || $0.hasPrefix("start:") })
     }
 
     @Test func editingConfigOpensInHunAndSavesThroughTheDaemon() async throws {
@@ -1009,8 +1026,8 @@ struct hunTests {
         #expect(prompt.contains("Use the Hun skill"))
         #expect(prompt.contains("/tmp/projects/shop"))
         #expect(prompt.contains("/tmp/projects/shop/.hun.yml"))
-        #expect(prompt.contains("local vs Docker vs hybrid"))
-        #expect(prompt.contains("Run `hun validate .`"))
+        #expect(prompt.contains("run `hun validate .`"))
+        #expect(prompt.contains("suggest profiles"))
         #expect(prompt.contains("/Applications/hun.app/Contents/Resources/hun-skill/SKILL.md"))
         #expect(prompt.contains("/Users/me/.agents/skills/hun/SKILL.md"))
         #expect(prompt.contains("/Users/me/.claude/skills/hun/SKILL.md"))
@@ -1034,7 +1051,7 @@ struct hunTests {
 
         #expect(prompt.contains("- name: shop"))
         #expect(prompt.contains("- path: /tmp/projects/shop"))
-        #expect(prompt.contains("Inspect any existing .hun.yml before changing it."))
+        #expect(prompt.contains("change only what's wrong if a .hun.yml exists"))
     }
 
     @Test func projectInitReviewExtractsNameAndServices() throws {
@@ -2001,6 +2018,10 @@ private final class MockDaemonClient: HunDaemonClientProtocol {
 
     func saveProfile(_ project: String, name: String, services: [String]) async throws {
         actions.append("save_profile:\(project):\(name):\(services.joined(separator: ","))")
+    }
+
+    func selectProfile(_ project: String, profile: String) async throws {
+        actions.append("select_profile:\(project):\(profile)")
     }
 
     var configError: String?

@@ -163,6 +163,35 @@ func TestSaveProfileWritesConfigAndRemembersIt(t *testing.T) {
 	}
 }
 
+func TestSelectProfileRemembersItWithoutStarting(t *testing.T) {
+	d, m, projectDir := newProfileDaemon(t)
+	proj, err := config.LoadProject(projectDir)
+	if err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+
+	if resp := d.HandleRequest(Request{Action: "select_profile", Project: "shop", Profile: "app"}); !resp.OK {
+		t.Fatalf("select_profile: %s", resp.Error)
+	}
+	if got := runningServices(m, "shop"); len(got) != 0 {
+		t.Fatalf("selecting a profile must not start anything, running = %v", got)
+	}
+	if got := m.RememberedProfile("shop", proj); got != "app" {
+		t.Fatalf("remembered profile = %q, want app", got)
+	}
+
+	if resp := d.HandleRequest(Request{Action: "select_profile", Project: "shop", Profile: "all"}); !resp.OK {
+		t.Fatalf("select all: %s", resp.Error)
+	}
+	if got := m.RememberedProfile("shop", proj); got != "" {
+		t.Fatalf("remembered profile = %q, want every service", got)
+	}
+
+	if resp := d.HandleRequest(Request{Action: "select_profile", Project: "shop", Profile: "nope"}); resp.OK {
+		t.Fatalf("expected an unknown profile to fail")
+	}
+}
+
 func TestSnapshotListsProfiles(t *testing.T) {
 	d, m, _ := newProfileDaemon(t)
 	if resp := d.HandleRequest(Request{Action: "start", Project: "shop", Profile: "app", Mode: "parallel"}); !resp.OK {

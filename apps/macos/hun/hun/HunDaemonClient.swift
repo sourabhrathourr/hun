@@ -19,6 +19,8 @@ nonisolated protocol HunDaemonClientProtocol: AnyObject {
     /// the difference starts and stops.
     func runProfile(_ project: String, profile: String, mode: HunDaemonStartMode) async throws
     func saveProfile(_ project: String, name: String, services: [String]) async throws
+    /// Makes `profile` the one Run uses next, without starting anything.
+    func selectProfile(_ project: String, profile: String) async throws
     /// Throws the problem when `content` is not a config Hun can run.
     func validateConfig(_ content: String) async throws
     /// Replaces the .hun.yml in the project folder at `path`, once it validates.
@@ -436,7 +438,7 @@ nonisolated struct HunDaemonLogLine: Decodable, Equatable {
 }
 
 nonisolated final class HunDaemonClient: HunDaemonClientProtocol, HunGitClientProtocol {
-    static let requiredProtocol = 18
+    static let requiredProtocol = 19
     private let socketPath: String
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -474,6 +476,10 @@ nonisolated final class HunDaemonClient: HunDaemonClientProtocol, HunGitClientPr
 
     func saveProfile(_ project: String, name: String, services: [String]) async throws {
         try await send(HunDaemonRequest(action: "save_profile", project: project, profile: name, services: services))
+    }
+
+    func selectProfile(_ project: String, profile: String) async throws {
+        try await send(HunDaemonRequest(action: "select_profile", project: project, profile: profile))
     }
 
     func validateConfig(_ content: String) async throws {
