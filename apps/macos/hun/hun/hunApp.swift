@@ -10,16 +10,21 @@ import AppKit
 
 @main
 struct hunApp: App {
-    @State private var store = HunStore(
-        navigationDefaults: .standard,
-        startAutomatically: false
-    )
+    @State private var store: HunStore
     @State private var updater = HunUpdater()
-    @State private var license = HunLicenseManager()
+    @State private var license: HunLicenseManager
 
     init() {
-        // NSApp exists once the app is running; apply the saved theme then.
-        DispatchQueue.main.async { HunTheme.saved.apply() }
+        let store = HunStore(navigationDefaults: .standard, startAutomatically: false)
+        let license = HunLicenseManager()
+        _store = State(initialValue: store)
+        _license = State(initialValue: license)
+        // NSApp exists once the app is running: apply the saved theme and add
+        // the menu bar item then.
+        DispatchQueue.main.async {
+            HunTheme.saved.apply()
+            HunStatusItemController.install(store: store, license: license)
+        }
     }
 
     var body: some Scene {
@@ -45,15 +50,6 @@ struct hunApp: App {
                 .keyboardShortcut("d", modifiers: .command)
             }
         }
-
-        MenuBarExtra {
-            HunLicenseMenuBarView()
-                .environment(store)
-                .environment(license)
-        } label: {
-            HunMenuBarLabel(store: store)
-        }
-        .menuBarExtraStyle(.window)
     }
 
     static func openDashboard() {

@@ -57,17 +57,3 @@ enum HunMenuBarGlyph {
         return image
     }
 }
-
-/// The menu bar item: the switch is on while any project is running.
-struct HunMenuBarLabel: View {
-    let store: HunStore
-
-    private var isOn: Bool {
-        store.model.projects.contains { $0.status == .running || $0.status == .starting }
-    }
-
-    var body: some View {
-        Image(nsImage: HunMenuBarGlyph.image(on: isOn))
-            .accessibilityLabel(isOn ? "Hun, projects running" : "Hun")
-    }
-}
