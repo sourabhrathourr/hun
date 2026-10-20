@@ -2398,12 +2398,14 @@ private struct LogsPanelView: View {
 
     /// Stops at the first match, so it stays cheap as lines stream in.
     private var hasLogs: Bool {
-        let filter = filter
+        let filter = self.filter
         return feed.lines.contains(where: filter.matches)
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        // Computed once per render; the toolbar and the content both use it.
+        let hasLogs = self.hasLogs
+        return VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
@@ -2438,7 +2440,6 @@ private struct LogsPanelView: View {
 
             Rectangle().fill(AppTheme.divider).frame(height: 1)
 
-            let hasLogs = hasLogs
             if !hasLogs, scope == .service, let service = selectedService, service.isExternal {
                 ExternalLogsEmptyState(service: service, onRestart: { onRestartService(service) })
             } else if !hasLogs {
@@ -2456,7 +2457,7 @@ private struct LogsPanelView: View {
     }
 
     private func copyAllLogs() {
-        let filter = filter
+        let filter = self.filter
         let logs = feed.lines.filter(filter.matches)
         guard !logs.isEmpty else { return }
         let text = logs
