@@ -1,5 +1,41 @@
 [
   {
+    "version": "0.4.0",
+    "date": "2026-10-20",
+    "title": "Profiles and a redesigned Hun",
+    "summary": "Run just the services you need with profiles, see everything already running on your Mac, and enjoy a faster, cleaner Hun.",
+    "groups": [
+      {
+        "title": "New",
+        "changes": [
+          "Profiles: name sets of services in .hun.yml and run one with a click or `hun run <project> -p <profile>`. Switching profiles only starts and stops the difference.",
+          "Hun now sees services started outside it (a terminal, an agent, Docker) and can stop, restart and take them over.",
+          "Edit .hun.yml inside Hun, with highlighting, line numbers and live validation.",
+          "Settings now live in the main window, with a System, Light or Dark theme switcher.",
+          "A redesigned menu bar panel, and a menu bar icon that shows when projects are running.",
+          "Resize the sidebar, and see each project's logo in its header."
+        ]
+      },
+      {
+        "title": "Improved",
+        "changes": [
+          "Busy services no longer slow Hun down: logs stream in batches and render incrementally.",
+          "Project icons stay visible in light and dark mode, whatever their colours.",
+          "Port conflicts name what holds the port and offer to stop it.",
+          "Long project names and narrow windows are handled cleanly."
+        ]
+      },
+      {
+        "title": "Fixes",
+        "changes": [
+          "A service printing a very long line no longer freezes.",
+          "Stopping a project's last service stops the project.",
+          "Run restarts a project whose services crashed."
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.3.7",
     "date": "2026-10-19",
     "title": "Version 0.3.7",
