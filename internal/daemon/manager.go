@@ -29,10 +29,13 @@ type Manager struct {
 	discoveryScanDirs []string
 	discoveryWarnings []string
 	iconCache         map[string]projectIconCacheEntry
+	configCache       map[string]projectConfigCacheEntry
+	observer          observer
 
-	mu      sync.RWMutex
-	stateMu sync.Mutex
-	iconMu  sync.Mutex
+	mu       sync.RWMutex
+	stateMu  sync.Mutex
+	iconMu   sync.Mutex
+	configMu sync.Mutex
 	st      *state.State
 }
 
@@ -67,20 +70,6 @@ func NewManager() (*Manager, error) {
 	}, nil
 }
 
-// RefreshRegistry merges on-disk registry changes into in-memory state.
-func (m *Manager) RefreshRegistry() {
-	onDisk, err := state.Load()
-	if err != nil {
-		return
-	}
-	m.stateMu.Lock()
-	defer m.stateMu.Unlock()
-	for name, path := range onDisk.Registry {
-		m.st.Registry[name] = path
-	}
-	_ = m.st.Save()
-}
-
 func (m *Manager) ProjectPath(name string) (string, bool) {
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
@@ -88,18 +77,21 @@ func (m *Manager) ProjectPath(name string) (string, bool) {
 	return path, ok
 }
 
-func (m *Manager) RegisterProjectPath(path string) (*config.Project, string, error) {
+// RegisterProjectPath registers a folder and returns its config and key. A
+// folder whose name is already used by another folder gets a key derived
+// from its location instead of an error.
+func (m *Manager) RegisterProjectPath(path string) (*config.Project, string, string, error) {
 	abs, err := filepath.Abs(strings.TrimSpace(path))
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	clean := filepath.Clean(abs)
 	if !config.ProjectExists(clean) {
-		return nil, "", fmt.Errorf("no .hun.yml found in %s", clean)
+		return nil, "", "", fmt.Errorf("no .hun.yml found in %s", clean)
 	}
 	proj, err := config.LoadProject(clean)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 
 	m.stateMu.Lock()
@@ -107,7 +99,7 @@ func (m *Manager) RegisterProjectPath(path string) (*config.Project, string, err
 	if m.st == nil {
 		st, err := state.Load()
 		if err != nil {
-			return nil, "", err
+			return nil, "", "", err
 		}
 		m.st = st
 	}
@@ -117,21 +109,29 @@ func (m *Manager) RegisterProjectPath(path string) (*config.Project, string, err
 	if m.st.Projects == nil {
 		m.st.Projects = make(map[string]state.ProjectState)
 	}
-	if existing, ok := m.st.Registry[proj.Name]; ok && filepath.Clean(existing) != clean {
-		return nil, "", fmt.Errorf("project %q already registered at %s", proj.Name, existing)
-	}
-
-	m.st.Registry[proj.Name] = clean
-	ps := m.st.Projects[proj.Name]
-	if ps.Path == "" {
-		ps.Path = clean
-	}
-	m.st.Projects[proj.Name] = ps
+	key := m.st.RegisterPath(proj.Name, clean)
 	m.lastDiscoveryScan = time.Time{}
 	if err := m.st.Save(); err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
-	return proj, clean, nil
+	return proj, key, clean, nil
+}
+
+// RemoveProject stops what Hun runs for a project and unregisters it. Its
+// folder is remembered so discovery does not add it back.
+func (m *Manager) RemoveProject(key string) error {
+	if _, ok := m.ProjectPath(key); !ok {
+		return fmt.Errorf("project %q not found", key)
+	}
+	if m.IsRunning(key) {
+		if err := m.stopProject(key, false); err != nil {
+			return fmt.Errorf("stopping %s: %w", key, err)
+		}
+	}
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+	m.st.RemoveProject(key)
+	return m.st.Save()
 }
 
 func (m *Manager) StateSnapshot() *state.State {
@@ -160,6 +160,21 @@ func (m *Manager) StateSnapshot() *state.State {
 
 // StartProject starts all services for a project.
 func (m *Manager) StartProject(projectName string, projConfig *config.Project, projectPath string, exclusive bool) error {
+	return m.StartProfile(projectName, "", projConfig, projectPath, exclusive)
+}
+
+// StartProfile starts the services a profile runs, in dependency order. The
+// empty profile runs every service.
+func (m *Manager) StartProfile(projectName, profile string, projConfig *config.Project, projectPath string, exclusive bool) error {
+	wanted, err := projConfig.ResolveProfile(profile)
+	if err != nil {
+		return err
+	}
+	include := make(map[string]bool, len(wanted))
+	for _, name := range wanted {
+		include[name] = true
+	}
+
 	m.mu.Lock()
 	if _, exists := m.processes[projectName]; exists {
 		m.mu.Unlock()
@@ -195,7 +210,10 @@ func (m *Manager) StartProject(projectName string, projConfig *config.Project, p
 
 	started := make(map[string]*Process)
 	dependentCount := make(map[string]int)
-	for _, svc := range projConfig.Services {
+	for name, svc := range projConfig.Services {
+		if !include[name] {
+			continue
+		}
 		for _, dep := range svc.DependsOn {
 			dependentCount[dep]++
 		}
@@ -216,8 +234,14 @@ func (m *Manager) StartProject(projectName string, projConfig *config.Project, p
 	}
 
 	for _, svcName := range order {
+		if !include[svcName] {
+			continue
+		}
 		svcConfig := projConfig.Services[svcName]
 		proc, err := m.startConfiguredService(projectName, svcName, svcConfig, projectPath, !exclusive, 0, dependentCount[svcName] > 0)
+		if errors.Is(err, errServiceRunningExternally) {
+			continue
+		}
 		if err != nil {
 			return rollback(fmt.Errorf("starting service %s: %w", svcName, err))
 		}
@@ -225,7 +249,75 @@ func (m *Manager) StartProject(projectName string, projConfig *config.Project, p
 	}
 
 	m.setProjectRunning(projectName, projectPath, m.refreshProjectOffset(projectName), exclusive)
+	m.rememberProfile(projectName, profile)
 	return nil
+}
+
+// ApplyProfile makes a running project run exactly a profile's services. Only
+// the difference changes: services outside the profile stop, missing ones
+// start, and the ones both share keep running.
+func (m *Manager) ApplyProfile(projectName, profile string, projConfig *config.Project, projectPath string, exclusive bool) error {
+	wanted, err := projConfig.ResolveProfile(profile)
+	if err != nil {
+		return err
+	}
+	include := make(map[string]bool, len(wanted))
+	for _, name := range wanted {
+		include[name] = true
+	}
+
+	running := m.StatusWithExternal()[projectName]
+	var extra []string
+	for name, info := range running {
+		if info.Running && !include[name] {
+			extra = append(extra, name)
+		}
+	}
+	sort.Strings(extra)
+	for _, name := range extra {
+		// Not StopService: the project stays up while it switches.
+		if err := m.stopService(projectName, name); err != nil {
+			return fmt.Errorf("stopping service %s: %w", name, err)
+		}
+	}
+
+	order, err := topoSort(projConfig)
+	if err != nil {
+		return err
+	}
+	for _, name := range order {
+		if !include[name] || running[name].Running {
+			continue
+		}
+		if err := m.StartService(projectName, name, projConfig, projectPath, exclusive); err != nil {
+			return err
+		}
+	}
+
+	m.setProjectRunning(projectName, projectPath, m.refreshProjectOffset(projectName), exclusive)
+	m.rememberProfile(projectName, profile)
+	return nil
+}
+
+// RememberedProfile is the profile a project last ran, if its .hun.yml still
+// defines it. The empty string means every service.
+func (m *Manager) RememberedProfile(projectName string, projConfig *config.Project) string {
+	profile := m.StateSnapshot().Projects[projectName].Profile
+	if _, ok := projConfig.Profile(profile); !ok {
+		return ""
+	}
+	return profile
+}
+
+func (m *Manager) rememberProfile(projectName, profile string) {
+	if profile == config.AllServicesProfile {
+		profile = ""
+	}
+	_ = m.mutateState(func(st *state.State) {
+		ps := st.Projects[projectName]
+		ps.Profile = profile
+		st.Projects[projectName] = ps
+	})
 }
 
 // StartService starts one service and any services it depends on.
@@ -294,6 +386,9 @@ func (m *Manager) startService(projectName, serviceName string, projConfig *conf
 
 		svcConfig := projConfig.Services[svcName]
 		proc, err := m.startConfiguredService(projectName, svcName, svcConfig, projectPath, !exclusive, preferredPorts[svcName], idx < len(order)-1)
+		if errors.Is(err, errServiceRunningExternally) {
+			continue
+		}
 		if err != nil {
 			return rollback(fmt.Errorf("starting service %s: %w", svcName, err))
 		}
@@ -305,13 +400,26 @@ func (m *Manager) startService(projectName, serviceName string, projConfig *conf
 }
 
 func (m *Manager) startConfiguredService(projectName, serviceName string, svcConfig *config.Service, projectPath string, allowPortFallback bool, preferredPort int, waitForReady bool) (*Process, error) {
+	attachToContainer := false
+	if ext, ok := m.attribution(freshObservationAge).external(projectName, serviceName); ok {
+		if !ext.Docker || !commandNeedsDocker(svcConfig.Cmd) {
+			return nil, errServiceRunningExternally
+		}
+		// `docker compose up` attaches to the running container instead of
+		// recreating it, which brings it under Hun with live logs.
+		attachToContainer = true
+	}
+
 	var actualPort int
 	var lease *portLease
 	var err error
-	if preferredPort > 0 {
+	switch {
+	case attachToContainer:
+		actualPort = svcConfig.Port
+	case preferredPort > 0:
 		actualPort, lease, err = m.ports.ReserveExactPort(preferredPort)
-	} else {
-		actualPort, lease, err = m.ports.ReserveAvailablePort(svcConfig.Port, allowPortFallback)
+	default:
+		actualPort, lease, err = m.reserveServicePort(projectName, serviceName, svcConfig.Port, allowPortFallback)
 	}
 	if err != nil {
 		return nil, err
@@ -338,6 +446,11 @@ func (m *Manager) startConfiguredService(projectName, serviceName string, svcCon
 		launchPort:       actualPort,
 		allowRuntimePort: allowPortFallback,
 	}
+	if commandNeedsDocker(svcConfig.Cmd) {
+		// Compose stops containers on SIGTERM with a 10s default timeout;
+		// killing the CLI sooner leaves the containers running.
+		proc.stopGrace = dockerStopGrace
+	}
 	proc.SetPortLease(lease)
 
 	// Every start boundary represents a fresh in-memory log session.
@@ -359,7 +472,11 @@ func (m *Manager) startConfiguredService(projectName, serviceName string, svcCon
 	if err := ensureDockerReadyForCommand(svcConfig.Cmd, func(line string) {
 		emitServiceLine(line, false)
 	}); err != nil {
+		proc.ReleasePortLease()
 		return nil, err
+	}
+	if attachToContainer {
+		m.emitInternalServiceLine(projectName, serviceName, "[hun] attaching to the container that is already running", false)
 	}
 
 	proc.onOutput = emitServiceLine
@@ -426,17 +543,34 @@ func (m *Manager) startConfiguredService(projectName, serviceName string, svcCon
 
 // StopProject stops all services for a project.
 func (m *Manager) StopProject(projectName string) error {
+	return m.stopProject(projectName, true)
+}
+
+// stopProject stops Hun's processes for a project. With includeExternal it
+// also stops instances started outside Hun; without it, only containers left
+// behind by Hun's own compose commands are swept up.
+func (m *Manager) stopProject(projectName string, includeExternal bool) error {
 	m.mu.RLock()
 	procs, exists := m.processes[projectName]
 	projCfg := m.projectCfgs[projectName]
 	m.mu.RUnlock()
 	if !exists {
+		if !includeExternal {
+			return fmt.Errorf("project %s not running", projectName)
+		}
+		if stopped, err := m.stopProjectExternals(projectName, nil); err != nil || stopped > 0 {
+			return err
+		}
 		return fmt.Errorf("project %s not running", projectName)
 	}
 
 	procList := make([]*Process, 0, len(procs))
-	for _, proc := range procs {
+	dockerServices := make(map[string]bool)
+	for name, proc := range procs {
 		procList = append(procList, proc)
+		if commandNeedsDocker(proc.Cmd) {
+			dockerServices[name] = true
+		}
 	}
 
 	var wg sync.WaitGroup
@@ -461,6 +595,17 @@ func (m *Manager) StopProject(projectName string) error {
 	}
 	if stopErr != nil {
 		return stopErr
+	}
+	// Sweep up containers a compose CLI left behind, and with includeExternal
+	// every instance started outside Hun.
+	only := dockerServices
+	if includeExternal {
+		only = nil
+	}
+	if len(only) > 0 || includeExternal {
+		if _, err := m.stopProjectExternals(projectName, only); err != nil {
+			return err
+		}
 	}
 
 	path := ""
@@ -492,24 +637,69 @@ func (m *Manager) StopProject(projectName string) error {
 	return nil
 }
 
-// StopService stops a single service in a running project.
+// StopService stops a single service in a running project. Stopping the last
+// running service stops the project, so it no longer reads as running.
 func (m *Manager) StopService(projectName, serviceName string) error {
+	if err := m.stopService(projectName, serviceName); err != nil {
+		return err
+	}
+	m.stopProjectIfIdle(projectName)
+	return nil
+}
+
+// stopProjectIfIdle stops a project once none of its services run, whether
+// Hun started them or not.
+func (m *Manager) stopProjectIfIdle(projectName string) {
 	m.mu.RLock()
 	procs, exists := m.processes[projectName]
-	if !exists {
-		m.mu.RUnlock()
+	for _, proc := range procs {
+		if proc.IsRunning() {
+			m.mu.RUnlock()
+			return
+		}
+	}
+	m.mu.RUnlock()
+	if len(m.attribution(freshObservationAge).Services[projectName]) > 0 {
+		return
+	}
+	if exists {
+		_ = m.stopProject(projectName, false)
+	} else {
+		m.setProjectStopped(projectName)
+	}
+}
+
+func (m *Manager) stopService(projectName, serviceName string) error {
+	m.mu.RLock()
+	procs, projectExists := m.processes[projectName]
+	proc := procs[serviceName]
+	m.mu.RUnlock()
+
+	if proc == nil || !proc.IsRunning() {
+		if ext, ok := m.attribution(freshObservationAge).external(projectName, serviceName); ok {
+			if err := m.stopExternal(ext); err != nil {
+				return err
+			}
+			if proc == nil {
+				return nil
+			}
+		}
+	}
+	if !projectExists {
 		return fmt.Errorf("project %s not running", projectName)
 	}
-	proc, exists := procs[serviceName]
-	if !exists {
-		m.mu.RUnlock()
+	if proc == nil {
 		return fmt.Errorf("service %s not found in project %s", serviceName, projectName)
 	}
 	port := proc.ObservedPort()
-	m.mu.RUnlock()
 
 	if err := proc.Stop(); err != nil {
 		return err
+	}
+	if commandNeedsDocker(proc.Cmd) {
+		if ext, ok := m.attribution(freshObservationAge).external(projectName, serviceName); ok && ext.Docker {
+			_ = m.stopExternal(ext)
+		}
 	}
 
 	m.clearRuntimePortSignal(projectName, serviceName)
@@ -528,7 +718,8 @@ func (m *Manager) StopAll() error {
 	m.mu.RUnlock()
 
 	for _, name := range names {
-		_ = m.StopProject(name)
+		// Daemon shutdown only takes down what Hun started.
+		_ = m.stopProject(name, false)
 	}
 	return nil
 }
@@ -605,6 +796,32 @@ func (m *Manager) Status() map[string]map[string]ServiceInfo {
 	return result
 }
 
+// StatusWithExternal is Status plus services running outside Hun, which are
+// flagged External.
+func (m *Manager) StatusWithExternal() map[string]map[string]ServiceInfo {
+	result := m.Status()
+	attr := m.attribution(observationMaxAge)
+	for project, services := range attr.Services {
+		for service, ext := range services {
+			if info, ok := result[project][service]; ok && info.Running {
+				continue
+			}
+			if result[project] == nil {
+				result[project] = make(map[string]ServiceInfo)
+			}
+			result[project][service] = ServiceInfo{
+				PID:      ext.PID,
+				Port:     ext.Port,
+				Status:   "running",
+				Running:  true,
+				Ready:    true,
+				External: true,
+			}
+		}
+	}
+	return result
+}
+
 func (m *Manager) serviceStatusSnapshot() map[string]map[string]string {
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
@@ -648,6 +865,11 @@ func (m *Manager) GetLogs(project, service string, lines int) []LogLine {
 	return m.logs.GetLines(project, service, lines)
 }
 
+// ClearLogs empties the buffered logs of a service, or of the whole project.
+func (m *Manager) ClearLogs(project, service string) {
+	m.logs.ClearBuffers(project, service)
+}
+
 // Subscribe creates a new log subscriber.
 func (m *Manager) Subscribe(project, service string) *Subscriber {
 	return m.subscribers.Subscribe(project, service)
@@ -664,6 +886,20 @@ func (m *Manager) IsRunning(project string) bool {
 	defer m.mu.RUnlock()
 	_, exists := m.processes[project]
 	return exists
+}
+
+// HasLiveServices reports whether any of a project's Hun-run processes is
+// still alive. A project whose services all crashed or exited is still known
+// to the manager (IsRunning) but has nothing left running.
+func (m *Manager) HasLiveServices(project string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, proc := range m.processes[project] {
+		if proc.IsRunning() {
+			return true
+		}
+	}
+	return false
 }
 
 // IsServiceRunning checks if one service is currently running.
@@ -768,6 +1004,13 @@ func (m *Manager) MoveProjectToBaseOffset(project string) error {
 // most recently started running project.
 func (m *Manager) FocusSurvivor(preferred string) string {
 	running := m.RunningProjects()
+	if preferred != "" && !containsString(running, preferred) {
+		if len(m.attribution(observationMaxAge).Services[preferred]) > 0 {
+			// Its services run outside Hun; it is still what the user is
+			// focusing on.
+			return preferred
+		}
+	}
 	if len(running) == 0 {
 		return ""
 	}
@@ -844,6 +1087,7 @@ type ServiceInfo struct {
 	Running   bool      `json:"running"`
 	Ready     bool      `json:"ready"`
 	StartedAt time.Time `json:"started_at,omitempty"`
+	External  bool      `json:"external,omitempty"` // running, but not started by Hun
 }
 
 var runtimePortPatterns = []*regexp.Regexp{
@@ -1303,4 +1547,13 @@ func getenvDefault(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func containsString(values []string, value string) bool {
+	for _, v := range values {
+		if v == value {
+			return true
+		}
+	}
+	return false
 }

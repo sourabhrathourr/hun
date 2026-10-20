@@ -118,6 +118,59 @@ struct hunTests {
         return components
     }
 
+    @Test func recentlyValidatedLicenseOpensBeforeTheServerAnswers() {
+        let validatedAt = Date(timeIntervalSince1970: 1_000)
+        let stored = HunStoredLicense(
+            licenseKey: "test-license",
+            instanceID: "lki_test",
+            productID: "beta",
+            productName: "Hun Public Beta",
+            lastValidatedAt: validatedAt
+        )
+        let configuration = HunLicenseConfiguration(
+            apiBaseURL: URL(string: "https://test.dodopayments.com")!,
+            allowedProductIDs: ["beta"],
+            checkoutURL: URL(string: "https://hun.sh")!,
+            offlineGracePeriod: 72 * 60 * 60
+        )
+        let recent = HunLicenseManager(
+            configuration: configuration,
+            service: MockLicenseService(),
+            store: InMemoryLicenseStore(license: stored),
+            now: { validatedAt.addingTimeInterval(60) }
+        )
+        #expect(recent.isLicensed)
+
+        let stale = HunLicenseManager(
+            configuration: configuration,
+            service: MockLicenseService(),
+            store: InMemoryLicenseStore(license: stored),
+            now: { validatedAt.addingTimeInterval(73 * 60 * 60) }
+        )
+        #expect(!stale.isLicensed)
+    }
+
+    @Test func fileLicenseStoreMigratesALicenseFromThePreviousStore() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathComponent("license.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let previous = InMemoryLicenseStore(license: HunStoredLicense(
+            licenseKey: "test-license",
+            instanceID: "lki_test",
+            productID: "beta",
+            productName: "Hun Public Beta",
+            lastValidatedAt: Date(timeIntervalSince1970: 1_000)
+        ))
+        let store = HunFileLicenseStore(url: url, migratingFrom: previous)
+
+        #expect(try store.load()?.instanceID == "lki_test")
+        #expect(try previous.load() == nil)
+        #expect(try HunFileLicenseStore(url: url).load()?.instanceID == "lki_test")
+        let permissions = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int
+        #expect(permissions == 0o600)
+    }
+
     @Test func offlineLicenseGraceEndsAfterSeventyTwoHours() {
         let configuration = HunLicenseConfiguration(
             apiBaseURL: URL(string: "https://test.dodopayments.com")!,
@@ -274,172 +327,6 @@ struct hunTests {
         )
     }
 
-    @Test func conventionalCommitFormatterNormalizesGeneratedFields() {
-        let suggestion = HunCommitMessageSuggestion(
-            type: "Feature",
-            scope: "Git Workspace",
-            subject: "fix: Add stage all."
-        )
-
-        #expect(
-            HunConventionalCommitFormatter.message(from: suggestion) ==
-                "feat(git-workspace): add stage all"
-        )
-    }
-
-    @Test func conventionalCommitFormatterKeepsTheMessageWithinSeventyTwoCharacters() {
-        let suggestion = HunCommitMessageSuggestion(
-            type: "performance",
-            scope: "",
-            subject: "improve rendering performance for extremely large staged source code changes"
-        )
-
-        let message = HunConventionalCommitFormatter.message(from: suggestion)
-
-        #expect(message.hasPrefix("perf: "))
-        #expect(message.count <= 72)
-        #expect(!message.hasSuffix("."))
-    }
-
-    @Test func commitMessageContextContainsOnlyStagedDiffsAndHonorsItsBudget() {
-        let staged = [
-            HunGitFileChange(
-                path: "Sources/GitWorkspace.swift",
-                originalPath: nil,
-                indexStatus: "M",
-                worktreeStatus: ".",
-                untracked: false,
-                conflicted: false
-            ),
-            HunGitFileChange(
-                path: "Tests/GitWorkspaceTests.swift",
-                originalPath: nil,
-                indexStatus: "A",
-                worktreeStatus: ".",
-                untracked: false,
-                conflicted: false
-            )
-        ]
-        let diffs = [
-            HunGitDiff(
-                path: staged[0].path,
-                staged: true,
-                content: "@@ -1 +1 @@\n-old\n+new\n" + String(repeating: "+detail\n", count: 100),
-                binary: false,
-                truncated: false
-            ),
-            HunGitDiff(
-                path: staged[1].path,
-                staged: true,
-                content: "@@ -0,0 +1 @@\n+test\n",
-                binary: false,
-                truncated: false
-            ),
-            HunGitDiff(
-                path: "README.md",
-                staged: false,
-                content: "+unstaged secret",
-                binary: false,
-                truncated: false
-            )
-        ]
-
-        let context = HunCommitMessageContext.build(
-            stagedChanges: staged,
-            diffs: diffs,
-            characterLimit: 420
-        )
-
-        #expect(context.stagedFileCount == 2)
-        #expect(context.prompt.count <= 420)
-        #expect(context.prompt.contains("Sources/GitWorkspace.swift"))
-        #expect(context.prompt.contains("Tests/GitWorkspaceTests.swift"))
-        #expect(!context.prompt.contains("unstaged secret"))
-        #expect(context.wasTruncated)
-    }
-
-    @Test func commitMessageGenerationUsesStagedDiffsAndFillsTheComposer() async {
-        let client = MockGitClient()
-        client.status = HunGitStatus(
-            isRepository: true,
-            branch: "main",
-            head: "abc123",
-            upstream: "origin/main",
-            ahead: 0,
-            behind: 0,
-            detached: false,
-            clean: false,
-            operation: nil,
-            files: [
-                HunGitFileChange(
-                    path: "Sources/GitWorkspace.swift",
-                    originalPath: nil,
-                    indexStatus: "M",
-                    worktreeStatus: ".",
-                    untracked: false,
-                    conflicted: false
-                )
-            ]
-        )
-        client.diff = HunGitDiff(
-            path: "Sources/GitWorkspace.swift",
-            staged: true,
-            content: "@@ -1 +1 @@\n-old\n+new\n",
-            binary: false,
-            truncated: false
-        )
-        let generator = MockCommitMessageGenerator(
-            result: "feat(git): generate commit messages"
-        )
-        let model = HunGitWorkspaceModel(client: client, commitMessageGenerator: generator)
-        await model.load(projectID: "app")
-
-        await model.generateCommitMessage()
-
-        #expect(model.commitMessage == "feat(git): generate commit messages")
-        #expect(client.diffRequests == 1)
-        #expect(generator.contexts.count == 1)
-        #expect(generator.contexts[0].prompt.contains("Sources/GitWorkspace.swift"))
-        #expect(!model.isGeneratingCommitMessage)
-        #expect(model.commitMessageGenerationNotice == "Generated on this Mac. Review before committing.")
-    }
-
-    @Test func unavailableCommitMessageGenerationDoesNotLoadDiffs() async {
-        let client = MockGitClient()
-        let generator = MockCommitMessageGenerator(
-            availability: .unavailable("Turn on Apple Intelligence in System Settings."),
-            result: ""
-        )
-        let model = HunGitWorkspaceModel(client: client, commitMessageGenerator: generator)
-        await model.load(projectID: "app")
-
-        await model.generateCommitMessage()
-
-        #expect(client.diffRequests == 0)
-        #expect(model.commitMessageGenerationNotice == "Turn on Apple Intelligence in System Settings.")
-    }
-
-    @Test func untrackedGitFilesUseFriendlyStatusLetter() {
-        #expect(HunGitFileStatus(code: "?").displayLetter == "U")
-    }
-
-    @Test func stagedAndWorkingTreeRowsUseDistinctIdentitiesForTheSameFile() {
-        let change = HunGitFileChange(
-            path: "Sources/App.swift",
-            originalPath: nil,
-            indexStatus: "M",
-            worktreeStatus: "M",
-            untracked: false,
-            conflicted: false
-        )
-        let staged = HunGitChangeRowItem(change: change, staged: true)
-        let workingTree = HunGitChangeRowItem(change: change, staged: false)
-
-        #expect(change.staged)
-        #expect(change.unstaged)
-        #expect(staged.id != workingTree.id)
-    }
-
     @Test func gitStatusExplainsItsRelationshipToTheRemote() {
         #expect(HunGitStatus.fixture(ahead: 0, behind: 0).syncState == .upToDate(upstream: "origin/main"))
         #expect(HunGitStatus.fixture(ahead: 2, behind: 0).syncState == .ahead(count: 2, upstream: "origin/main"))
@@ -450,26 +337,6 @@ struct hunTests {
         )
         #expect(HunGitStatus.fixture(upstream: "").syncState == .unpublished(branch: "main"))
         #expect(HunGitStatus.fixture(detached: true).syncState == .detached)
-    }
-
-    @Test func repositoryCapsuleIgnoresRemoteSyncState() {
-        let upToDate = HunRepositoryStatusCapsuleContent(
-            projectBranch: "fallback",
-            status: HunGitStatus.fixture(ahead: 0, behind: 0)
-        )
-        let ahead = HunRepositoryStatusCapsuleContent(
-            projectBranch: "fallback",
-            status: HunGitStatus.fixture(ahead: 4, behind: 0)
-        )
-        let behind = HunRepositoryStatusCapsuleContent(
-            projectBranch: "fallback",
-            status: HunGitStatus.fixture(ahead: 0, behind: 7)
-        )
-
-        #expect(upToDate == ahead)
-        #expect(ahead == behind)
-        #expect(upToDate.branchName == "main")
-        #expect(upToDate.localDetail == "1 change")
     }
 
     @Test func remoteCheckAgeDoesNotStayJustNow() {
@@ -488,159 +355,6 @@ struct hunTests {
             HunGitRemoteCheckAge(checkedAt: now.addingTimeInterval(-7_200), relativeTo: now) ==
                 .hours(2)
         )
-    }
-
-    @Test func gitDiffDocumentHidesPatchMetadataAndTracksLineNumbers() {
-        let patch = """
-        diff --git a/Sample.swift b/Sample.swift
-        index 1111111..2222222 100644
-        --- a/Sample.swift
-        +++ b/Sample.swift
-        @@ -10,3 +10,4 @@ func render() {
-         let stable = true
-        -let oldValue = 1
-        +let newValue = 2
-        +let extraValue = 3
-         return stable
-        """
-
-        let document = HunGitDiffDocument(patch: patch)
-
-        #expect(document.lines.map(\.kind) == [.context, .deletion, .addition, .addition, .context])
-        #expect(document.lines.map(\.content) == [
-            "let stable = true",
-            "let oldValue = 1",
-            "let newValue = 2",
-            "let extraValue = 3",
-            "return stable"
-        ])
-        #expect(document.lines.map(\.oldLineNumber) == [10, 11, nil, nil, 12])
-        #expect(document.lines.map(\.newLineNumber) == [10, nil, 11, 12, 13])
-    }
-
-    @Test func gitDiffDocumentPairsChangesForSplitReview() throws {
-        let patch = """
-        @@ -1,3 +1,4 @@
-         unchanged
-        -old
-        +new
-        +extra
-         tail
-        """
-
-        let document = HunGitDiffDocument(patch: patch)
-        let rows = document.splitRows
-        let lines = document.lines
-
-        #expect(rows.count == 4)
-        #expect(rows[0].left(in: lines)?.content == "unchanged")
-        #expect(rows[0].right(in: lines)?.content == "unchanged")
-        #expect(rows[1].left(in: lines)?.content == "old")
-        #expect(rows[1].right(in: lines)?.content == "new")
-        #expect(rows[2].left(in: lines) == nil)
-        #expect(rows[2].right(in: lines)?.content == "extra")
-        #expect(rows[3].left(in: lines)?.oldLineNumber == 3)
-        #expect(rows[3].right(in: lines)?.newLineNumber == 4)
-    }
-
-    @Test func gitDiffDocumentGroupsContiguousChangesIntoVisualBlocks() {
-        let patch = """
-        @@ -1,3 +1,5 @@
-         context
-        -removed
-        +first
-        +middle
-        +last
-         tail
-        """
-
-        let document = HunGitDiffDocument(patch: patch)
-
-        #expect(document.blockPosition(at: 0) == .none)
-        #expect(document.blockPosition(at: 1) == .single)
-        #expect(document.blockPosition(at: 2) == .first)
-        #expect(document.blockPosition(at: 3) == .middle)
-        #expect(document.blockPosition(at: 4) == .last)
-        #expect(document.blockPosition(at: 5) == .none)
-    }
-
-    @Test func gitDiffDocumentGroupsEachSideOfSplitChangesIndependently() {
-        let patch = """
-        @@ -1,2 +1,3 @@
-        -old
-        +first
-        +last
-         tail
-        """
-
-        let document = HunGitDiffDocument(patch: patch)
-
-        #expect(document.splitBlockPosition(at: 0, side: .left) == .single)
-        #expect(document.splitBlockPosition(at: 0, side: .right) == .first)
-        #expect(document.splitBlockPosition(at: 1, side: .left) == .none)
-        #expect(document.splitBlockPosition(at: 1, side: .right) == .last)
-    }
-
-    @Test func gitSyntaxHighlighterDetectsLanguageAndTokenRanges() {
-        let line = #"let title = "Hun" // workspace title"#
-        let highlighter = HunGitSyntaxHighlighter(path: "Sources/ContentView.swift")
-        let tokens = highlighter.tokens(in: line)
-        let tokenText = tokens.map { (line as NSString).substring(with: $0.range) }
-
-        #expect(highlighter.language == .swift)
-        #expect(tokens.map(\.kind) == [.keyword, .string, .comment])
-        #expect(tokenText == ["let", #""Hun""#, "// workspace title"])
-        #expect(HunGitSyntaxHighlighter(path: "web/App.tsx").language == .typeScript)
-        #expect(HunGitSyntaxHighlighter(path: "internal/git.go").language == .go)
-        #expect(HunGitSyntaxHighlighter(path: "README.md").language == .markdown)
-        #expect(HunGitSyntaxHighlighter(path: "native/engine.cpp").language == .cFamily)
-        #expect(HunGitSyntaxHighlighter(path: "android/MainActivity.kt").language == .cFamily)
-        #expect(HunGitSyntaxHighlighter(path: "scripts/release.rb").language == .ruby)
-        #expect(HunGitSyntaxHighlighter(path: "Cargo.toml").language == .configuration)
-    }
-
-    @Test func gitSyntaxHighlighterCarriesBlockCommentsAcrossLines() {
-        let highlighter = HunGitSyntaxHighlighter(path: "Sources/Renderer.swift")
-        let opening = highlighter.tokenize("/* renderer notes", startingIn: .normal)
-        let blank = highlighter.tokenize("", startingIn: opening.endState)
-        let closingLine = "continue here */ let visible = true"
-        let closing = highlighter.tokenize(closingLine, startingIn: blank.endState)
-        let closingTokenText = closing.tokens.map {
-            (closingLine as NSString).substring(with: $0.range)
-        }
-
-        #expect(opening.tokens.map(\.kind) == [.comment])
-        #expect(opening.endState == .blockComment)
-        #expect(blank.tokens.isEmpty)
-        #expect(blank.endState == .blockComment)
-        #expect(closing.tokens.map(\.kind) == [.comment, .keyword, .keyword])
-        #expect(closingTokenText == ["continue here */", "let", "true"])
-        #expect(closing.endState == .normal)
-    }
-
-    @Test func gitDiffDocumentTracksSyntaxStateForAddedLines() {
-        let patch = """
-        @@ -0,0 +1,3 @@
-        +/* renderer notes
-        +continue here
-        +*/ let visible = true
-        """
-
-        let document = HunGitDiffDocument(patch: patch, syntaxPath: "Renderer.swift")
-
-        #expect(document.unifiedSyntaxState(at: 0) == .normal)
-        #expect(document.unifiedSyntaxState(at: 1) == .blockComment)
-        #expect(document.unifiedSyntaxState(at: 2) == .blockComment)
-    }
-
-    @Test func gitDiffDocumentHandlesOneHundredThousandChangedLines() {
-        let patch = "@@ -0,0 +1,100000 @@\n" + String(repeating: "+expanded line\n", count: 100_000)
-
-        let document = HunGitDiffDocument(patch: patch)
-
-        #expect(document.lines.count == 100_000)
-        #expect(document.splitRows.count == 100_000)
-        #expect(document.lines.last?.newLineNumber == 100_000)
     }
 
     @Test func unixSocketLineReaderPreservesCoalescedRecordsAfterLargeResponse() async throws {
@@ -671,89 +385,25 @@ struct hunTests {
         #expect(nextRecord == Data("next record".utf8))
     }
 
-    @Test func gitWorkspaceModelLoadsRepositoryAndCoordinatesFileActions() async throws {
+    @Test func branchSwitcherOnlyQueriesGitWhileOpen() async {
         let client = MockGitClient()
-        client.status = .fixture()
-        client.branches = [
-            HunGitBranch(name: "main", current: true, remote: false, upstream: "origin/main", updatedAt: 10),
-            HunGitBranch(name: "feature/ui", current: false, remote: false, upstream: nil, updatedAt: 9)
-        ]
-        client.diff = HunGitDiff(
-            path: "ContentView.swift",
-            staged: false,
-            content: "@@ -1 +1 @@\n-old\n+new\n",
-            binary: false,
-            truncated: false
-        )
-        let model = HunGitWorkspaceModel(client: client)
+        let model = HunBranchModel(client: client)
 
-        await model.load(projectID: "app")
-        await model.loadBranches()
-        let change = try #require(model.status?.files.first)
-        await model.loadDiff(for: change, staged: false)
+        model.select(projectID: "app")
+        #expect(client.statusRequests == 0)
+        #expect(client.branchRequests == 0)
 
-        #expect(model.status?.branch == "main")
-        #expect(model.status?.changeCount == 1)
-        #expect(model.branches.map(\.name) == ["main", "feature/ui"])
-        #expect(model.selectedDiffDocument?.lines.last?.content == "new")
-
-        await model.stage(change)
-
-        #expect(client.actions == ["stage:app:ContentView.swift"])
-        #expect(model.status?.files.first?.staged == true)
-        #expect(model.selectedStaged)
-        #expect(model.selectedDiffMetadata?.staged == true)
-        #expect(model.selectedDiffDocument?.lines.last?.content == "new")
-        #expect(model.errorMessage == nil)
-    }
-
-    @Test func stageAllStagesEveryUnstagedFile() async {
-        let client = MockGitClient()
-        client.status.files.append(
-            HunGitFileChange(
-                path: "NewFile.swift",
-                originalPath: nil,
-                indexStatus: ".",
-                worktreeStatus: "?",
-                untracked: true,
-                conflicted: false
-            )
-        )
-        let model = HunGitWorkspaceModel(client: client)
-        await model.load(projectID: "app")
-
-        await model.stageAll()
-
-        #expect(client.actions == ["stage-all:app"])
-        #expect(model.status?.unstagedFiles.isEmpty == true)
-        #expect(model.status?.stagedFiles.map(\.path) == ["ContentView.swift", "NewFile.swift"])
-        #expect(model.errorMessage == nil)
-    }
-
-    @Test func presentingGitWorkspaceSelectsTheFirstWorkingTreeChange() async {
-        let client = MockGitClient()
-        client.diff = HunGitDiff(
-            path: "ContentView.swift",
-            staged: false,
-            content: "@@ -1 +1 @@\n-old\n+new\n",
-            binary: false,
-            truncated: false
-        )
-        let model = HunGitWorkspaceModel(client: client)
-        await model.load(projectID: "app")
-
-        await model.presentWorkspace()
-
-        #expect(model.isWorkspacePresented)
-        #expect(model.selectedPath == "ContentView.swift")
-        #expect(model.selectedDiffDocument?.lines.count == 2)
+        await model.loadForPicker()
+        #expect(client.statusRequests == 1)
+        #expect(client.branchRequests == 1)
     }
 
     @Test func dirtyWorkingTreeRequestsADecisionBeforeSwitchingBranches() async {
         let client = MockGitClient()
         client.status = HunGitStatus.fixture(clean: false)
-        let model = HunGitWorkspaceModel(client: client)
-        await model.load(projectID: "app")
+        let model = HunBranchModel(client: client)
+        model.select(projectID: "app")
+        await model.refresh()
 
         let switched = await model.switchBranch("feature")
 
@@ -766,8 +416,9 @@ struct hunTests {
     @Test func switchFailureRefreshesStaleStatusBeforeShowingAnError() async {
         let client = MockGitClient()
         client.status = HunGitStatus.fixture(clean: true)
-        let model = HunGitWorkspaceModel(client: client)
-        await model.load(projectID: "app")
+        let model = HunBranchModel(client: client)
+        model.select(projectID: "app")
+        await model.refresh()
         client.status = HunGitStatus.fixture(clean: false)
         client.switchError = TestError.boom
 
@@ -782,8 +433,9 @@ struct hunTests {
     @Test func conflictedWorkingTreeBlocksSwitchWithoutOfferingAStash() async {
         let client = MockGitClient()
         client.status = HunGitStatus.fixture(clean: false, conflicted: true)
-        let model = HunGitWorkspaceModel(client: client)
-        await model.load(projectID: "app")
+        let model = HunBranchModel(client: client)
+        model.select(projectID: "app")
+        await model.refresh()
 
         let switched = await model.switchBranch("feature")
 
@@ -793,32 +445,12 @@ struct hunTests {
         #expect(client.actions.isEmpty)
     }
 
-    @Test func committingTheLastLocalChangesContinuesThePendingBranchSwitch() async {
-        let client = MockGitClient()
-        client.status = HunGitStatus.fixture(clean: false)
-        client.commitResult = HunGitStatus.fixture(clean: true)
-        client.switchResult = HunGitStatus.fixture(branch: "feature", clean: true)
-        let model = HunGitWorkspaceModel(client: client)
-        await model.load(projectID: "app")
-        _ = await model.switchBranch("feature")
-        model.commitMessage = "Finish current work"
-
-        let committed = await model.commit()
-
-        #expect(committed)
-        #expect(client.actions == [
-            "commit:app:Finish current work",
-            "switch:app:feature:false"
-        ])
-        #expect(model.status?.branch == "feature")
-        #expect(model.pendingBranchSwitch == nil)
-    }
-
     @Test func cancellingBranchPickerClearsThePendingSwitch() async {
         let client = MockGitClient()
         client.status = HunGitStatus.fixture(clean: false)
-        let model = HunGitWorkspaceModel(client: client)
-        await model.load(projectID: "app")
+        let model = HunBranchModel(client: client)
+        model.select(projectID: "app")
+        await model.refresh()
         model.isBranchPickerPresented = true
         _ = await model.switchBranch("feature")
 
@@ -829,53 +461,11 @@ struct hunTests {
         #expect(client.actions.isEmpty)
     }
 
-    @Test func switchingProjectsDuringDiffLoadDoesNotLeaveGitBusy() async throws {
-        let client = MockGitClient()
-        client.diffDelay = .milliseconds(80)
-        client.diff = HunGitDiff(
-            path: "ContentView.swift",
-            staged: false,
-            content: "@@ -1 +1 @@\n-old\n+new\n",
-            binary: false,
-            truncated: false
-        )
-        let model = HunGitWorkspaceModel(client: client)
-        await model.load(projectID: "first")
-        let change = try #require(model.status?.files.first)
-
-        let loadingDiff = Task {
-            await model.loadDiff(for: change, staged: false)
-        }
-        try await Task.sleep(for: .milliseconds(20))
-        await model.load(projectID: "second")
-        await loadingDiff.value
-
-        #expect(model.operation == nil)
-        #expect(model.status?.isRepository == true)
-        #expect(model.selectedDiffDocument == nil)
-    }
-
-    @Test func silentGitRefreshCannotOverwriteMutationOrDismissActionError() async throws {
-        let client = MockGitClient()
-        client.statusDelay = .milliseconds(80)
-        let model = HunGitWorkspaceModel(client: client)
-        await model.load(projectID: "app")
-        let change = try #require(model.status?.files.first)
-
-        let refresh = Task { await model.refresh(silently: true) }
-        try await Task.sleep(for: .milliseconds(20))
-        await model.stage(change)
-        model.errorMessage = "Switch requires a clean working tree."
-        await refresh.value
-
-        #expect(model.status?.files.first?.staged == true)
-        #expect(model.errorMessage == "Switch requires a clean working tree.")
-    }
-
     @Test func failedGitFetchKeepsItsErrorVisible() async {
         let client = MockGitClient()
-        let model = HunGitWorkspaceModel(client: client)
-        await model.load(projectID: "app")
+        let model = HunBranchModel(client: client)
+        model.select(projectID: "app")
+        await model.refresh()
         client.fetchError = TestError.boom
 
         await model.fetch()
@@ -886,145 +476,14 @@ struct hunTests {
 
     @Test func successfulFetchMarksTheRemoteAsChecked() async {
         let client = MockGitClient()
-        let model = HunGitWorkspaceModel(client: client)
-        await model.load(projectID: "app")
+        let model = HunBranchModel(client: client)
+        model.select(projectID: "app")
+        await model.refresh()
 
         await model.fetch()
 
         #expect(model.lastRemoteCheckAt != nil)
         #expect(client.actions == ["fetch:app"])
-    }
-
-    @Test func successfulPullAndPushMarkTheRemoteAsChecked() async {
-        let pullClient = MockGitClient()
-        let pullModel = HunGitWorkspaceModel(client: pullClient)
-        await pullModel.load(projectID: "pull-app")
-
-        await pullModel.pull()
-
-        #expect(pullModel.lastRemoteCheckAt != nil)
-        #expect(pullClient.actions == ["pull:pull-app"])
-
-        let pushClient = MockGitClient()
-        let pushModel = HunGitWorkspaceModel(client: pushClient)
-        await pushModel.load(projectID: "push-app")
-
-        await pushModel.push()
-
-        #expect(pushModel.lastRemoteCheckAt != nil)
-        #expect(pushClient.actions == ["push:push-app"])
-    }
-
-    @Test func updatingBranchProtectsLocalChangesAndRefreshesRemoteState() async {
-        let client = MockGitClient()
-        client.status = HunGitStatus.fixture(behind: 3)
-        client.updateResult = HunGitUpdateResult(
-            status: HunGitStatus.fixture(),
-            updatedCommits: 3,
-            protectedChanges: true,
-            restoredChanges: true,
-            recoveryRequired: false,
-            recoveryMessage: nil
-        )
-        let model = HunGitWorkspaceModel(client: client)
-        await model.load(projectID: "app")
-        model.isUpdateBranchPresented = true
-
-        let succeeded = await model.updateBranch(protectLocalChanges: true)
-
-        #expect(succeeded)
-        #expect(client.actions == ["update:app:true"])
-        #expect(model.status?.behind == 0)
-        #expect(model.lastRemoteCheckAt != nil)
-        #expect(model.lastUpdateResult?.updatedCommits == 3)
-        #expect(!model.isUpdateBranchPresented)
-    }
-
-    @Test func switchingProjectsDuringBranchUpdateIgnoresTheOldResult() async {
-        let client = MockGitClient()
-        client.status = HunGitStatus.fixture(upstream: "origin/old", behind: 2)
-        client.updateDelay = .milliseconds(100)
-        client.updateResult = HunGitUpdateResult(
-            status: HunGitStatus.fixture(upstream: "origin/old"),
-            updatedCommits: 2,
-            protectedChanges: false,
-            restoredChanges: false,
-            recoveryRequired: false,
-            recoveryMessage: nil
-        )
-        let model = HunGitWorkspaceModel(client: client)
-        await model.load(projectID: "old")
-        model.presentUpdateBranch()
-
-        let update = Task {
-            await model.updateBranch(protectLocalChanges: false)
-        }
-        try? await Task.sleep(for: .milliseconds(20))
-        client.status = HunGitStatus.fixture(upstream: "origin/new")
-        await model.load(projectID: "new")
-        _ = await update.value
-
-        #expect(model.status?.upstream == "origin/new")
-        #expect(!model.isUpdateBranchPresented)
-    }
-
-    @Test func updateRecoveryKeepsTheOriginalPreflightVisible() async {
-        let client = MockGitClient()
-        client.status = HunGitStatus.fixture(behind: 2)
-        client.updateResult = HunGitUpdateResult(
-            status: HunGitStatus.fixture(),
-            updatedCommits: 2,
-            protectedChanges: true,
-            restoredChanges: false,
-            recoveryRequired: true,
-            recoveryMessage: "Safety stash kept"
-        )
-        let model = HunGitWorkspaceModel(client: client)
-        await model.load(projectID: "app")
-        model.presentUpdateBranch()
-
-        _ = await model.updateBranch(protectLocalChanges: true)
-
-        #expect(model.status?.behind == 0)
-        #expect(model.updateBranchPreflightStatus?.behind == 2)
-        #expect(model.isUpdateBranchPresented)
-    }
-
-    @Test func commitAndPushRunsTheTwoGitActionsInOrder() async {
-        let client = MockGitClient()
-        let model = HunGitWorkspaceModel(client: client)
-        await model.load(projectID: "app")
-        model.commitMessage = "Explain remote state"
-
-        let succeeded = await model.commitAndPush()
-
-        #expect(succeeded)
-        #expect(client.actions == [
-            "commit:app:Explain remote state",
-            "push:app"
-        ])
-        #expect(model.commitMessage.isEmpty)
-    }
-
-    @Test func failedGitStageDoesNotReloadDiffOrHideItsError() async throws {
-        let client = MockGitClient()
-        client.status.files[0] = HunGitFileChange(
-            path: "ContentView.swift",
-            originalPath: nil,
-            indexStatus: "M",
-            worktreeStatus: "M",
-            untracked: false,
-            conflicted: false
-        )
-        let model = HunGitWorkspaceModel(client: client)
-        await model.load(projectID: "app")
-        let change = try #require(model.status?.files.first)
-        client.stageError = TestError.boom
-
-        await model.stage(change)
-
-        #expect(model.errorMessage == "boom")
-        #expect(client.diffRequests == 0)
     }
 
     @Test func snapshotDecodingMapsProjectState() async throws {
@@ -1041,6 +500,183 @@ struct hunTests {
         #expect(store.model.projects.first?.status == .running)
         #expect(store.model.projects.first?.iconPath == "/tmp/projects/app/logo.png")
         #expect(store.model.projects.first?.iconIsCustom == true)
+    }
+
+    @Test func clearingLogsEmptiesTheViewAndTheDaemonBuffer() async throws {
+        let client = MockDaemonClient()
+        client.nextSnapshot = .fixture(activeProject: "app")
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        await store.refresh(force: true)
+        store.selectedLogScope = .combined
+        // Changing the scope reloads logs in the background; let it finish.
+        try await Task.sleep(for: .milliseconds(50))
+        let project = try #require(store.model.projects.first)
+        #expect(!store.logFeed.lines.isEmpty)
+
+        store.clearLogs(for: project)
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(store.logFeed.lines.isEmpty)
+        #expect(client.actions.contains("clear_logs:app:"))
+    }
+
+    @Test func snapshotDecodesProfilesAndToleratesOlderDaemons() throws {
+        let json = """
+        {"protocol":17,"mode":"multitask","scan_dirs":[],"projects":[
+          {"id":"shop","name":"shop","path":"/w/shop","status":"running","is_active":true,"profile":"app","services":[
+            {"id":"api","name":"api","pid":10,"port":8000,"status":"running","running":true,"ready":true},
+            {"id":"db","name":"db","pid":11,"port":5432,"status":"running","running":true,"ready":true},
+            {"id":"web","name":"web","pid":12,"port":3000,"status":"running","running":true,"ready":true},
+            {"id":"worker","name":"worker","pid":0,"port":0,"status":"stopped","running":false,"ready":false}
+          ],"profiles":[
+            {"name":"ui","services":["web"],"resolved":["web"]},
+            {"name":"app","services":["web","api"],"resolved":["api","db","web"]}
+          ]},
+          {"id":"old","name":"old","path":"/w/old","status":"stopped","is_active":false,"services":[]}
+        ]}
+        """
+        let snapshot = try JSONDecoder().decode(HunDaemonSnapshot.self, from: Data(json.utf8))
+
+        let shop = HunProject(snapshot: snapshot.projects[0], activeID: "shop")
+        #expect(shop.profile == "app")
+        #expect(shop.profiles.map(\.name) == ["ui", "app"])
+        #expect(shop.profileServices == ["api", "db", "web"])
+
+        let old = HunProject(snapshot: snapshot.projects[1], activeID: nil)
+        #expect(old.profiles.isEmpty)
+        #expect(old.profile == nil)
+        #expect(old.profileServices == nil)
+    }
+
+    @Test func runningAProfileAndSavingOneSendTheRightRequests() async throws {
+        let client = MockDaemonClient()
+        client.nextSnapshot = .fixture(activeProject: "app")
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        await store.refresh(force: true)
+        let project = try #require(store.model.projects.first)
+
+        store.run(project, profile: "ui")
+        store.run(project, profile: nil)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(client.actions.contains { $0.hasPrefix("profile:\(project.id):ui:") })
+        #expect(client.actions.contains { $0.hasPrefix("profile:\(project.id):all:") })
+
+        let running = project.services.filter { $0.status == .running || $0.status == .starting }.map(\.id)
+        store.saveRunningServicesAsProfile(named: "mine", for: project)
+        try await Task.sleep(for: .milliseconds(50))
+        if running.isEmpty {
+            #expect(!client.actions.contains { $0.hasPrefix("save_profile:") })
+        } else {
+            #expect(client.actions.contains("save_profile:\(project.id):mine:\(running.joined(separator: ","))"))
+        }
+    }
+
+    @Test func editingConfigOpensInHunAndSavesThroughTheDaemon() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("cfg-" + UUID().uuidString.prefix(8))
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try "name: shop\n".write(to: folder.appendingPathComponent(".hun.yml"), atomically: true, encoding: .utf8)
+
+        let client = MockDaemonClient()
+        client.nextSnapshot = HunDaemonSnapshot(
+            protocolVersion: 18, mode: "multitask", activeProject: nil, scanDirs: [], lastScanAt: nil,
+            projects: [HunDaemonProject(id: "shop", name: "shop", path: folder.path, status: "stopped", isActive: false, branch: nil, lastNote: nil, startedAt: nil, services: [], configError: nil)],
+            warnings: []
+        )
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        await store.refresh(force: true)
+        let project = try #require(store.model.projects.first)
+
+        store.openConfig(for: project)
+        let target = try #require(store.configEditor)
+        #expect(target.fileURL.path == folder.appendingPathComponent(".hun.yml").path)
+
+        #expect(await store.configProblem(in: "name: shop") == nil)
+        #expect(await store.saveConfig("name: shop\n# edited\n", for: target) == nil)
+        #expect(client.savedConfigs.map(\.path) == [folder.path])
+
+        client.configError = "yaml: line 3: mapping values are not allowed in this context"
+        #expect(await store.configProblem(in: "bad") == client.configError)
+        #expect(await store.saveConfig("bad", for: target) == client.configError)
+        #expect(HunConfigEditorSheet.lineNumber(in: client.configError!) == 3)
+        #expect(HunConfigEditorSheet.lineNumber(in: "at least one service is required") == nil)
+    }
+
+    private func daemonLine(_ text: String, service: String = "web") -> HunDaemonLogLine {
+        HunDaemonLogLine(timestamp: "2026-10-20T17:00:00.000Z", service: service, project: "app", text: text, isErr: false)
+    }
+
+    @Test func logFeedCapsTrimsAndIgnoresStaleSubscriptions() {
+        let feed = HunLogFeed()
+        feed.replace(with: (0..<10).map { HunLogLine(daemonLine("old \($0)")) })
+        let reloadGeneration = feed.generation
+        let stale = feed.beginSubscription()
+        let current = feed.beginSubscription()
+
+        feed.append([HunLogLine(daemonLine("from an old stream"))], subscription: stale)
+        #expect(feed.lines.count == 10)
+
+        let batch = (0..<HunLogFeed.capacity).map { HunLogLine(daemonLine("new \($0)")) }
+        feed.append(batch, subscription: current)
+        #expect(feed.lines.count == HunLogFeed.capacity)
+        #expect(feed.lines.first?.message == "new 0")
+        #expect(feed.lines.last?.message == "new \(HunLogFeed.capacity - 1)")
+        #expect(feed.lastSeq == 10 + HunLogFeed.capacity)
+        #expect(zip(feed.lines, feed.lines.dropFirst()).allSatisfy { $0.id < $1.id })
+        #expect(feed.generation == reloadGeneration, "appending must not force a full redraw")
+
+        feed.clear(service: "web")
+        #expect(feed.lines.isEmpty)
+        #expect(feed.generation == reloadGeneration + 1)
+    }
+
+    @Test func logBatcherDeliversBurstsInFewBatchesAndInOrder() async throws {
+        var batches: [[HunLogLine]] = []
+        let batcher = HunLogBatcher { batches.append($0) }
+        await Task.detached {
+            for i in 0..<2_000 { batcher.add(HunDaemonLogLine(timestamp: "", service: "web", project: "app", text: "\(i)", isErr: false)) }
+        }.value
+        try await Task.sleep(for: .milliseconds(200))
+
+        let delivered = batches.flatMap { $0 }.map(\.message)
+        #expect(delivered == (0..<2_000).map(String.init))
+        #expect(batches.count < 20, "2,000 lines arrived in \(batches.count) batches")
+    }
+
+    @Test func profileNamesAreChecked() {
+        #expect(HunProfile.problem(with: "  ") != nil)
+        #expect(HunProfile.problem(with: "all") != nil)
+        #expect(HunProfile.problem(with: "a:b") != nil)
+        #expect(HunProfile.problem(with: "web-only") == nil)
+    }
+
+    @Test func renamedProjectKeepsItsTabAndSelection() async {
+        func snapshot(id: String) -> HunDaemonSnapshot {
+            HunDaemonSnapshot(
+                protocolVersion: 16,
+                mode: "focus",
+                activeProject: nil,
+                scanDirs: [],
+                lastScanAt: nil,
+                projects: [
+                    HunDaemonProject(id: "other", name: "other", path: "/w/other", status: "stopped", isActive: false, branch: nil, lastNote: nil, startedAt: nil, services: [], configError: nil),
+                    HunDaemonProject(id: id, name: id, path: "/w/shop", status: "stopped", isActive: false, branch: nil, lastNote: nil, startedAt: nil, services: [], configError: nil)
+                ],
+                warnings: []
+            )
+        }
+        let client = MockDaemonClient()
+        client.nextSnapshot = snapshot(id: "shop")
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        await store.refresh(force: true)
+        store.selectProject("shop")
+
+        client.nextSnapshot = snapshot(id: "storefront")
+        await store.refresh(force: true)
+
+        #expect(store.selectedProjectID == "storefront")
+        #expect(store.openTabIDs.contains("storefront"))
+        #expect(!store.openTabIDs.contains("shop"))
     }
 
     @Test func cachedSnapshotKeepsProjectsVisibleDuringRecovery() async {
@@ -1166,9 +802,45 @@ struct hunTests {
             configError: nil
         )
 
-        let project = HunProject(snapshot: snapshot, activeID: nil, logs: [])
+        let project = HunProject(snapshot: snapshot, activeID: nil)
 
         #expect(project.branch == nil)
+    }
+
+    @Test func snapshotDecodesServicesStartedOutsideHunAndPortConflicts() throws {
+        let json = """
+        {"protocol":16,"mode":"focus","scan_dirs":[],"projects":[{"id":"otto","name":"otto","path":"/w/otto","status":"running","is_active":true,"services":[
+          {"id":"backend","name":"backend","pid":0,"port":8000,"status":"running","running":true,"ready":true,"origin":"external","runtime":"docker","container":"otto-backend-1"},
+          {"id":"frontend","name":"frontend","pid":0,"port":3000,"status":"stopped","running":false,"ready":false,"conflict":{"port":3000,"pid":812,"command":"node","cwd":"/tmp/demo"}}
+        ]}],
+        "unmanaged":[{"pid":900,"command":"vite","port":5173,"ports":[5173],"cwd":"/w/scratch"}]}
+        """
+        let snapshot = try JSONDecoder().decode(HunDaemonSnapshot.self, from: Data(json.utf8))
+        let services = HunProject(snapshot: snapshot.projects[0], activeID: "otto").services
+
+        let backend = try #require(services.first { $0.id == "backend" })
+        #expect(backend.isExternal)
+        #expect(backend.isDocker)
+        #expect(backend.browserURL?.absoluteString == "http://localhost:8000")
+        #expect(backend.externalSourceText == "Started outside Hun · Docker container otto-backend-1")
+
+        let frontend = try #require(services.first { $0.id == "frontend" })
+        #expect(!frontend.isExternal)
+        #expect(frontend.conflict?.summary == "node · /tmp/demo")
+        #expect(snapshot.unmanaged.map(\.port) == [5173])
+    }
+
+    @Test func snapshotFromOlderDaemonDecodesWithoutObservedFields() throws {
+        let json = """
+        {"protocol":15,"mode":"focus","scan_dirs":[],"projects":[{"id":"a","name":"a","path":"/a","status":"running","is_active":false,"services":[
+          {"id":"web","name":"web","pid":4,"port":3000,"status":"running","running":true,"ready":true}
+        ]}]}
+        """
+        let snapshot = try JSONDecoder().decode(HunDaemonSnapshot.self, from: Data(json.utf8))
+        let service = try #require(snapshot.projects.first?.services.first)
+        #expect(service.origin == nil)
+        #expect(service.conflict == nil)
+        #expect(snapshot.unmanaged.isEmpty)
     }
 
     @Test func runningServiceBuildsLocalBrowserURLWithoutChangingPortMetadata() throws {
@@ -1324,7 +996,7 @@ struct hunTests {
     }
 
     @Test func agentPromptIncludesProjectAndHunSkillInstructions() throws {
-        let project = HunProject(snapshot: .fixtureProject(path: "/tmp/projects/shop"), activeID: nil, logs: [])
+        let project = HunProject(snapshot: .fixtureProject(path: "/tmp/projects/shop"), activeID: nil)
         let prompt = HunAgentPromptBuilder.prompt(
             for: project,
             bundledSkillURL: URL(fileURLWithPath: "/Applications/hun.app/Contents/Resources/hun-skill/SKILL.md"),
@@ -1782,6 +1454,9 @@ struct hunTests {
     @Test func workspacePanelWidthPreservesNavigatorAndDetailSpace() {
         #expect(HunWorkspacePanelMetrics.clamp(120, availableWidth: 1_200) == 140)
         #expect(HunWorkspacePanelMetrics.clamp(900, availableWidth: 1_200) == 640)
+        // Dragged sizes land on whole points so text stays sharp.
+        #expect(HunWorkspacePanelMetrics.clamp(321.01953125, availableWidth: 1_200) == 321)
+        #expect(HunTerminalPanelMetrics.clamp(390.29296875, availableHeight: 700) == 390)
         #expect(HunWorkspacePanelMetrics.clamp(500, availableWidth: 700) == 500)
         #expect(HunWorkspacePanelMetrics.clamp(310, availableWidth: 1_200) == 310)
         #expect(HunWorkspacePanelMetrics.clamp(320, availableWidth: 310) == 141)
@@ -2174,112 +1849,24 @@ private final class MockSupervisor: HunDaemonSupervisorProtocol {
     }
 }
 
-private final class MockCommitMessageGenerator: HunCommitMessageGenerating, @unchecked Sendable {
-    let availability: HunCommitMessageGenerationAvailability
-    let result: String
-    var contexts: [HunCommitMessageContext] = []
-
-    init(
-        availability: HunCommitMessageGenerationAvailability = .available,
-        result: String
-    ) {
-        self.availability = availability
-        self.result = result
-    }
-
-    func generate(from context: HunCommitMessageContext) async throws -> String {
-        contexts.append(context)
-        return result
-    }
-}
-
 private final class MockGitClient: HunGitClientProtocol {
     var status = HunGitStatus.fixture()
     var branches: [HunGitBranch] = []
-    var diff = HunGitDiff(path: "", staged: false, content: "", binary: false, truncated: false)
-    var statusDelay: Duration?
-    var diffDelay: Duration?
     var fetchError: Error?
-    var updateResult: HunGitUpdateResult?
-    var updateDelay: Duration?
-    var commitResult: HunGitStatus?
     var switchResult: HunGitStatus?
     var switchError: Error?
-    var stageError: Error?
+    var statusRequests = 0
     var branchRequests = 0
-    var diffRequests = 0
     var actions: [String] = []
 
     func gitStatus(project: String) async throws -> HunGitStatus {
-        let result = status
-        if let statusDelay {
-            try? await Task.sleep(for: statusDelay)
-        }
-        return result
+        statusRequests += 1
+        return status
     }
 
     func gitBranches(project: String) async throws -> [HunGitBranch] {
         branchRequests += 1
         return branches
-    }
-
-    func gitDiff(project: String, path: String, staged: Bool) async throws -> HunGitDiff {
-        diffRequests += 1
-        let result = HunGitDiff(
-            path: diff.path,
-            staged: staged,
-            content: diff.content,
-            binary: diff.binary,
-            truncated: diff.truncated
-        )
-        if let diffDelay {
-            try? await Task.sleep(for: diffDelay)
-        }
-        return result
-    }
-
-    func gitStage(project: String, path: String) async throws -> HunGitStatus {
-        actions.append("stage:\(project):\(path)")
-        if let stageError {
-            throw stageError
-        }
-        status.files[0] = HunGitFileChange(
-            path: status.files[0].path,
-            originalPath: status.files[0].originalPath,
-            indexStatus: "M",
-            worktreeStatus: ".",
-            untracked: false,
-            conflicted: false
-        )
-        return status
-    }
-
-    func gitStageAll(project: String) async throws -> HunGitStatus {
-        actions.append("stage-all:\(project)")
-        if let stageError {
-            throw stageError
-        }
-        status.files = status.files.map {
-            HunGitFileChange(
-                path: $0.path,
-                originalPath: $0.originalPath,
-                indexStatus: $0.untracked ? "A" : ($0.indexStatus == "." ? $0.worktreeStatus : $0.indexStatus),
-                worktreeStatus: ".",
-                untracked: false,
-                conflicted: false
-            )
-        }
-        return status
-    }
-
-    func gitUnstage(project: String, path: String) async throws -> HunGitStatus {
-        actions.append("unstage:\(project):\(path)")
-        return status
-    }
-
-    func gitCommit(project: String, message: String) async throws -> HunGitStatus {
-        actions.append("commit:\(project):\(message)")
-        return commitResult ?? status
     }
 
     func gitCreateBranch(project: String, branch: String) async throws -> HunGitStatus {
@@ -2300,34 +1887,6 @@ private final class MockGitClient: HunGitClientProtocol {
         if let fetchError {
             throw fetchError
         }
-        return status
-    }
-
-    func gitPull(project: String) async throws -> HunGitStatus {
-        actions.append("pull:\(project)")
-        return status
-    }
-
-    func gitUpdateBranch(
-        project: String,
-        protectLocalChanges: Bool
-    ) async throws -> HunGitUpdateResult {
-        actions.append("update:\(project):\(protectLocalChanges)")
-        if let updateDelay {
-            try? await Task.sleep(for: updateDelay)
-        }
-        return updateResult ?? HunGitUpdateResult(
-            status: status,
-            updatedCommits: status.behind,
-            protectedChanges: protectLocalChanges,
-            restoredChanges: protectLocalChanges,
-            recoveryRequired: false,
-            recoveryMessage: nil
-        )
-    }
-
-    func gitPush(project: String) async throws -> HunGitStatus {
-        actions.append("push:\(project)")
         return status
     }
 }
@@ -2436,6 +1995,26 @@ private final class MockDaemonClient: HunDaemonClientProtocol {
         actions.append("start:\(project):\(service):\(mode.rawValue)")
     }
 
+    func runProfile(_ project: String, profile: String, mode: HunDaemonStartMode) async throws {
+        actions.append("profile:\(project):\(profile):\(mode.rawValue)")
+    }
+
+    func saveProfile(_ project: String, name: String, services: [String]) async throws {
+        actions.append("save_profile:\(project):\(name):\(services.joined(separator: ","))")
+    }
+
+    var configError: String?
+    var savedConfigs: [(path: String, content: String)] = []
+
+    func validateConfig(_ content: String) async throws {
+        if let configError { throw HunDaemonError.daemon(configError) }
+    }
+
+    func saveConfig(path: String, content: String) async throws {
+        if let configError { throw HunDaemonError.daemon(configError) }
+        savedConfigs.append((path, content))
+    }
+
     func setProjectIcon(_ project: String, path: String) async throws {
         actions.append("icon:\(project):\(path)")
     }
@@ -2462,6 +2041,18 @@ private final class MockDaemonClient: HunDaemonClientProtocol {
 
     func removeService(_ project: String, service: String) async throws {
         actions.append("remove:\(project):\(service)")
+    }
+
+    func freePort(_ port: Int) async throws {
+        actions.append("free_port:\(port)")
+    }
+
+    func removeProject(_ project: String) async throws {
+        actions.append("remove_project:\(project)")
+    }
+
+    func clearLogs(project: String, service: String?) async throws {
+        actions.append("clear_logs:\(project):\(service ?? "")")
     }
 
     func setMode(_ mode: HunMode, preferredProject: String?) async throws {

@@ -3,7 +3,6 @@ package cli
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/sourabhrathourr/hun/internal/state"
@@ -257,7 +256,7 @@ func TestOnboardProjectDirRequiresApprovalWhenUndetected(t *testing.T) {
 	}
 }
 
-func TestOnboardProjectDirConflict(t *testing.T) {
+func TestOnboardProjectDirSameNameGetsDistinctKey(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -274,9 +273,15 @@ func TestOnboardProjectDirConflict(t *testing.T) {
 	if _, err := onboardProjectDir(dirA); err != nil {
 		t.Fatalf("onboard first dir: %v", err)
 	}
-	if _, err := onboardProjectDir(dirB); err == nil {
-		t.Fatalf("expected conflict error")
-	} else if !strings.Contains(err.Error(), "already registered at") {
-		t.Fatalf("unexpected error: %v", err)
+	// A second folder with the same name gets its own key instead of an error.
+	if _, err := onboardProjectDir(dirB); err != nil {
+		t.Fatalf("onboard second dir: %v", err)
+	}
+	st, err := state.Load()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	if len(st.Registry) != 2 || st.Registry["demo"] != dirA {
+		t.Fatalf("registry = %v", st.Registry)
 	}
 }

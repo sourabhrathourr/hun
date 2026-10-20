@@ -20,6 +20,7 @@ func TestCommandNeedsDocker(t *testing.T) {
 		{name: "env prefixed docker", command: "DOCKER_BUILDKIT=1 docker build .", want: true},
 		{name: "sudo docker", command: "sudo -E docker ps", want: true},
 		{name: "after shell boundary", command: "cd infra && docker compose up db", want: true},
+		{name: "inside if branch", command: "if [ -f h.yml ]; then docker compose up --build backend; else echo no; fi", want: true},
 		{name: "argument only", command: "echo docker", want: false},
 		{name: "make target", command: "make docker-up", want: false},
 		{name: "plain local command", command: "npm run dev", want: false},

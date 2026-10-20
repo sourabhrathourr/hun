@@ -17,6 +17,11 @@ struct hunApp: App {
     @State private var updater = HunUpdater()
     @State private var license = HunLicenseManager()
 
+    init() {
+        // NSApp exists once the app is running; apply the saved theme then.
+        DispatchQueue.main.async { HunTheme.saved.apply() }
+    }
+
     var body: some Scene {
         WindowGroup("hun", id: "dashboard") {
             HunLicensedRootView()
@@ -46,7 +51,7 @@ struct hunApp: App {
                 .environment(store)
                 .environment(license)
         } label: {
-            Image(systemName: "rectangle.badge.sparkles.fill")
+            HunMenuBarLabel(store: store)
         }
         .menuBarExtraStyle(.window)
     }

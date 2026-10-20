@@ -235,6 +235,13 @@ func (c *Client) SubscribeWithContext(ctx context.Context, project, service stri
 	return nil
 }
 
+// Running reports whether a daemon with this build's protocol is serving,
+// without starting one.
+func (c *Client) Running() bool {
+	probe := c.pingProbe()
+	return probe.ok && probe.protocol == daemon.CurrentProtocolVersion
+}
+
 func (c *Client) ping() bool {
 	return c.pingProbe().ok
 }

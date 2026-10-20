@@ -2,9 +2,12 @@ package daemon
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/sourabhrathourr/hun/internal/config"
@@ -17,13 +20,18 @@ type Request struct {
 	Service string `json:"service,omitempty"`
 	Path    string `json:"path,omitempty"`
 	Branch  string `json:"branch,omitempty"`
-	Message string `json:"message,omitempty"`
 	Mode    string `json:"mode,omitempty"` // "exclusive" or "parallel"
 	Lines   int    `json:"lines,omitempty"`
 	Note    string `json:"note,omitempty"`
 	Origin  string `json:"origin,omitempty"`
-	Staged  bool   `json:"staged,omitempty"`
 	Stash   bool   `json:"stash,omitempty"`
+	Port    int    `json:"port,omitempty"`
+	// Profile picks the services start runs: a profile from .hun.yml, or
+	// "all". Empty means the profile the project last ran.
+	Profile  string   `json:"profile,omitempty"`
+	Services []string `json:"services,omitempty"`
+	// Content is .hun.yml source for validate_config and save_config.
+	Content string `json:"content,omitempty"`
 }
 
 // Response is the JSON response from the daemon.
@@ -31,6 +39,8 @@ type Response struct {
 	OK    bool            `json:"ok"`
 	Error string          `json:"error,omitempty"`
 	Data  json.RawMessage `json:"data,omitempty"`
+	// Conflict identifies what holds a port when a start failed on it.
+	Conflict *PortHolder `json:"conflict,omitempty"`
 }
 
 func successResponse(data interface{}) Response {
@@ -40,6 +50,18 @@ func successResponse(data interface{}) Response {
 
 func errorResponse(msg string) Response {
 	return Response{OK: false, Error: msg}
+}
+
+// errorResponseFrom keeps the port holder of a conflict so clients can offer
+// to stop it.
+func errorResponseFrom(err error) Response {
+	resp := errorResponse(err.Error())
+	var conflict *PortConflictError
+	if errors.As(err, &conflict) {
+		holder := conflict.Holder
+		resp.Conflict = &holder
+	}
+	return resp
 }
 
 // HandleRequest routes an API request to the appropriate handler.
@@ -93,38 +115,41 @@ func (d *Daemon) HandleRequest(req Request) Response {
 		return d.handleStatus()
 	case "register_project", "add_project":
 		return d.handleRegisterProject(req)
+	case "remove_project":
+		return d.handleRemoveProject(req)
 	case "logs":
 		return d.handleLogs(req)
+	case "clear_logs":
+		if req.Project == "" {
+			return errorResponse("project name required")
+		}
+		d.manager.ClearLogs(req.Project, req.Service)
+		return successResponse(map[string]string{"status": "logs_cleared"})
 	case "git_status":
 		return d.handleGitStatus(req)
 	case "git_branches":
 		return d.handleGitBranches(req)
-	case "git_diff":
-		return d.handleGitDiff(req)
-	case "git_stage":
-		return d.handleGitStage(req)
-	case "git_stage_all":
-		return d.handleGitStageAll(req)
-	case "git_unstage":
-		return d.handleGitUnstage(req)
-	case "git_commit":
-		return d.handleGitCommit(req)
 	case "git_create_branch":
 		return d.handleGitCreateBranch(req)
 	case "git_switch_branch":
 		return d.handleGitSwitchBranch(req)
 	case "git_fetch":
 		return d.handleGitFetch(req)
-	case "git_pull":
-		return d.handleGitPull(req)
-	case "git_update_branch":
-		return d.handleGitUpdateBranch(req)
-	case "git_push":
-		return d.handleGitPush(req)
 	case "ports":
 		return d.handlePorts()
 	case "focus":
 		return d.handleFocus(req)
+	case "save_profile":
+		return d.handleSaveProfile(req)
+	case "validate_config":
+		if _, err := config.ParseProject([]byte(req.Content)); err != nil {
+			return errorResponse(err.Error())
+		}
+		return successResponse(map[string]string{"status": "valid"})
+	case "save_config":
+		return d.handleSaveConfig(req)
+	case "free_port":
+		return d.handleFreePort(req)
 	case "subscribe":
 		// Handled at connection level, not here
 		return errorResponse("subscribe must be handled at connection level")
@@ -135,8 +160,7 @@ func (d *Daemon) HandleRequest(req Request) Response {
 
 func serializesGitMutation(action string) bool {
 	switch action {
-	case "git_stage", "git_stage_all", "git_unstage", "git_commit", "git_create_branch", "git_switch_branch",
-		"git_fetch", "git_pull", "git_update_branch", "git_push":
+	case "git_create_branch", "git_switch_branch", "git_fetch":
 		return true
 	default:
 		return false
@@ -159,7 +183,7 @@ func (d *Daemon) acquireLifecycle(timeout time.Duration) bool {
 func serializesLifecycle(action string) bool {
 	switch action {
 	case "start", "start_service", "stop", "stop_service", "remove_service", "restart", "focus",
-		"register_project", "add_project":
+		"register_project", "add_project", "remove_project", "free_port", "save_profile", "save_config":
 		return true
 	default:
 		return false
@@ -184,18 +208,29 @@ func (d *Daemon) handleStart(req Request) Response {
 		return errorResponse(fmt.Sprintf("loading project config: %v", err))
 	}
 
-	exclusive := req.Mode != "parallel"
+	profile := req.Profile
+	if profile == "" {
+		profile = d.manager.RememberedProfile(req.Project, proj)
+	} else if _, err := proj.ResolveProfile(profile); err != nil {
+		return errorResponse(err.Error())
+	}
 
-	// In exclusive mode, stop all other running projects first
+	exclusive := req.Mode != "parallel"
 	if exclusive {
-		status := d.manager.Status()
-		for name := range status {
-			if name != req.Project {
-				// Save git branch before stopping
-				d.saveGitContext(name)
-				d.manager.StopProject(name)
-			}
+		d.clearForFocus(req.Project, proj)
+	}
+
+	// A project whose services all crashed or exited is cleared first, so
+	// Run starts it again instead of reporting it as already running.
+	if d.manager.IsRunning(req.Project) && !d.manager.HasLiveServices(req.Project) {
+		_ = d.manager.stopProject(req.Project, false)
+	}
+
+	if d.manager.IsRunning(req.Project) && req.Profile != "" {
+		if err := d.manager.ApplyProfile(req.Project, profile, proj, path, exclusive); err != nil {
+			return errorResponseFrom(err)
 		}
+		return successResponse(map[string]string{"status": "profile_applied"})
 	}
 
 	if d.manager.IsRunning(req.Project) {
@@ -209,14 +244,62 @@ func (d *Daemon) handleStart(req Request) Response {
 		return successResponse(map[string]string{"status": "already_running"})
 	}
 
-	if err := d.manager.StartProject(req.Project, proj, path, exclusive); err != nil {
-		return errorResponse(err.Error())
+	if err := d.manager.StartProfile(req.Project, profile, proj, path, exclusive); err != nil {
+		return errorResponseFrom(err)
 	}
 
 	return successResponse(map[string]interface{}{
 		"status": "started",
 		"offset": d.manager.ports.GetOffset(req.Project),
 	})
+}
+
+// handleSaveProfile writes a profile to the project's .hun.yml and makes it
+// the one Run uses, since it usually captures what is running right now.
+func (d *Daemon) handleSaveProfile(req Request) Response {
+	if req.Project == "" {
+		return errorResponse("project name required")
+	}
+	name := strings.TrimSpace(req.Profile)
+	if name == "" {
+		return errorResponse("profile name required")
+	}
+	if len(req.Services) == 0 {
+		return errorResponse("a profile needs at least one service")
+	}
+	path, ok := d.manager.ProjectPath(req.Project)
+	if !ok {
+		return errorResponse(fmt.Sprintf("project %q not in registry", req.Project))
+	}
+	if err := config.SaveProfile(path, name, req.Services); err != nil {
+		return errorResponse(err.Error())
+	}
+	d.manager.rememberProfile(req.Project, name)
+	return successResponse(map[string]string{"status": "profile_saved", "profile": name})
+}
+
+// handleSaveConfig replaces a project's .hun.yml with edited source, after
+// checking it is a config Hun can run. The project is named by Project, or by
+// Path for a folder that is still being added.
+func (d *Daemon) handleSaveConfig(req Request) Response {
+	path := req.Path
+	if req.Project != "" {
+		registered, ok := d.manager.ProjectPath(req.Project)
+		if !ok {
+			return errorResponse(fmt.Sprintf("project %q not in registry", req.Project))
+		}
+		path = registered
+	}
+	if path == "" || !filepath.IsAbs(path) {
+		return errorResponse("project name or absolute folder path required")
+	}
+	if !config.ProjectExists(path) {
+		return errorResponse(fmt.Sprintf("no .hun.yml in %s", path))
+	}
+	if err := config.SaveProjectSource(path, []byte(req.Content)); err != nil {
+		return errorResponse(err.Error())
+	}
+	return successResponse(map[string]string{"status": "config_saved"})
 }
 
 func (d *Daemon) handleStartService(req Request) Response {
@@ -241,17 +324,11 @@ func (d *Daemon) handleStartService(req Request) Response {
 
 	exclusive := req.Mode != "parallel"
 	if exclusive {
-		status := d.manager.Status()
-		for name := range status {
-			if name != req.Project {
-				d.saveGitContext(name)
-				d.manager.StopProject(name)
-			}
-		}
+		d.clearForFocus(req.Project, proj)
 	}
 
 	if err := d.manager.StartService(req.Project, req.Service, proj, path, exclusive); err != nil {
-		return errorResponse(err.Error())
+		return errorResponseFrom(err)
 	}
 	return successResponse(map[string]string{"status": "service_started"})
 }
@@ -376,20 +453,72 @@ func (d *Daemon) handleRestart(req Request) Response {
 		wasExclusive := d.manager.currentMode() == "focus"
 		d.manager.StopProject(req.Project)
 		time.Sleep(500 * time.Millisecond)
-		if err := d.manager.StartProject(req.Project, proj, path, wasExclusive); err != nil {
+		profile := d.manager.RememberedProfile(req.Project, proj)
+		if err := d.manager.StartProfile(req.Project, profile, proj, path, wasExclusive); err != nil {
+			return errorResponseFrom(err)
+		}
+		return successResponse(map[string]string{"status": "restarted"})
+	}
+
+	if !d.manager.IsServiceRunning(req.Project, req.Service) {
+		// Not running under Hun: stop any instance started elsewhere, then
+		// start it here so Hun owns it and captures its logs.
+		path, ok := d.manager.ProjectPath(req.Project)
+		if !ok {
+			return errorResponse("project not in registry")
+		}
+		proj, err := config.LoadProject(path)
+		if err != nil {
 			return errorResponse(err.Error())
+		}
+		if _, ok := d.manager.attribution(freshObservationAge).external(req.Project, req.Service); ok {
+			// Not StopService: it starts again right below, so the project stays up.
+			if err := d.manager.stopService(req.Project, req.Service); err != nil {
+				return errorResponse(err.Error())
+			}
+			if svc := proj.Services[req.Service]; svc != nil && svc.Port > 0 {
+				waitForPortRelease([]int{svc.Port}, portReleaseTimeout)
+			}
+		}
+		exclusive := d.manager.currentMode() == "focus"
+		if err := d.manager.StartService(req.Project, req.Service, proj, path, exclusive); err != nil {
+			return errorResponseFrom(err)
 		}
 		return successResponse(map[string]string{"status": "restarted"})
 	}
 
 	if err := d.manager.RestartService(req.Project, req.Service); err != nil {
-		return errorResponse(err.Error())
+		return errorResponseFrom(err)
 	}
 	return successResponse(map[string]string{"status": "restarted"})
 }
 
+// clearForFocus makes the machine look like target is the only project:
+// other projects stop whether or not Hun started them, and target's
+// configured ports get time to free up.
+func (d *Daemon) clearForFocus(target string, proj *config.Project) {
+	for name := range d.manager.Status() {
+		if name != target {
+			d.saveGitContext(name)
+			_ = d.manager.StopProject(name)
+		}
+	}
+	_ = d.manager.stopExternalsExcept(target)
+	d.manager.waitForProjectPorts(target, proj, portReleaseTimeout)
+}
+
+func (d *Daemon) handleFreePort(req Request) Response {
+	if req.Port <= 0 {
+		return errorResponse("port required")
+	}
+	if err := d.manager.FreePort(req.Port); err != nil {
+		return errorResponse(err.Error())
+	}
+	return successResponse(map[string]string{"status": "port_freed"})
+}
+
 func (d *Daemon) handleStatus() Response {
-	return successResponse(d.manager.Status())
+	return successResponse(d.manager.StatusWithExternal())
 }
 
 func (d *Daemon) handleSnapshot(force bool) Response {
@@ -419,15 +548,27 @@ func (d *Daemon) handleRegisterProject(req Request) Response {
 	if req.Path == "" {
 		return errorResponse("project path required")
 	}
-	proj, path, err := d.manager.RegisterProjectPath(req.Path)
+	proj, key, path, err := d.manager.RegisterProjectPath(req.Path)
 	if err != nil {
 		return errorResponse(err.Error())
 	}
 	return successResponse(map[string]string{
 		"status":  "registered",
-		"project": proj.Name,
+		"project": key,
+		"name":    proj.Name,
 		"path":    path,
 	})
+}
+
+func (d *Daemon) handleRemoveProject(req Request) Response {
+	if req.Project == "" {
+		return errorResponse("project name required")
+	}
+	d.saveGitContext(req.Project)
+	if err := d.manager.RemoveProject(req.Project); err != nil {
+		return errorResponse(err.Error())
+	}
+	return successResponse(map[string]string{"status": "project_removed"})
 }
 
 func (d *Daemon) handleLogs(req Request) Response {
@@ -508,6 +649,16 @@ func (d *Daemon) transitionToFocus(preferred string) error {
 		d.saveGitContext(name)
 		if err := d.manager.StopProject(name); err != nil {
 			return fmt.Errorf("stopping %s for focus mode: %w", name, err)
+		}
+	}
+
+	keep := survivor
+	if keep == "" {
+		keep = preferred
+	}
+	if keep != "" {
+		if err := d.manager.stopExternalsExcept(keep); err != nil {
+			return fmt.Errorf("stopping services outside %s for focus mode: %w", keep, err)
 		}
 	}
 

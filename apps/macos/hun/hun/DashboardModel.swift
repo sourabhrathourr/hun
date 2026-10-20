@@ -45,6 +45,8 @@ final class HunStore {
     var isAddingProject = false
     var pendingProjectReview: HunProjectInitReview?
     var lastError: String?
+    /// Set when the last action failed because something else holds a port.
+    var portConflict: HunPortConflict?
     var pendingActions: Set<HunActionKey> = []
     var daemonInfo: HunDaemonInfo?
     var daemonSettingsError: String?
@@ -56,8 +58,10 @@ final class HunStore {
     private let projectInitializer: HunProjectInitializing
     private let navigationDefaults: UserDefaults?
     private var pollTask: Task<Void, Never>?
+    private var visibilityObservers: [NSObjectProtocol] = []
     private var logSubscription: HunLogSubscribing?
-    private var logsByProject: [HunProject.ID: [HunLogLine]] = [:]
+    /// Lines for the log view, kept outside the project model.
+    let logFeed = HunLogFeed()
     private var isApplyingSnapshot = false
     private var modeChangeTask: Task<Void, Never>?
     private var modeChangeGeneration = 0
@@ -127,7 +131,7 @@ final class HunStore {
     }
 
     func projectAction(for project: HunProject) -> HunActionKind? {
-        let order: [HunActionKind] = [.startProject, .restartProject, .stopProject]
+        let order: [HunActionKind] = [.startProject, .switchProfile, .restartProject, .stopProject]
         return order.first { pendingActions.contains(.project(project.id, $0)) }
     }
 
@@ -143,8 +147,12 @@ final class HunStore {
     func start() async {
         guard !hasStarted else { return }
         hasStarted = true
-        installAgentSkillIfPossible()
+        // Paint from the daemon's cached registry (a few ms), then rescan
+        // project folders. Installing the agent skill copies files, so it
+        // waits until the dashboard is on screen.
+        await refresh(force: false)
         await refresh(force: true)
+        installAgentSkillIfPossible()
         startPolling()
     }
 
@@ -154,6 +162,7 @@ final class HunStore {
 
     func clearLastError() {
         lastError = nil
+        portConflict = nil
     }
 
     func refreshDaemonInfo() async {
@@ -184,6 +193,20 @@ final class HunStore {
             daemonSettingsError = error.localizedDescription
             isConnected = false
         }
+    }
+
+    /// Adds the repository a running dev server belongs to.
+    func addProject(from process: HunUnmanagedProcess) {
+        var url = URL(fileURLWithPath: process.cwd, isDirectory: true)
+        var candidate = url
+        while candidate.path != "/" {
+            if FileManager.default.fileExists(atPath: candidate.appendingPathComponent(".git").path) {
+                url = candidate
+                break
+            }
+            candidate.deleteLastPathComponent()
+        }
+        Task { await addProject(at: url) }
     }
 
     func addProject(at url: URL) async {
@@ -249,16 +272,42 @@ final class HunStore {
         pendingProjectReview = nil
     }
 
+    /// The .hun.yml open in Hun's editor, if any.
+    var configEditor: HunConfigEditorTarget?
+    /// The same, opened from the add-project review, which is already a sheet.
+    var reviewConfigEditor: HunConfigEditorTarget?
+
     func openConfig(for project: HunProject) {
-        let configURL = URL(fileURLWithPath: project.path).appendingPathComponent(".hun.yml")
-        guard FileManager.default.fileExists(atPath: configURL.path) else {
+        let target = HunConfigEditorTarget(name: project.name, directory: project.path)
+        guard FileManager.default.fileExists(atPath: target.fileURL.path) else {
             lastError = "\(project.name) does not have a .hun.yml file."
             return
         }
+        configEditor = target
+    }
 
-        if !NSWorkspace.shared.open(configURL) {
-            lastError = "Could not open \(configURL.path)."
+    /// Why `content` is not a config Hun can run, or nil when it is.
+    func configProblem(in content: String) async -> String? {
+        do {
+            try await client.validateConfig(content)
+            return nil
+        } catch {
+            return error.localizedDescription
         }
+    }
+
+    /// Saves edited .hun.yml source; returns why it couldn't, or nil.
+    func saveConfig(_ content: String, for target: HunConfigEditorTarget) async -> String? {
+        do {
+            try await client.saveConfig(path: target.directory, content: content)
+        } catch {
+            return error.localizedDescription
+        }
+        if let review = pendingProjectReview, review.path == target.directory {
+            pendingProjectReview = review.replacingConfig(with: content)
+        }
+        await refresh(force: true)
+        return nil
     }
 
     func copyAgentPrompt(for project: HunProject) {
@@ -280,6 +329,12 @@ final class HunStore {
             .compactMap { UTType(filenameExtension: $0) }
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        // A banner or screenshot can't work at icon size, so ask for a
+        // square-ish image rather than showing an unreadable sliver.
+        if let image = NSImage(contentsOf: url), !ProjectIconTraits.isIconShaped(image.size) {
+            lastError = "\(url.lastPathComponent) is \(Int(image.size.width))×\(Int(image.size.height)). Choose a square image for the logo."
+            return
+        }
         let didAccess = url.startAccessingSecurityScopedResource()
         perform { [self] in
             defer {
@@ -306,15 +361,12 @@ final class HunStore {
     }
 
     func openConfig(for review: HunProjectInitReview) {
-        let configURL = URL(fileURLWithPath: review.configPath)
-        guard FileManager.default.fileExists(atPath: configURL.path) else {
+        let target = HunConfigEditorTarget(name: review.name, directory: review.path)
+        guard FileManager.default.fileExists(atPath: target.fileURL.path) else {
             lastError = "\(review.name) does not have a .hun.yml file."
             return
         }
-
-        if !NSWorkspace.shared.open(configURL) {
-            lastError = "Could not open \(configURL.path)."
-        }
+        reviewConfigEditor = target
     }
 
     private func installAgentSkillIfPossible() {
@@ -391,6 +443,34 @@ final class HunStore {
         }
     }
 
+    /// Runs a profile, or every service for nil. A stopped project starts it
+    /// in the current mode; a running one switches to it, changing only the
+    /// services that differ.
+    func run(_ project: HunProject, profile: String?) {
+        let isRunning = project.status == .running || project.status == .starting
+        if globalMode == .focus {
+            selectProject(project.id)
+        }
+        perform(key: .project(project.id, isRunning ? .switchProfile : .startProject)) { [self] in
+            try await self.client.runProfile(
+                project.id,
+                profile: profile ?? HunProfile.allServices,
+                mode: self.globalMode.daemonMode
+            )
+        }
+    }
+
+    /// Saves the project's running services as a profile in its .hun.yml.
+    func saveRunningServicesAsProfile(named name: String, for project: HunProject) {
+        let services = project.services
+            .filter { $0.status == .running || $0.status == .starting }
+            .map(\.id)
+        guard !services.isEmpty else { return }
+        perform(key: .project(project.id, .switchProfile)) { [self] in
+            try await self.client.saveProfile(project.id, name: name, services: services)
+        }
+    }
+
     func stop(_ project: HunProject) {
         perform(key: .project(project.id, .stopProject)) { [self] in
             try await self.client.stopProject(project.id)
@@ -418,6 +498,53 @@ final class HunStore {
     func stop(_ service: HunService, in project: HunProject) {
         perform(key: .service(project.id, service.id, .stopService)) { [self] in
             try await self.client.stopService(project.id, service: service.id)
+        }
+    }
+
+    /// Stops whatever holds a stopped service's port, then runs the service.
+    func stopHolderAndRun(_ service: HunService, in project: HunProject) {
+        guard let holder = service.conflict else { return }
+        perform(key: .service(project.id, service.id, .startService)) { [self] in
+            try await self.client.freePort(holder.port)
+            try await self.client.startService(project.id, service: service.id, mode: self.globalMode.daemonMode)
+        }
+    }
+
+    /// Stops the holder named by the last port conflict, then retries the action that hit it.
+    func resolvePortConflict() {
+        guard let conflict = portConflict else { return }
+        portConflict = nil
+        lastError = nil
+        perform(key: conflict.key) { [self] in
+            try await self.client.freePort(conflict.holder.port)
+            try await conflict.retry()
+        }
+    }
+
+    /// Unregisters a project; its folder and files are left alone.
+    func remove(_ project: HunProject) {
+        perform(key: .project(project.id, .stopProject)) { [self] in
+            try await self.client.removeProject(project.id)
+        }
+    }
+
+    /// Clears the logs in view (the selected service's, or the whole
+    /// project's in the All view); new output keeps streaming in.
+    func clearLogs(for project: HunProject) {
+        let service = selectedLogScope == .service ? selectedServiceID : nil
+        logFeed.clear(service: service)
+        Task {
+            do {
+                try await client.clearLogs(project: project.id, service: service)
+            } catch {
+                lastError = error.localizedDescription
+            }
+        }
+    }
+
+    func stop(_ process: HunUnmanagedProcess) {
+        perform { [self] in
+            try await self.client.freePort(process.port)
         }
     }
 
@@ -469,9 +596,15 @@ final class HunStore {
             do {
                 try await operation()
                 lastError = nil
+                portConflict = nil
+                await refresh(force: true)
+            } catch HunDaemonError.portConflict(let message, let holder) {
+                lastError = message
+                portConflict = HunPortConflict(holder: holder, key: key, retry: operation)
                 await refresh(force: true)
             } catch {
                 lastError = error.localizedDescription
+                portConflict = nil
             }
         }
     }
@@ -495,12 +628,34 @@ final class HunStore {
         guard pollTask == nil else { return }
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(2))
+                try? await Task.sleep(for: self?.pollInterval ?? .seconds(2))
                 guard !Task.isCancelled else { break }
                 guard self?.pendingProjectReview == nil else { continue }
                 await self?.refresh(force: false)
             }
         }
+        // Coming back into view refreshes straight away rather than waiting
+        // out the slower background interval.
+        let center = NotificationCenter.default
+        for name in [NSApplication.didBecomeActiveNotification, NSWindow.didChangeOcclusionStateNotification] {
+            visibilityObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self, self.isInView, self.pendingProjectReview == nil else { return }
+                    await self.refresh(force: false)
+                }
+            })
+        }
+    }
+
+    /// Each snapshot has the daemon re-scan what's running (lsof, ps,
+    /// docker), so poll less often while Hun is out of sight.
+    private var pollInterval: Duration {
+        isInView ? .seconds(2) : .seconds(10)
+    }
+
+    private var isInView: Bool {
+        guard let app = NSApp else { return true }
+        return app.isActive || app.windows.contains { $0.isVisible && $0.occlusionState.contains(.visible) }
     }
 
     private func apply(_ snapshot: HunDaemonSnapshot) {
@@ -511,14 +666,28 @@ final class HunStore {
         isRecoveringServices = snapshot.lifecycleBusy
 
         let projects = snapshot.projects.map { project in
-            HunProject(snapshot: project, activeID: snapshot.activeProject, logs: logsByProject[project.id] ?? [])
+            HunProject(snapshot: project, activeID: snapshot.activeProject)
+        }
+        // A project renamed in .hun.yml comes back under a new ID; keep its
+        // tab and selection by matching the folder.
+        let previousPaths = Dictionary(model.projects.map { ($0.id, $0.path) }, uniquingKeysWith: { first, _ in first })
+        let idsByPath = Dictionary(projects.map { ($0.path, $0.id) }, uniquingKeysWith: { first, _ in first })
+        let currentIDs = Set(projects.map(\.id))
+        func followRename(_ id: HunProject.ID) -> HunProject.ID {
+            guard !currentIDs.contains(id), let path = previousPaths[id], let renamed = idsByPath[path] else { return id }
+            return renamed
+        }
+        openTabIDs = openTabIDs.map(followRename)
+        if let selected = selectedProjectID {
+            selectedProjectID = followRename(selected)
         }
         model = HunDashboardModel(
             projects: projects,
             selectedProjectID: selectedProjectID,
             selectedServiceID: selectedServiceID,
             warnings: snapshot.warnings,
-            scanDirs: snapshot.scanDirs
+            scanDirs: snapshot.scanDirs,
+            unmanaged: snapshot.unmanaged
         )
 
         let validIDs = Set(projects.map(\.id))
@@ -586,8 +755,7 @@ final class HunStore {
         do {
             let lines = try await client.logs(project: selectedProjectID, service: service, lines: 500)
                 .map(HunLogLine.init)
-            logsByProject[selectedProjectID] = Array(lines.suffix(5_000))
-            updateProjectLogs(projectID: selectedProjectID)
+            logFeed.replace(with: lines)
             if resubscribe {
                 subscribe(project: selectedProjectID, service: service)
             }
@@ -600,12 +768,16 @@ final class HunStore {
 
     private func subscribe(project: String, service: String?) {
         logSubscription?.cancel()
+        let feed = logFeed
+        let subscription = feed.beginSubscription()
+        // Lines are converted on the reader thread and reach the feed in
+        // batches, so a chatty service can't flood the main thread.
+        let batcher = HunLogBatcher { batch in
+            feed.append(batch, subscription: subscription)
+        }
         do {
-            logSubscription = try client.subscribe(project: project, service: service) { [weak self] line in
-                guard let self else { return }
-                Task { @MainActor in
-                    self.append(line)
-                }
+            logSubscription = try client.subscribe(project: project, service: service) { line in
+                batcher.add(line)
             } onError: { [weak self] error in
                 guard let self else { return }
                 Task { @MainActor in
@@ -620,20 +792,6 @@ final class HunStore {
         }
     }
 
-    private func append(_ line: HunDaemonLogLine) {
-        var lines = logsByProject[line.project] ?? []
-        lines.append(HunLogLine(line))
-        if lines.count > 5_000 {
-            lines = Array(lines.suffix(5_000))
-        }
-        logsByProject[line.project] = lines
-        updateProjectLogs(projectID: line.project)
-    }
-
-    private func updateProjectLogs(projectID: String) {
-        guard let index = model.projects.firstIndex(where: { $0.id == projectID }) else { return }
-        model.projects[index].logs = logsByProject[projectID] ?? []
-    }
 }
 
 private enum NavigationPreferenceKey {
@@ -651,10 +809,11 @@ nonisolated enum HunActionKind: String, Hashable {
     case stopService
     case restartService
     case removeService
+    case switchProfile
 
     var progressTitle: String {
         switch self {
-        case .startProject, .startService:
+        case .startProject, .startService, .switchProfile:
             return "Starting..."
         case .stopProject, .stopService:
             return "Stopping..."
@@ -667,7 +826,7 @@ nonisolated enum HunActionKind: String, Hashable {
 
     var statusText: String {
         switch self {
-        case .startProject, .startService:
+        case .startProject, .startService, .switchProfile:
             return "Starting..."
         case .stopProject, .stopService:
             return "Stopping..."
@@ -699,8 +858,17 @@ nonisolated struct HunDashboardModel {
     var selectedServiceID: HunService.ID?
     var warnings: [String]
     var scanDirs: [String]
+    /// Dev servers listening on ports that no registered service accounts for.
+    var unmanaged: [HunUnmanagedProcess] = []
 
     static let empty = HunDashboardModel(projects: [], selectedProjectID: nil, selectedServiceID: nil, warnings: [], scanDirs: [])
+}
+
+/// A failed action and the process holding the port it needed.
+struct HunPortConflict {
+    let holder: HunPortHolder
+    let key: HunActionKey?
+    let retry: () async throws -> Void
 }
 
 nonisolated struct HunProject: Identifiable, Hashable {
@@ -715,11 +883,19 @@ nonisolated struct HunProject: Identifiable, Hashable {
     var modeLabel: String
     var startedText: String
     var services: [HunService]
-    var logs: [HunLogLine]
     var handoff: HandoffNote?
     var configError: String?
+    var profiles: [HunDaemonProfile]
+    /// The profile Run uses; nil runs every service.
+    var profile: String?
 
-    init(snapshot: HunDaemonProject, activeID: String?, logs: [HunLogLine]) {
+    /// What the current profile runs, or nil when it runs every service.
+    var profileServices: Set<String>? {
+        guard let profile, let match = profiles.first(where: { $0.name == profile }) else { return nil }
+        return Set(match.resolved)
+    }
+
+    init(snapshot: HunDaemonProject, activeID: String?) {
         id = snapshot.id
         name = snapshot.name
         path = snapshot.path
@@ -732,12 +908,13 @@ nonisolated struct HunProject: Identifiable, Hashable {
         modeLabel = isActive ? "Active" : status.title
         startedText = Self.runtimeText(startedAt: snapshot.startedAt, status: status)
         services = snapshot.services.map(HunService.init).sorted { $0.name < $1.name }
-        self.logs = logs
         handoff = HandoffNote(branch: branch, note: snapshot.lastNote ?? "")
         if handoff?.note.isEmpty == true {
             handoff = nil
         }
         configError = snapshot.configError
+        profiles = snapshot.profiles
+        profile = snapshot.profile
     }
 
     private static func runtimeText(startedAt: String?, status: ProjectStatus) -> String {
@@ -752,6 +929,22 @@ nonisolated struct HunProject: Identifiable, Hashable {
     }
 }
 
+enum HunProfile {
+    /// The daemon's name for running every service.
+    static let allServices = "all"
+
+    /// Why a name can't be used for a new profile, or nil when it can.
+    static func problem(with name: String) -> String? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "Enter a name." }
+        if trimmed == allServices { return "\"all\" already means every service." }
+        if trimmed.contains(where: { $0 == ":" || $0 == "#" || $0.isNewline }) {
+            return "Use letters, numbers, - or _."
+        }
+        return nil
+    }
+}
+
 nonisolated struct HunService: Identifiable, Hashable {
     let id: String
     var name: String
@@ -760,6 +953,12 @@ nonisolated struct HunService: Identifiable, Hashable {
     var pid: Int
     var port: Int
     var ready: Bool
+    /// Running, but started outside Hun (a terminal, an agent, Docker Desktop).
+    var isExternal: Bool
+    var isDocker: Bool
+    var container: String?
+    /// What holds the configured port while this service is stopped.
+    var conflict: HunPortHolder?
 
     init(snapshot: HunDaemonService) {
         id = snapshot.id
@@ -769,6 +968,17 @@ nonisolated struct HunService: Identifiable, Hashable {
         pid = snapshot.pid
         port = snapshot.port
         ready = snapshot.ready
+        isExternal = snapshot.origin == "external"
+        isDocker = snapshot.runtime == "docker"
+        container = snapshot.container
+        conflict = snapshot.conflict
+    }
+
+    var externalSourceText: String {
+        if isDocker, let container, !container.isEmpty {
+            return "Started outside Hun · Docker container \(container)"
+        }
+        return pid > 0 ? "Started outside Hun · pid \(pid)" : "Started outside Hun"
     }
 
     var pidText: String {
@@ -780,7 +990,7 @@ nonisolated struct HunService: Identifiable, Hashable {
     }
 
     var browserURL: URL? {
-        guard status == .running, pid > 0, port > 0 else { return nil }
+        guard status == .running, pid > 0 || isExternal, port > 0 else { return nil }
         var components = URLComponents()
         components.scheme = "http"
         components.host = "localhost"
@@ -789,17 +999,18 @@ nonisolated struct HunService: Identifiable, Hashable {
     }
 }
 
-nonisolated struct HunLogLine: Identifiable, Hashable {
-    let id = UUID()
+nonisolated struct HunLogLine: Identifiable, Hashable, Sendable {
+    /// Sequence number, assigned when the line reaches `HunLogFeed`.
+    var id = 0
     var time: String
-    var serviceID: String
     var service: String
     var level: LogLevel
     var message: String
 
+    var serviceID: String { service }
+
     init(_ line: HunDaemonLogLine) {
         time = HunDateParser.time(from: line.timestamp)
-        serviceID = line.service
         service = line.service
         level = HunLogClassifier.level(for: line.text, isErr: line.isErr)
         message = line.text

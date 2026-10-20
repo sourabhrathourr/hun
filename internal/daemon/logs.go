@@ -282,6 +282,26 @@ func (lm *LogManager) ResetService(project, service string) {
 	}
 }
 
+// ClearBuffers empties the in-memory logs of one service, or of every
+// service in the project when service is empty, so the view starts fresh.
+// Log files on disk keep their history.
+func (lm *LogManager) ClearBuffers(project, service string) {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+	if service != "" {
+		if rb, ok := lm.buffers[lm.bufferKey(project, service)]; ok {
+			rb.Reset()
+		}
+		return
+	}
+	prefix := project + ":"
+	for key, rb := range lm.buffers {
+		if strings.HasPrefix(key, prefix) {
+			rb.Reset()
+		}
+	}
+}
+
 // GetLines returns buffered log lines for a service.
 func (lm *LogManager) GetLines(project, service string, n int) []LogLine {
 	if service == "" {

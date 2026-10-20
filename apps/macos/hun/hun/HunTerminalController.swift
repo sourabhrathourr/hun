@@ -183,7 +183,8 @@ enum HunTerminalPanelMetrics {
 
     static func clamp(_ requestedHeight: CGFloat, availableHeight: CGFloat) -> CGFloat {
         let range = allowedRange(availableHeight: availableHeight)
-        return min(max(requestedHeight, range.lowerBound), range.upperBound)
+        // Whole points, so text below the panel's edge stays on the pixel grid.
+        return min(max(requestedHeight, range.lowerBound), range.upperBound).rounded(.down)
     }
 
     static func allowedRange(availableHeight: CGFloat) -> ClosedRange<CGFloat> {

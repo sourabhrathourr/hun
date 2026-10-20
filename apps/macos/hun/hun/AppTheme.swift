@@ -66,6 +66,10 @@ nonisolated enum AppTheme {
         dark: 0xFFFFFF,
         darkOpacity: 0.035
     )
+    /// Selected rows and cards share the search field's fill.
+    static let selectedFill = modeSelectorBackground
+    /// Hover stays a step lighter than selection so the two never look alike.
+    static let rowHover = hover.opacity(0.55)
     static let modeSelectorActive = color(
         light: 0xFFFFFF,
         dark: 0xFFFFFF,
@@ -183,15 +187,18 @@ nonisolated enum AppTheme {
         darkOpacity: 0.10
     )
     static let updateActionText = color(light: 0xFFFFFF, dark: 0x030303)
+    // White on green in dark mode; near-black on green in light mode, where
+    // a white button would disappear.
     static let updateActionFill = color(
-        light: 0x5E6AD2,
+        light: 0x1A1A18,
         dark: 0xFFFFFF,
-        lightOpacity: 0.92,
+        lightOpacity: 0.9,
         darkOpacity: 0.8096
     )
     static let updateActionFillHover = color(
-        light: 0x5E6AD2,
+        light: 0x1A1A18,
         dark: 0xFFFFFF,
+        lightOpacity: 1,
         darkOpacity: 0.92
     )
 
@@ -275,5 +282,68 @@ nonisolated enum AppTheme {
             blue: CGFloat(hex & 0xFF) / 255,
             alpha: opacity
         )
+    }
+}
+
+/// Experimental layout, toggled in Settings: the main pane (header, services
+/// and logs) is one rounded card inset from the window, framed by the sidebar
+/// tone, instead of running edge to edge. The tabs sit above it, on the window.
+enum HunLayout {
+    /// The refined layout (panels as rounded cards with even margins) is on
+    /// unless someone turns it off for the classic edge-to-edge layout.
+    static let roundedPanelsKey = "hun.design.refreshed"
+    static let roundedPanelsDefault = true
+    /// The one corner radius used across the main window: the card, service
+    /// cards, rows, fields, buttons and dialogs. Small controls come out as
+    /// pills, which keeps a single shape language.
+    static let radius: CGFloat = 12
+    static let shellRadius: CGFloat = radius
+    /// The card's margin on the left, right and bottom, sidebar edge included.
+    static let shellInset: CGFloat = 10
+    /// A taller tab row above the card, so the tabs have room to breathe.
+    static let tabBarHeight: CGFloat = 52
+}
+
+extension View {
+    /// Draws the view as the rounded main-pane card when the layout is on.
+    @ViewBuilder
+    func hunRoundedShell(
+        _ enabled: Bool,
+        leadingInset: CGFloat = 0,
+        topInset: CGFloat = HunLayout.shellInset
+    ) -> some View {
+        if enabled {
+            background(AppTheme.appBackground)
+                .clipShape(RoundedRectangle(cornerRadius: HunLayout.shellRadius, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: HunLayout.shellRadius, style: .continuous)
+                        .strokeBorder(AppTheme.divider, lineWidth: 1)
+                )
+                .padding(.top, topInset)
+                .padding(.trailing, HunLayout.shellInset)
+                .padding(.bottom, HunLayout.shellInset)
+                .padding(.leading, leadingInset)
+        } else {
+            self
+        }
+    }
+}
+
+/// The app's rounded shape: the card's corner radius, scaled down on small
+/// controls (buttons, fields, rows) so they share the card's corner shape
+/// instead of turning into pills.
+struct HunRoundedShape: InsettableShape {
+    var insetAmount: CGFloat = 0
+
+    func path(in rect: CGRect) -> Path {
+        let inset = rect.insetBy(dx: insetAmount, dy: insetAmount)
+        let radius = min(HunLayout.radius, min(inset.width, inset.height) * 0.3)
+        return RoundedRectangle(cornerRadius: radius, style: .continuous).path(in: inset)
+    }
+
+    func inset(by amount: CGFloat) -> HunRoundedShape {
+        var shape = self
+        shape.insetAmount += amount
+        return shape
     }
 }

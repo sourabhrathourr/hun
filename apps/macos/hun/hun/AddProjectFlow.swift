@@ -47,6 +47,13 @@ struct AddProjectButton: View {
                 onOpenConfig: { store.openConfig(for: review) },
                 onDiscard: { store.discardPendingProject() }
             )
+            .sheet(item: $store.reviewConfigEditor) { target in
+                HunConfigEditorSheet(
+                    target: target,
+                    validate: { await store.configProblem(in: $0) },
+                    save: { await store.saveConfig($0, for: target) }
+                )
+            }
         }
     }
 
@@ -81,10 +88,10 @@ struct AddProjectButton: View {
                 .foregroundStyle(AppTheme.textTertiary)
                 .opacity(hovering && !store.isAddingProject ? 1 : 0)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
+        .padding(.horizontal, SidebarMetrics.rowPadding)
+        .frame(height: SidebarMetrics.rowHeight)
         .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
+            HunRoundedShape()
                 .fill(hovering ? AppTheme.hover : Color.clear)
         )
         .contentShape(Rectangle())
@@ -92,7 +99,7 @@ struct AddProjectButton: View {
 
     private var compactLabel: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            HunRoundedShape()
                 .fill(hovering ? AppTheme.hover : Color.clear)
                 .frame(width: 40, height: 40)
             if store.isAddingProject {
@@ -196,11 +203,11 @@ private struct AddProjectReviewSheet: View {
             .foregroundStyle(AppTheme.accent)
             .frame(width: 30, height: 30)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                HunRoundedShape()
                     .fill(AppTheme.accent.opacity(0.14))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                HunRoundedShape()
                     .stroke(AppTheme.accent.opacity(0.20), lineWidth: 1)
             )
     }
@@ -217,11 +224,11 @@ private struct AddProjectReviewSheet: View {
 
             YamlScrollView(text: review.configContents)
                 .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    HunRoundedShape()
                         .fill(AppTheme.searchField)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    HunRoundedShape()
                         .stroke(AppTheme.divider, lineWidth: 1)
                 )
         }
@@ -320,10 +327,10 @@ private struct ReviewChip: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
         .background(
-            Capsule().fill(accent ? AppTheme.accent.opacity(0.13) : AppTheme.searchField)
+            HunRoundedShape().fill(accent ? AppTheme.accent.opacity(0.13) : AppTheme.searchField)
         )
         .overlay(
-            Capsule().stroke(accent ? AppTheme.accent.opacity(0.25) : AppTheme.divider, lineWidth: 0.5)
+            HunRoundedShape().stroke(accent ? AppTheme.accent.opacity(0.25) : AppTheme.divider, lineWidth: 0.5)
         )
     }
 }
@@ -339,7 +346,7 @@ private struct CloseButton: View {
                 .foregroundStyle(hovering ? AppTheme.textPrimary : AppTheme.textTertiary)
                 .frame(width: 22, height: 22)
                 .background(
-                    Circle().fill(hovering ? AppTheme.hover : Color.clear)
+                    HunRoundedShape().fill(hovering ? AppTheme.hover : Color.clear)
                 )
                 .contentShape(Rectangle())
         }
@@ -382,11 +389,11 @@ private struct ReviewActionButton: View {
             .padding(.horizontal, 11)
             .padding(.vertical, 5)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                HunRoundedShape()
                     .fill(background)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                HunRoundedShape()
                     .stroke(border, lineWidth: 1)
             )
             .contentShape(Rectangle())

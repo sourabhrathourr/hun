@@ -3,7 +3,6 @@ import AppKit
 
 struct ContentView: View {
     @Environment(HunStore.self) private var store
-    @Environment(HunUpdater.self) private var updater
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var sidebarSearch = ""
     @State private var logSearch = ""
@@ -12,11 +11,20 @@ struct ContentView: View {
     @State private var sidebarRevealShowTask: Task<Void, Never>?
     @State private var sidebarRevealHideTask: Task<Void, Never>?
     @State private var collapsedSections: Set<String> = []
-    @State private var presentedSheet: DashboardSheet?
+    /// The Settings section on screen; nil shows the projects.
+    @State private var settingsSection: HunSettingsSection?
     @State private var terminalController = HunTerminalController()
-    @State private var gitWorkspace = HunGitWorkspaceModel()
+    @State private var branchSwitcher = HunBranchModel()
     @FocusState private var sidebarSearchFocused: Bool
-    private let sidebarWidth: CGFloat = 250
+    @AppStorage(HunLayout.roundedPanelsKey) private var roundedPanels = HunLayout.roundedPanelsDefault
+    @AppStorage(HunSidebarMetrics.preferenceKey) private var sidebarWidthPreference = HunSidebarMetrics.defaultWidth
+    private var sidebarWidth: CGFloat { HunSidebarMetrics.clamp(sidebarWidthPreference) }
+
+    /// With the rounded layout the sidebar tone frames the window and the
+    /// main pane sits on it as a rounded card.
+    private var canvas: Color {
+        roundedPanels ? AppTheme.sidebar : AppTheme.appBackground
+    }
 
     private var model: HunDashboardModel { store.model }
 
@@ -39,33 +47,14 @@ struct ContentView: View {
             .sorted { $0.name < $1.name }
     }
 
-    private var visibleLogs: [HunLogLine] {
-        guard let project = activeProject else { return [] }
-        let scoped: [HunLogLine]
-        switch store.selectedLogScope {
-        case .service:
-            scoped = project.logs.filter { $0.serviceID == store.selectedServiceID }
-        case .combined:
-            scoped = project.logs
-        }
-        let q = logSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { return scoped }
-        return scoped.filter {
-            $0.message.localizedCaseInsensitiveContains(q) ||
-                $0.service.localizedCaseInsensitiveContains(q)
-        }
-    }
-
     var body: some View {
-        ZStack(alignment: .topLeading) {
+        @Bindable var store = store
+        return ZStack(alignment: .topLeading) {
             HStack(spacing: 0) {
                 if sidebarDocked {
                     sidebar(docked: true)
                         .frame(width: sidebarWidth)
                         .background(AppTheme.sidebar)
-                        .overlay(alignment: .trailing) {
-                            Rectangle().fill(AppTheme.divider).frame(width: 1)
-                        }
                         .clipped()
                         .zIndex(1)
                         .transition(.move(edge: .leading).combined(with: .opacity))
@@ -74,36 +63,43 @@ struct ContentView: View {
                 mainContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .overlay(alignment: .topLeading) {
+                if sidebarDocked {
+                    // Centred on the gap between the sidebar and the card (or
+                    // on the divider in the classic layout).
+                    HunSidebarResizeHandle(preferredWidth: $sidebarWidthPreference, showsDivider: !roundedPanels)
+                        .frame(maxHeight: .infinity)
+                        .offset(x: sidebarWidth + (roundedPanels ? HunLayout.shellInset / 2 : -0.5) - HunWorkspacePanelMetrics.splitterWidth / 2)
+                }
+            }
 
             if !sidebarDocked {
                 sidebarRevealLayer
             }
 
-            if gitWorkspace.isBranchPickerPresented {
-                HunGitBranchDialogOverlay(model: gitWorkspace)
+            if branchSwitcher.isBranchPickerPresented {
+                HunGitBranchDialogOverlay(model: branchSwitcher)
                     .zIndex(20)
             }
-
-            if gitWorkspace.isUpdateBranchPresented {
-                HunGitUpdateBranchDialogOverlay(model: gitWorkspace)
-                    .zIndex(21)
-            }
         }
-        .background(AppTheme.appBackground)
+        .background(canvas)
         .background(WindowChromeConfigurator())
         .background(
             WindowInteractionMonitor(
                 onToggleSidebar: toggleSidebar,
                 onFocusProjectSearch: focusProjectSearch,
-                onOpenSettings: { presentedSheet = .settings },
+                onOpenSettings: openSettings,
                 onClearProjectSearchFocus: clearProjectSearchFocus
             )
         )
         .ignoresSafeArea(.container, edges: .top)
         .animation(.spring(response: 0.34, dampingFraction: 0.86), value: sidebarDocked)
         .animation(.spring(response: 0.32, dampingFraction: 0.88), value: sidebarRevealed)
-        .animation(.easeOut(duration: 0.14), value: gitWorkspace.isBranchPickerPresented)
-        .animation(.easeOut(duration: 0.14), value: gitWorkspace.isUpdateBranchPresented)
+        .animation(.easeOut(duration: 0.14), value: branchSwitcher.isBranchPickerPresented)
+        // A branch switched from Hun shows in the header without waiting for the next poll.
+        .onChange(of: branchSwitcher.status?.branch) { _, _ in
+            store.refreshNow()
+        }
         .focusedSceneValue(
             \.hunTerminalCommand,
             HunTerminalCommandAction(
@@ -117,6 +113,7 @@ struct ContentView: View {
             await store.refresh(force: true)
         }
         .onChange(of: store.selectedProjectID) { _, projectID in
+            settingsSection = nil
             guard let projectID,
                   let project = model.projects.first(where: { $0.id == projectID })
             else {
@@ -137,11 +134,12 @@ struct ContentView: View {
         .onDisappear {
             terminalController.shutdown()
         }
-        .sheet(item: $presentedSheet) { sheet in
-            switch sheet {
-            case .settings:
-                HunSettingsSheet()
-            }
+        .sheet(item: $store.configEditor) { target in
+            HunConfigEditorSheet(
+                target: target,
+                validate: { await store.configProblem(in: $0) },
+                save: { await store.saveConfig($0, for: target) }
+            )
         }
     }
 
@@ -151,53 +149,80 @@ struct ContentView: View {
             get: { store.displayedMode },
             set: { store.changeMode($0, preferredProject: store.selectedProjectID) }
         )
+        // Even margins: the card keeps the same inset from the sidebar as from
+        // the window's other edges.
         return VStack(spacing: 0) {
-            TopBarView(
-                openProjects: openProjects,
-                activeID: $store.selectedProjectID,
-                mode: mode,
-                isModePending: store.isChangingMode,
-                showSidebarControl: !sidebarDocked,
-                onSelect: selectProjectTab,
-                onClose: closeTab,
-                onToggleSidebar: dockSidebar
-            )
-            .background(AppTheme.appBackground)
+            // Top bar (tabs, DEV badge, Focus/Multitask) hidden while trying the
+            // layout without it; uncomment to bring it back.
+            // TopBarView(
+            //     openProjects: openProjects,
+            //     activeID: $store.selectedProjectID,
+            //     mode: mode,
+            //     isModePending: store.isChangingMode,
+            //     showSidebarControl: !sidebarDocked,
+            //     onSelect: selectProjectTab,
+            //     onClose: closeTab,
+            //     onToggleSidebar: dockSidebar
+            // )
+            // // Refined layout: the tabs sit on the window above the card, lined up with its edges.
+            // .padding(.leading, roundedPanels ? HunLayout.shellInset : 0)
+            // .padding(.trailing, roundedPanels ? HunLayout.shellInset : 0)
+            // .background(roundedPanels ? Color.clear : AppTheme.appBackground)
 
-            Rectangle().fill(AppTheme.divider).frame(height: 1)
-
-            if let lastError = store.lastError {
-                ErrorBanner(message: lastError, onDismiss: { store.clearLastError() })
-                Rectangle().fill(AppTheme.divider).frame(height: 1)
-            }
-
-            if let update = updater.availableUpdate {
-                HunUpdateBanner(
-                    update: update,
-                    onViewChanges: { updater.openChangelog(for: update) },
-                    onUpdate: updater.checkForUpdates
-                )
-                Rectangle().fill(AppTheme.divider).frame(height: 1)
-            }
-
-            Group {
-                if let project = activeProject {
-                    projectWorkspace(project)
-                } else {
-                    EmptyStateView(
-                        projectCount: model.projects.count,
-                        isRecovering: store.isRecoveringServices,
-                        onRefresh: { store.refreshNow() }
+            // With the top bar hidden, a collapsed sidebar still needs room for
+            // the traffic lights and a way back.
+            if !sidebarDocked {
+                HStack(spacing: 2) {
+                    Spacer().frame(width: 72) // traffic light reservation
+                    ToolbarIconButton(
+                        systemImage: "sidebar.left",
+                        helpText: "Show sidebar",
+                        action: dockSidebar
                     )
+                    Spacer()
                 }
+                .frame(height: 38)
             }
-            .id(store.selectedProjectID)
-            .transition(.opacity)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: store.selectedProjectID)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(AppTheme.appBackground)
+
+            VStack(spacing: 0) {
+                if !roundedPanels {
+                    Rectangle().fill(AppTheme.divider).frame(height: 1)
+                }
+
+                if let lastError = store.lastError {
+                    ErrorBanner(
+                        message: lastError,
+                        actionTitle: store.portConflict == nil ? nil : "Stop it & retry",
+                        onAction: { store.resolvePortConflict() },
+                        onDismiss: { store.clearLastError() }
+                    )
+                    Rectangle().fill(AppTheme.divider).frame(height: 1)
+                }
+
+                Group {
+                    if let section = settingsSection {
+                        HunSettingsPage(section: section, onClose: closeSettings)
+                    } else if let project = activeProject {
+                        projectWorkspace(project)
+                    } else {
+                        EmptyStateView(
+                            projectCount: model.projects.count,
+                            isRecovering: store.isRecoveringServices,
+                            onRefresh: { store.refreshNow() }
+                        )
+                    }
+                }
+                .id(settingsSection.map { "settings:\($0.rawValue)" } ?? store.selectedProjectID)
+                .transition(.opacity)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: store.selectedProjectID)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: settingsSection)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Refined layout: the project header sits on the window body;
+                // only services and logs form the card (see ProjectDetailView).
+                .background(roundedPanels ? Color.clear : AppTheme.appBackground)
+            }
         }
-        .padding(.leading, sidebarDocked ? 0 : 8)
+        .padding(.leading, sidebarDocked || roundedPanels ? 0 : 8)
     }
 
     private func projectWorkspace(_ project: HunProject) -> some View {
@@ -208,25 +233,30 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 ProjectDetailView(
                     project: project,
-                    gitWorkspace: gitWorkspace,
+                    onOpenBranchSwitcher: { branchSwitcher.isBranchPickerPresented = true },
                     mode: store.globalMode,
                     pendingAction: store.projectAction(for: project),
                     logSearch: $logSearch,
                     selectedServiceID: $store.selectedServiceID,
                     selectedLogScope: $store.selectedLogScope,
-                    visibleLogs: visibleLogs,
+                    logFeed: store.logFeed,
                     onFocus: { store.focus(project) },
                     onRun: { store.run(project) },
+                    onRunProfile: { profile in store.run(project, profile: profile) },
+                    onSaveProfile: { name in store.saveRunningServicesAsProfile(named: name, for: project) },
                     onRestart: { store.restart(project) },
                     onStop: { store.stop(project) },
                     onOpenConfig: { store.openConfig(for: project) },
                     onChooseLogo: { store.chooseLogo(for: project) },
                     onClearLogo: { store.clearLogo(for: project) },
                     onCopyAgentPrompt: { store.copyAgentPrompt(for: project) },
+                    onClearLogs: { store.clearLogs(for: project) },
                     onRunService: { service in store.run(service, in: project) },
                     onRestartService: { service in store.restart(service, in: project) },
                     onStopService: { service in store.stop(service, in: project) },
-                    onRemoveService: { service in store.remove(service, from: project) }
+                    onRemoveService: { service in store.remove(service, from: project) },
+                    onStopHolderAndRun: { service in store.stopHolderAndRun(service, in: project) },
+                    isServiceBusy: { service in store.serviceAction(for: service, in: project) != nil }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -245,6 +275,7 @@ struct ContentView: View {
                             availableHeight: proxy.size.height
                         )
                     )
+                    .hunRoundedShell(roundedPanels, leadingInset: HunLayout.shellInset, topInset: 0)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
@@ -252,13 +283,43 @@ struct ContentView: View {
                 reduceMotion ? nil : .easeOut(duration: 0.16),
                 value: terminalController.isPresented
             )
-            .task(id: project.id) {
-                await gitWorkspace.monitor(projectID: project.id)
-            }
+            .onAppear { branchSwitcher.select(projectID: project.id) }
+            .onChange(of: project.id) { _, id in branchSwitcher.select(projectID: id) }
         }
     }
 
+    private func openSettings() {
+        if settingsSection == nil {
+            settingsSection = .appearance
+        }
+    }
+
+    private func closeSettings() {
+        settingsSection = nil
+    }
+
+    @ViewBuilder
     private func sidebar(docked: Bool) -> some View {
+        if let section = settingsSection {
+            VStack(spacing: 0) {
+                SidebarTitlebarChrome(
+                    docked: docked,
+                    onToggleSidebar: { if docked { collapseSidebar() } else { dockSidebar() } }
+                )
+                .frame(height: 44)
+                HunSettingsNavigation(
+                    selection: Binding(get: { section }, set: { settingsSection = $0 }),
+                    onBack: closeSettings
+                )
+                SidebarUpdateSlot()
+                SidebarFooter(onSettings: closeSettings)
+            }
+        } else {
+            projectSidebar(docked: docked)
+        }
+    }
+
+    private func projectSidebar(docked: Bool) -> some View {
         SidebarColumnView(
             docked: docked,
             searchText: $sidebarSearch,
@@ -268,7 +329,11 @@ struct ContentView: View {
             collapsedSections: $collapsedSections,
             onSelectProject: openProject,
             onToggleSidebar: { if docked { collapseSidebar() } else { dockSidebar() } },
-            onSettings: { presentedSheet = .settings }
+            onSettings: openSettings,
+            unmanaged: store.model.unmanaged,
+            onStopUnmanaged: { process in store.stop(process) },
+            onAddUnmanaged: { process in store.addProject(from: process) },
+            onRemoveProject: { project in store.remove(project) }
         )
     }
 
@@ -400,12 +465,6 @@ struct ContentView: View {
     }
 }
 
-private enum DashboardSheet: String, Identifiable {
-    case settings
-
-    var id: String { rawValue }
-}
-
 // MARK: - Sidebar
 
 private struct SidebarColumnView: View {
@@ -418,6 +477,10 @@ private struct SidebarColumnView: View {
     let onSelectProject: (String) -> Void
     let onToggleSidebar: () -> Void
     let onSettings: () -> Void
+    let unmanaged: [HunUnmanagedProcess]
+    let onStopUnmanaged: (HunUnmanagedProcess) -> Void
+    let onAddUnmanaged: (HunUnmanagedProcess) -> Void
+    let onRemoveProject: (HunProject) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -434,7 +497,11 @@ private struct SidebarColumnView: View {
                 activeID: activeID,
                 collapsedSections: $collapsedSections,
                 onSelectProject: onSelectProject,
-                onSettings: onSettings
+                onSettings: onSettings,
+                unmanaged: unmanaged,
+                onStopUnmanaged: onStopUnmanaged,
+                onAddUnmanaged: onAddUnmanaged,
+                onRemoveProject: onRemoveProject
             )
         }
     }
@@ -458,6 +525,20 @@ private struct SidebarTitlebarChrome: View {
     }
 }
 
+/// One grid for the sidebar. Rows sit `inset` from the sidebar edges, the
+/// same margin as the rounded card. Column A (inset + rowPadding) holds the
+/// search icon, Add project, section icons and the footer; column B (+ the
+/// nested indent) holds project icons, lining up under section titles.
+enum SidebarMetrics {
+    static let inset: CGFloat = 10
+    static let rowPadding: CGFloat = 8
+    static let nestedIndent: CGFloat = 22
+    static let rowHeight: CGFloat = 30
+    static let sectionHeaderHeight: CGFloat = 28
+    static let radius: CGFloat = HunLayout.radius
+    static let sectionSpacing: CGFloat = 14
+}
+
 private struct SidebarView: View {
     @Binding var searchText: String
     let searchFocused: FocusState<Bool>.Binding
@@ -466,28 +547,30 @@ private struct SidebarView: View {
     @Binding var collapsedSections: Set<String>
     let onSelectProject: (String) -> Void
     let onSettings: () -> Void
+    let unmanaged: [HunUnmanagedProcess]
+    let onStopUnmanaged: (HunUnmanagedProcess) -> Void
+    let onAddUnmanaged: (HunUnmanagedProcess) -> Void
+    let onRemoveProject: (HunProject) -> Void
+
+    private static let elsewhereSectionID = "__running_elsewhere__"
 
     private var allProjects: [HunProject] {
         workspaceGroups.flatMap { $0.projects }
     }
 
-    private var runningCount: Int {
-        allProjects.filter { $0.status == .running }.count
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             SidebarSearchField(text: $searchText, isFocused: searchFocused)
-                .padding(.horizontal, 10)
-                .padding(.top, 10)
-                .padding(.bottom, 8)
-
-            AddProjectButton()
-                .padding(.horizontal, 6)
+                .padding(.horizontal, SidebarMetrics.inset)
+                .padding(.top, SidebarMetrics.inset)
                 .padding(.bottom, 6)
 
+            AddProjectButton()
+                .padding(.horizontal, SidebarMetrics.inset)
+                .padding(.bottom, SidebarMetrics.inset)
+
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: SidebarMetrics.sectionSpacing) {
                     ForEach(workspaceGroups, id: \.name) { group in
                         section(
                             id: group.name,
@@ -495,18 +578,18 @@ private struct SidebarView: View {
                             projects: filtered(group.projects)
                         )
                     }
+                    if !unmanaged.isEmpty {
+                        runningElsewhereSection
+                    }
                 }
-                .padding(.horizontal, 6)
-                .padding(.top, 4)
+                .padding(.horizontal, SidebarMetrics.inset)
+                .padding(.top, 2)
                 .padding(.bottom, 16)
             }
             .hunScrollStyle()
 
-            SidebarFooter(
-                runningCount: runningCount,
-                totalCount: allProjects.count,
-                onSettings: onSettings
-            )
+            SidebarUpdateSlot()
+            SidebarFooter(onSettings: onSettings)
         }
     }
 
@@ -529,12 +612,39 @@ private struct SidebarView: View {
                 onToggle: { withAnimation(.easeOut(duration: 0.15)) { toggle(id) } }
             )
             if !collapsed {
-                VStack(spacing: 1) {
+                VStack(spacing: 2) {
                     ForEach(projects) { project in
                         SidebarProjectRow(
                             project: project,
                             selected: project.id == activeID,
-                            onTap: { onSelectProject(project.id) }
+                            onTap: { onSelectProject(project.id) },
+                            onRemove: { onRemoveProject(project) }
+                        )
+                    }
+                }
+                .padding(.top, 2)
+            }
+        }
+    }
+
+    /// Dev servers Hun can see but no registered service accounts for.
+    @ViewBuilder
+    private var runningElsewhereSection: some View {
+        let id = Self.elsewhereSectionID
+        let collapsed = collapsedSections.contains(id)
+        VStack(alignment: .leading, spacing: 1) {
+            SidebarSectionHeader(
+                title: "Running elsewhere",
+                isCollapsed: collapsed,
+                onToggle: { withAnimation(.easeOut(duration: 0.15)) { toggle(id) } }
+            )
+            if !collapsed {
+                VStack(spacing: 2) {
+                    ForEach(unmanaged) { process in
+                        UnmanagedProcessRow(
+                            process: process,
+                            onStop: { onStopUnmanaged(process) },
+                            onAddProject: process.project == nil ? { onAddUnmanaged(process) } : nil
                         )
                     }
                 }
@@ -552,18 +662,20 @@ private struct SidebarView: View {
     }
 }
 
+/// Pinned to the sidebar's bottom: the Focus/Multitask switch, the DEV badge
+/// on development builds, and Settings.
 private struct SidebarFooter: View {
-    let runningCount: Int
-    let totalCount: Int
     let onSettings: () -> Void
+    @Environment(HunStore.self) private var store
+    @AppStorage(HunLayout.roundedPanelsKey) private var roundedPanels = HunLayout.roundedPanelsDefault
 
     var body: some View {
-        HStack(spacing: 0) {
-            Text("\(totalCount) projects")
-                .font(.system(size: 10.5))
-                .foregroundStyle(AppTheme.textTertiary)
-                .monospacedDigit()
-            Spacer()
+        HStack(spacing: 6) {
+            ModeMenuButton()
+            Spacer(minLength: 4)
+            #if DEBUG
+            DevBuildBadge()
+            #endif
             ToolbarIconButton(
                 systemImage: "gearshape",
                 helpText: "Settings (⌘,)",
@@ -571,12 +683,60 @@ private struct SidebarFooter: View {
             )
             .accessibilityLabel("Open Settings")
         }
-        .padding(.leading, 14)
-        .padding(.trailing, 6)
-        .padding(.vertical, 4)
+        .padding(.leading, SidebarMetrics.inset)
+        .padding(.trailing, SidebarMetrics.inset + 2)
+        .padding(.vertical, roundedPanels ? SidebarMetrics.inset : 6)
         .overlay(alignment: .top) {
-            Rectangle().fill(AppTheme.divider).frame(height: 1)
+            if !roundedPanels {
+                Rectangle().fill(AppTheme.divider).frame(height: 1)
+            }
         }
+    }
+}
+
+/// The current run mode as a quiet sidebar row; its menu switches modes.
+/// The icon sits on the sidebar's icon column.
+private struct ModeMenuButton: View {
+    @Environment(HunStore.self) private var store
+    @State private var hovering = false
+
+    var body: some View {
+        let mode = store.displayedMode
+        Menu {
+            Picker("Mode", selection: Binding(
+                get: { store.displayedMode },
+                set: { store.changeMode($0, preferredProject: store.selectedProjectID) }
+            )) {
+                ForEach(HunMode.allCases, id: \.self) { option in
+                    Label(option.title, systemImage: option.icon).tag(option)
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: mode.icon)
+                    .font(.system(size: 11, weight: .medium))
+                    .frame(width: 14)
+                Text(mode.title)
+                    .font(.system(size: 12.5, weight: .medium))
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(AppTheme.textTertiary)
+            }
+            .foregroundStyle(hovering ? AppTheme.textPrimary : AppTheme.textSecondary)
+            .padding(.horizontal, SidebarMetrics.rowPadding)
+            .frame(height: 28)
+            .background(HunRoundedShape().fill(hovering ? AppTheme.rowHover : Color.clear))
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .buttonStyle(.plain)
+        .fixedSize()
+        .disabled(store.isChangingMode)
+        .onHover { hovering = $0 }
+        .help(mode.helpText)
     }
 }
 
@@ -585,27 +745,76 @@ private struct SidebarSearchField: View {
     let isFocused: FocusState<Bool>.Binding
 
     var body: some View {
+        HunSearchField(
+            text: $text,
+            placeholder: "Search",
+            height: SidebarMetrics.rowHeight,
+            fontSize: 12,
+            isFocused: isFocused
+        )
+    }
+}
+
+/// The app's search field. The placeholder is drawn behind the text field
+/// rather than being its own: a plain text field shifts its placeholder when
+/// editing starts. A hairline ring shows while it has focus.
+struct HunSearchField: View {
+    @Binding var text: String
+    let placeholder: String
+    var height: CGFloat
+    var fontSize: CGFloat
+    let isFocused: FocusState<Bool>.Binding
+
+    var body: some View {
         HStack(spacing: 7) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: fontSize - 1, weight: .medium))
                 .foregroundStyle(AppTheme.textTertiary)
-            TextField("Search", text: $text)
-                .textFieldStyle(.plain)
-                .font(.system(size: 12))
-                .foregroundStyle(AppTheme.textPrimary)
-                .focused(isFocused)
+            ZStack(alignment: .leading) {
+                if text.isEmpty {
+                    Text(placeholder)
+                        .font(.system(size: fontSize))
+                        .foregroundStyle(AppTheme.textTertiary)
+                        .lineLimit(1)
+                        .allowsHitTesting(false)
+                }
+                TextField("", text: $text)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: fontSize))
+                    .foregroundStyle(AppTheme.textPrimary)
+                    .focused(isFocused)
+                    .accessibilityLabel(placeholder)
+            }
+            if !text.isEmpty {
+                Button { text = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: fontSize - 1))
+                        .foregroundStyle(AppTheme.textTertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear search")
+            }
         }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 10)
+        .frame(height: height)
         .background(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(AppTheme.modeSelectorBackground)
+            HunRoundedShape()
+                .fill(AppTheme.selectedFill)
         )
+        .overlay(
+            HunRoundedShape()
+                .strokeBorder(isFocused.wrappedValue ? AppTheme.dividerStrong : Color.clear, lineWidth: 1)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture { isFocused.wrappedValue = true }
+        .animation(.easeOut(duration: 0.12), value: isFocused.wrappedValue)
     }
 }
 
 private struct ErrorBanner: View {
     let message: String
+    var actionTitle: String? = nil
+    var onAction: () -> Void = {}
     let onDismiss: () -> Void
     @State private var hovering = false
 
@@ -620,6 +829,9 @@ private struct ErrorBanner: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer()
+            if let actionTitle {
+                InlineActionButton(title: actionTitle, action: onAction)
+            }
             Button(action: onDismiss) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .bold))
@@ -636,56 +848,172 @@ private struct ErrorBanner: View {
     }
 }
 
-private struct HunUpdateBanner: View {
-    let update: HunAvailableUpdate
+/// A compact text button for actions inside banners and rows.
+private struct InlineActionButton: View {
+    let title: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(title, action: action)
+            .buttonStyle(.plain)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(AppTheme.textPrimary)
+            .padding(.horizontal, 8)
+            .frame(height: 20)
+            .background(
+                HunRoundedShape()
+                    .fill(hovering ? AppTheme.hover : AppTheme.selection)
+            )
+            .onHover { hovering = $0 }
+    }
+}
+
+/// The update card at the bottom of the sidebar, shown only when an update
+/// is ready.
+private struct SidebarUpdateSlot: View {
+    @Environment(HunUpdater.self) private var updater
+
+    var body: some View {
+        if let update = updater.availableUpdate {
+            HunSidebarUpdateCard(
+                version: update.version,
+                onViewChanges: { updater.openChangelog(for: update) },
+                onUpdate: updater.checkForUpdates
+            )
+            .padding(.horizontal, SidebarMetrics.inset)
+            .padding(.bottom, 4)
+            .transition(.opacity.combined(with: .move(edge: .bottom)))
+        }
+    }
+}
+
+/// One compact line: the version (which opens the changelog) and Update.
+struct HunSidebarUpdateCard: View {
+    let version: String
     let onViewChanges: () -> Void
     let onUpdate: () -> Void
     @State private var hoveringChanges = false
     @State private var hoveringUpdate = false
 
     var body: some View {
-        HStack(spacing: 9) {
+        HStack(spacing: 8) {
             Circle()
                 .fill(AppTheme.success)
                 .frame(width: 6, height: 6)
-                .shadow(color: AppTheme.success.opacity(0.24), radius: 4)
+                .shadow(color: AppTheme.success.opacity(0.55), radius: 3)
+                .accessibilityHidden(true)
 
-            Text("Hun \(update.version) is available")
-                .font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(AppTheme.textPrimary)
+            Button(action: onViewChanges) {
+                // Drops "is ready" in a narrow sidebar rather than truncating.
+                ViewThatFits(in: .horizontal) {
+                    label("Hun \(version) is ready")
+                    label("Hun \(version)")
+                }
+            }
+            .buttonStyle(.plain)
+            .onHover { hoveringChanges = $0 }
+            .help("View what's new in Hun \(version)")
 
-            Spacer(minLength: 12)
+            Spacer(minLength: 6)
 
-            Button("View changes", action: onViewChanges)
-                .buttonStyle(.plain)
-                .font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(
-                    hoveringChanges ? AppTheme.textPrimary : AppTheme.textTertiary
-                )
-                .onHover { hoveringChanges = $0 }
-                .accessibilityHint("Opens the Hun changelog in your browser")
-
-            Button("Update", action: onUpdate)
-                .buttonStyle(.plain)
-                .font(.system(size: 11.5, weight: .semibold))
-                .foregroundStyle(AppTheme.updateActionText)
-                .padding(.horizontal, 10)
-                .frame(height: 22)
-                .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(
-                            hoveringUpdate
-                                ? AppTheme.updateActionFillHover
-                                : AppTheme.updateActionFill
-                        )
-                )
-                .onHover { hoveringUpdate = $0 }
-                .accessibilityHint("Downloads and installs Hun \(update.version)")
+            // A download arrow in the app's rounded shell.
+            Button(action: onUpdate) {
+                Image(systemName: "arrow.down")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(AppTheme.updateActionText)
+                    .frame(width: 18, height: 18)
+                    .background(
+                        HunRoundedShape()
+                            .fill(hoveringUpdate ? AppTheme.updateActionFillHover : AppTheme.updateActionFill)
+                    )
+                    // A larger hit area than the shell itself.
+                    .padding(3)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { hoveringUpdate = $0 }
+            .help("Update to Hun \(version)")
+            .accessibilityLabel("Update to Hun \(version)")
+            .accessibilityHint("Downloads and installs Hun \(version)")
         }
-        .padding(.horizontal, 16)
-        .frame(height: 34)
-        .background(AppTheme.success.opacity(0.055))
+        .padding(.leading, 11)
+        .padding(.trailing, 4)
+        .frame(height: 32)
+        // The original banner's quiet green tint, with a border as subtle.
+        .background(HunRoundedShape().fill(AppTheme.success.opacity(0.055)))
+        .overlay(HunRoundedShape().strokeBorder(AppTheme.success.opacity(0.16), lineWidth: 1))
         .accessibilityElement(children: .contain)
+        .accessibilityLabel("Hun \(version) is available")
+    }
+
+    private func label(_ text: String) -> some View {
+        Text(verbatim: text)
+            .font(.system(size: 11.5, weight: .medium))
+            .foregroundStyle(AppTheme.textPrimary)
+            .underline(hoveringChanges, color: AppTheme.textTertiary)
+            .lineLimit(1)
+            .fixedSize()
+    }
+}
+
+private struct UnmanagedProcessRow: View {
+    let process: HunUnmanagedProcess
+    let onStop: () -> Void
+    let onAddProject: (() -> Void)?
+    @State private var hovering = false
+
+    private var url: URL? {
+        URL(string: "http://localhost:\(process.port)")
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(AppTheme.success.opacity(0.7))
+                .frame(width: 6, height: 6)
+                .frame(width: 17)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(verbatim: "\(process.command) :\(process.port)")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(AppTheme.textPrimary)
+                    .lineLimit(1)
+                Text(process.project.map { "\($0) · not in .hun.yml" } ?? HunPortHolder.abbreviate(process.cwd))
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(AppTheme.textTertiary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+            }
+            Spacer(minLength: 4)
+            if hovering {
+                if let url {
+                    ToolbarIconButton(systemImage: "arrow.up.right", helpText: "Open \(url.absoluteString)") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                ToolbarIconButton(systemImage: "stop.fill", helpText: "Stop this process", action: onStop)
+            }
+        }
+        .padding(.leading, SidebarMetrics.rowPadding + SidebarMetrics.nestedIndent)
+        .padding(.trailing, SidebarMetrics.rowPadding)
+        .padding(.vertical, 5)
+        .background(
+            HunRoundedShape()
+                .fill(hovering ? AppTheme.hover : Color.clear)
+        )
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .help(Text(verbatim: "pid \(process.pid) · \(process.cwd)"))
+        .contextMenu {
+            if let url {
+                Button("Open \(url.absoluteString)") { NSWorkspace.shared.open(url) }
+            }
+            if let onAddProject {
+                Button("Add Project to Hun…", action: onAddProject)
+            }
+            Divider()
+            Button("Stop Process", role: .destructive, action: onStop)
+        }
     }
 }
 
@@ -697,13 +1025,7 @@ private struct SidebarSectionHeader: View {
 
     var body: some View {
         Button(action: onToggle) {
-            HStack(spacing: 6) {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(hovering ? AppTheme.textSecondary : AppTheme.textTertiary.opacity(hovering ? 1 : 0))
-                    .frame(width: 10)
-                    .rotationEffect(.degrees(isCollapsed ? 0 : 90))
-                    .animation(.easeOut(duration: 0.12), value: hovering)
+            HStack(spacing: 8) {
                 Image(systemName: isCollapsed ? "folder" : "folder.fill")
                     .font(.system(size: 12, weight: .regular))
                     .foregroundStyle(AppTheme.textTertiary)
@@ -711,12 +1033,20 @@ private struct SidebarSectionHeader: View {
                 Text(title)
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(AppTheme.textSecondary)
-                Spacer()
+                Spacer(minLength: 4)
+                // The disclosure chevron sits at the trailing edge so it never
+                // shifts the icon and title off their column.
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(AppTheme.textTertiary)
+                    .rotationEffect(.degrees(isCollapsed ? 0 : 90))
+                    .opacity(hovering || isCollapsed ? 1 : 0)
+                    .animation(.easeOut(duration: 0.12), value: hovering)
             }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 5)
+            .padding(.horizontal, SidebarMetrics.rowPadding)
+            .frame(height: SidebarMetrics.sectionHeaderHeight)
             .background(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                HunRoundedShape()
                     .fill(hovering ? AppTheme.hover : Color.clear)
             )
             .contentShape(Rectangle())
@@ -730,11 +1060,14 @@ private struct SidebarProjectRow: View {
     let project: HunProject
     let selected: Bool
     let onTap: () -> Void
+    let onRemove: () -> Void
     @State private var hovering = false
+    @State private var confirmingRemoval = false
 
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: 8) {
+            // Room for the running ring that sits just outside the icon.
+            HStack(spacing: 10) {
                 ProjectIconView(
                     name: project.name,
                     iconPath: project.iconPath,
@@ -751,17 +1084,33 @@ private struct SidebarProjectRow: View {
 
                 Spacer(minLength: 0)
             }
-            .padding(.leading, 32)
-            .padding(.trailing, 8)
-            .padding(.vertical, 4)
+            .padding(.leading, SidebarMetrics.rowPadding + SidebarMetrics.nestedIndent)
+            .padding(.trailing, SidebarMetrics.rowPadding)
+            .frame(height: SidebarMetrics.rowHeight)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                HunRoundedShape()
                     .fill(rowBackground)
             )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+        .help("\(project.name)\n\(project.path)")
+        .contextMenu {
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: project.path)])
+            }
+            Divider()
+            Button("Remove from Hun…", role: .destructive) { confirmingRemoval = true }
+        }
+        .confirmationDialog(
+            "Remove \(project.name) from Hun?",
+            isPresented: $confirmingRemoval
+        ) {
+            Button("Remove", role: .destructive, action: onRemove)
+        } message: {
+            Text("Hun stops its services and stops listing it. The folder and its .hun.yml are not touched; add it again any time.")
+        }
     }
 
     private var textColor: Color {
@@ -771,8 +1120,8 @@ private struct SidebarProjectRow: View {
     }
 
     private var rowBackground: Color {
-        if selected { return AppTheme.selection }
-        if hovering { return AppTheme.hover }
+        if selected { return AppTheme.selectedFill }
+        if hovering { return AppTheme.rowHover }
         return .clear
     }
 }
@@ -788,6 +1137,7 @@ private struct TopBarView: View {
     let onSelect: (String) -> Void
     let onClose: (String) -> Void
     let onToggleSidebar: () -> Void
+    @AppStorage(HunLayout.roundedPanelsKey) private var roundedPanels = HunLayout.roundedPanelsDefault
 
     var body: some View {
         HStack(spacing: 10) {
@@ -822,25 +1172,32 @@ private struct TopBarView: View {
             Spacer(minLength: 0)
 
             #if DEBUG
-            Text("DEV")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .tracking(0.8)
-                .foregroundStyle(AppTheme.textPrimary)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 4)
-                .background(AppTheme.accent.opacity(0.24))
-                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .stroke(AppTheme.accent.opacity(0.42), lineWidth: 1)
-                }
-                .help("Development build · isolated daemon and data")
+            DevBuildBadge()
             #endif
 
             ModeSelector(mode: $mode, isPending: isModePending)
         }
-        .padding(.trailing, 12)
-        .frame(height: 44)
+        .padding(.trailing, roundedPanels ? 4 : 12)
+        .frame(height: roundedPanels ? HunLayout.tabBarHeight : 44)
+    }
+}
+
+/// Marks development builds, which use an isolated daemon and data.
+private struct DevBuildBadge: View {
+    var body: some View {
+        Text("DEV")
+            .font(.system(size: 9, weight: .bold, design: .monospaced))
+            .tracking(0.8)
+            .foregroundStyle(AppTheme.textPrimary)
+            .padding(.horizontal, 7)
+            .frame(height: 20)
+            .background(AppTheme.accent.opacity(0.24))
+            .clipShape(HunRoundedShape())
+            .overlay {
+                HunRoundedShape()
+                    .stroke(AppTheme.accent.opacity(0.42), lineWidth: 1)
+            }
+            .help("Development build · isolated daemon and data")
     }
 }
 
@@ -856,7 +1213,7 @@ private struct ModeSelector: View {
         }
         .padding(2)
         .background(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
+            HunRoundedShape()
                 .fill(AppTheme.searchField)
         )
         .help(mode.helpText)
@@ -878,7 +1235,7 @@ private struct ModeSelector: View {
             .padding(.horizontal, 9)
             .padding(.vertical, 4)
             .background(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                HunRoundedShape()
                     .fill(active ? AppTheme.modeSelectorActive : Color.clear)
             )
             .contentShape(Rectangle())
@@ -994,9 +1351,24 @@ private struct WindowInteractionMonitor: NSViewRepresentable {
                 return handleKeyDown(event)
             case .leftMouseDown, .rightMouseDown, .otherMouseDown:
                 onClearProjectSearchFocus()
+                endTextEditingIfClickedOutside(event)
                 return event
             default:
                 return event
+            }
+        }
+
+        /// Clicking outside the text field being edited ends editing, as in
+        /// native apps; SwiftUI fields otherwise keep focus.
+        private func endTextEditingIfClickedOutside(_ event: NSEvent) {
+            guard let window = event.window,
+                  let editor = window.firstResponder as? NSTextView,
+                  editor.isFieldEditor,
+                  let field = editor.delegate as? NSView
+            else { return }
+            let point = field.convert(event.locationInWindow, from: nil)
+            if !field.bounds.contains(point) {
+                window.makeFirstResponder(nil)
             }
         }
 
@@ -1047,7 +1419,7 @@ private struct ProjectTabView: View {
                         .foregroundStyle(AppTheme.textTertiary)
                         .frame(width: 14, height: 14)
                         .background(
-                            Circle().fill(hovering ? AppTheme.dividerStrong : Color.clear)
+                            HunRoundedShape().fill(hovering ? AppTheme.dividerStrong : Color.clear)
                         )
                         .contentShape(Rectangle())
                 }
@@ -1059,11 +1431,11 @@ private struct ProjectTabView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
         .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
+            HunRoundedShape()
                 .fill(active ? AppTheme.tabActive : (hovering ? AppTheme.hover : Color.clear))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
+            HunRoundedShape()
                 .stroke(active ? AppTheme.divider : Color.clear, lineWidth: 1)
         )
         .contentShape(Rectangle())
@@ -1072,7 +1444,7 @@ private struct ProjectTabView: View {
     }
 }
 
-private struct ToolbarIconButton: View {
+struct ToolbarIconButton: View {
     let systemImage: String
     var helpText: String? = nil
     var isActive = false
@@ -1087,7 +1459,7 @@ private struct ToolbarIconButton: View {
                 .foregroundStyle(iconColor)
                 .frame(width: 26, height: 26)
                 .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    HunRoundedShape()
                         .fill(buttonBackground)
                 )
                 .contentShape(Rectangle())
@@ -1116,27 +1488,33 @@ private struct ToolbarIconButton: View {
 private struct ProjectDetailView: View {
     @AppStorage(HunWorkspacePanelPreference.servicesWidth)
     private var servicesPanelWidth = Double(HunWorkspacePanelMetrics.servicesDefaultWidth)
+    @AppStorage(HunLayout.roundedPanelsKey) private var roundedPanels = HunLayout.roundedPanelsDefault
 
     let project: HunProject
-    let gitWorkspace: HunGitWorkspaceModel
+    let onOpenBranchSwitcher: () -> Void
     let mode: HunMode
     let pendingAction: HunActionKind?
     @Binding var logSearch: String
     @Binding var selectedServiceID: String?
     @Binding var selectedLogScope: LogScope
-    let visibleLogs: [HunLogLine]
+    let logFeed: HunLogFeed
     let onFocus: () -> Void
     let onRun: () -> Void
+    let onRunProfile: (String?) -> Void
+    let onSaveProfile: (String) -> Void
     let onRestart: () -> Void
     let onStop: () -> Void
     let onOpenConfig: () -> Void
     let onChooseLogo: () -> Void
     let onClearLogo: () -> Void
     let onCopyAgentPrompt: () -> Void
+    let onClearLogs: () -> Void
     let onRunService: (HunService) -> Void
     let onRestartService: (HunService) -> Void
     let onStopService: (HunService) -> Void
     let onRemoveService: (HunService) -> Void
+    let onStopHolderAndRun: (HunService) -> Void
+    let isServiceBusy: (HunService) -> Bool
 
     private var selectedService: HunService? {
         project.services.first { $0.id == selectedServiceID }
@@ -1146,11 +1524,13 @@ private struct ProjectDetailView: View {
         VStack(spacing: 0) {
             ProjectHeaderView(
                 project: project,
-                gitWorkspace: gitWorkspace,
+                onOpenBranchSwitcher: onOpenBranchSwitcher,
                 mode: mode,
                 pendingAction: pendingAction,
                 onFocus: onFocus,
                 onRun: onRun,
+                onRunProfile: onRunProfile,
+                onSaveProfile: onSaveProfile,
                 onRestart: onRestart,
                 onStop: onStop,
                 onOpenConfig: onOpenConfig,
@@ -1159,59 +1539,68 @@ private struct ProjectDetailView: View {
                 onCopyAgentPrompt: onCopyAgentPrompt
             )
 
-            Rectangle().fill(AppTheme.divider).frame(height: 1)
-
-            HunProjectWorkspaceSwitcher(model: gitWorkspace)
-
-            Rectangle().fill(AppTheme.divider).frame(height: 1)
-
-            if gitWorkspace.isWorkspacePresented {
-                HunGitWorkspaceView(project: project, model: gitWorkspace)
-                    .transition(.opacity)
-            } else {
-                HunResizableWorkspaceSplit(
-                    preferredWidth: $servicesPanelWidth,
-                    accessibilityLabel: "Resize services panel"
-                ) {
-                    ServicesPanelView(
-                        services: project.services,
-                        selectedID: $selectedServiceID,
-                        selectedScope: $selectedLogScope,
-                        onOpenConfig: onOpenConfig,
-                        onRun: onRunService,
-                        onRestart: onRestartService,
-                        onStop: onStopService,
-                        onRemove: onRemoveService
-                    )
-                    .background(AppTheme.appBackground)
-                } detail: {
-                    LogsPanelView(
-                        selectedService: selectedService,
-                        scope: $selectedLogScope,
-                        logs: visibleLogs,
-                        searchText: $logSearch
-                    )
-                }
-                .transition(.opacity)
+            if !roundedPanels {
+                Rectangle().fill(AppTheme.divider).frame(height: 1)
             }
+
+            HunResizableWorkspaceSplit(
+                preferredWidth: $servicesPanelWidth,
+                accessibilityLabel: "Resize services panel"
+            ) {
+                ServicesPanelView(
+                    services: project.services,
+                    profileName: project.profile,
+                    profileServices: project.profileServices,
+                    selectedID: $selectedServiceID,
+                    selectedScope: $selectedLogScope,
+                    onOpenConfig: onOpenConfig,
+                    onRun: onRunService,
+                    onRestart: onRestartService,
+                    onStop: onStopService,
+                    onRemove: onRemoveService,
+                    onStopHolderAndRun: onStopHolderAndRun,
+                    isBusy: isServiceBusy
+                )
+                .background(AppTheme.appBackground)
+            } detail: {
+                LogsPanelView(
+                    selectedService: selectedService,
+                    scope: $selectedLogScope,
+                    feed: logFeed,
+                    searchText: $logSearch,
+                    onRestartService: onRestartService,
+                    onClearLogs: onClearLogs
+                )
+            }
+            // Only services and logs form the rounded card; the header above
+            // sits on the window body.
+            .hunRoundedShell(roundedPanels, leadingInset: HunLayout.shellInset, topInset: 0)
         }
-        .animation(.easeOut(duration: 0.14), value: gitWorkspace.isWorkspacePresented)
     }
 }
 
 private struct ProjectHeaderView: View {
     let project: HunProject
-    let gitWorkspace: HunGitWorkspaceModel
+    let onOpenBranchSwitcher: () -> Void
     let mode: HunMode
+    @AppStorage(HunLayout.roundedPanelsKey) private var roundedPanels = HunLayout.roundedPanelsDefault
     let pendingAction: HunActionKind?
     let onFocus: () -> Void
     let onRun: () -> Void
+    let onRunProfile: (String?) -> Void
+    let onSaveProfile: (String) -> Void
     let onRestart: () -> Void
     let onStop: () -> Void
     let onOpenConfig: () -> Void
     let onChooseLogo: () -> Void
     let onClearLogo: () -> Void
     let onCopyAgentPrompt: () -> Void
+    @State private var isSavingProfile = false
+    @State private var newProfileName = ""
+
+    private var runningServices: [HunService] {
+        project.services.filter { $0.status == .running || $0.status == .starting }
+    }
 
     private var primaryAction: ProjectHeaderAction {
         if pendingAction == .startProject {
@@ -1234,7 +1623,9 @@ private struct ProjectHeaderView: View {
             )
         }
 
-        if project.status == .running || project.status == .starting {
+        // A crashed project offers Stop too, which clears it; Restart beside
+        // it tries again.
+        if project.status == .running || project.status == .starting || project.status == .crashed {
             return ProjectHeaderAction(
                 title: "Stop",
                 systemImage: "stop.fill",
@@ -1255,17 +1646,32 @@ private struct ProjectHeaderView: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 16) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(project.name)
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(AppTheme.textPrimary)
+            VStack(alignment: .leading, spacing: roundedPanels ? 8 : 6) {
+                // The logo sits with the title, small, on the same left edge
+                // as the line below and the card's content. No running ring:
+                // the status is written just under it.
+                HStack(spacing: 9) {
+                    ProjectIconView(
+                        name: project.name,
+                        iconPath: project.iconPath,
+                        size: 22,
+                        cornerRadius: 6
+                    )
+                    // A long name truncates on one line rather than wrapping
+                    // or pushing the actions; hovering shows it in full.
+                    Text(project.name)
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(AppTheme.textPrimary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .help(project.name)
+                }
 
-                HStack(spacing: 14) {
-                    StatusMetaItem(status: project.status)
-                    if project.branch != nil || gitWorkspace.status?.isRepository == true {
-                        HunRepositoryStatusCapsule(project: project, model: gitWorkspace)
-                    }
-                    MetaItem(icon: "folder", text: collapsePath(project.path))
+                // When the line doesn't fit, the path is dropped and the
+                // branch truncates; the status never shrinks.
+                ViewThatFits(in: .horizontal) {
+                    metaLine(showsPath: true)
+                    metaLine(showsPath: false)
                 }
 
                 if let configError = project.configError {
@@ -1276,9 +1682,20 @@ private struct ProjectHeaderView: View {
                 }
             }
 
-            Spacer()
+            Spacer(minLength: 16)
 
             HStack(spacing: 6) {
+                if !project.profiles.isEmpty {
+                    ProfileMenu(
+                        project: project,
+                        isSwitching: pendingAction == .switchProfile,
+                        isDisabled: pendingAction != nil,
+                        canSave: !runningServices.isEmpty,
+                        onRun: onRunProfile,
+                        onSave: beginSavingProfile,
+                        onEdit: onOpenConfig
+                    )
+                }
                 ActionButton(
                     title: primaryAction.title,
                     systemImage: primaryAction.systemImage,
@@ -1295,17 +1712,61 @@ private struct ProjectHeaderView: View {
                     isDisabled: pendingAction != nil,
                     action: onRestart
                 )
-                ActionButton(title: "Config", systemImage: "square.and.pencil", style: .secondary, action: onOpenConfig)
-                LogoMenuButton(
-                    canReset: project.iconIsCustom,
-                    onChoose: onChooseLogo,
-                    onClear: onClearLogo
+                ProjectMoreMenu(
+                    canResetLogo: project.iconIsCustom,
+                    canSaveProfile: !runningServices.isEmpty,
+                    onSaveProfile: beginSavingProfile,
+                    onOpenConfig: onOpenConfig,
+                    onChooseLogo: onChooseLogo,
+                    onClearLogo: onClearLogo,
+                    onCopyAgentPrompt: onCopyAgentPrompt
                 )
-                AgentPromptButton(action: onCopyAgentPrompt)
+            }
+            // The actions keep their size; the title truncates instead.
+            .fixedSize()
+        }
+        // In the rounded layout, line the title up with the card's content
+        // (card inset + panel padding) and keep the actions on the card's edge.
+        .padding(.leading, roundedPanels ? HunLayout.shellInset + 14 : 22)
+        .padding(.trailing, roundedPanels ? HunLayout.shellInset : 22)
+        // The rounded layout has no tab bar above the header, so give it room
+        // to breathe below the window edge and above the card.
+        .padding(.top, roundedPanels ? 20 : 14)
+        .padding(.bottom, roundedPanels ? 16 : 14)
+        .alert("Save as Profile", isPresented: $isSavingProfile) {
+            TextField("Name", text: $newProfileName)
+            Button("Save") {
+                onSaveProfile(newProfileName.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+            .disabled(HunProfile.problem(with: newProfileName) != nil)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(saveProfileMessage)
+        }
+    }
+
+    private var saveProfileMessage: String {
+        let names = runningServices.map(\.name).joined(separator: ", ")
+        return "Adds a profile with the running services (\(names)) to .hun.yml. Run it any time from the profile menu."
+    }
+
+    private func beginSavingProfile() {
+        newProfileName = ""
+        isSavingProfile = true
+    }
+
+    private func metaLine(showsPath: Bool) -> some View {
+        HStack(spacing: 14) {
+            StatusMetaItem(status: project.status)
+                .fixedSize()
+            if let branch = project.branch {
+                HunRepositoryStatusCapsule(branch: branch, onOpen: onOpenBranchSwitcher)
+            }
+            if showsPath {
+                MetaItem(icon: "folder", text: collapsePath(project.path))
+                    .fixedSize()
             }
         }
-        .padding(.horizontal, 22)
-        .padding(.vertical, 14)
     }
 
     private func collapsePath(_ path: String) -> String {
@@ -1361,9 +1822,150 @@ private struct MetaItem: View {
     }
 }
 
-private enum ActionStyle { case primary, secondary, danger }
+enum ActionStyle { case primary, secondary, danger }
 
-private struct ActionButton: View {
+/// Picks which of a project's profiles runs. Choosing one runs it: a stopped
+/// project starts it, a running one switches, changing only what differs.
+private struct ProfileMenu: View {
+    let project: HunProject
+    let isSwitching: Bool
+    let isDisabled: Bool
+    let canSave: Bool
+    let onRun: (String?) -> Void
+    let onSave: () -> Void
+    let onEdit: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Menu {
+            Section("Profiles") {
+                option("All services", profile: nil)
+                ForEach(project.profiles, id: \.name) { profile in
+                    option(profile.name, profile: profile.name)
+                }
+            }
+            Divider()
+            Button("Save Running Services as Profile…", action: onSave)
+                .disabled(!canSave)
+            Button("Edit Profiles in .hun.yml", action: onEdit)
+        } label: {
+            HStack(spacing: 6) {
+                if isSwitching {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .controlSize(.mini)
+                        .scaleEffect(0.62)
+                        .frame(width: 11, height: 11)
+                } else {
+                    Image(systemName: "rectangle.stack")
+                        .font(.system(size: 10, weight: .semibold))
+                        .frame(width: 11, height: 11)
+                }
+                Text(Self.shortened(project.profile ?? "All services"))
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(AppTheme.textTertiary)
+            }
+            .foregroundStyle(AppTheme.textPrimary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(HunRoundedShape().fill(hovering ? AppTheme.hover : AppTheme.buttonFill))
+            .overlay(HunRoundedShape().stroke(AppTheme.divider, lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .buttonStyle(.plain)
+        .fixedSize()
+        .disabled(isDisabled)
+        .opacity(isDisabled && !isSwitching ? 0.55 : 1)
+        .onHover { hovering = $0 }
+        .help(helpText)
+        .accessibilityLabel("Profile: \(project.profile ?? "All services")")
+    }
+
+    /// The button sizes to its label, so a long profile name is cut short
+    /// here; the menu itself shows names in full.
+    static func shortened(_ name: String) -> String {
+        name.count > 24 ? String(name.prefix(23)) + "…" : name
+    }
+
+    /// A checkmarked row; choosing it runs that profile, even when it is
+    /// already the current one.
+    private func option(_ title: String, profile: String?) -> some View {
+        Toggle(title, isOn: Binding(
+            get: { project.profile == profile },
+            set: { _ in onRun(profile) }
+        ))
+    }
+
+    private var helpText: String {
+        guard let services = project.profileServices else {
+            return "Runs every service. Choose a profile to run a subset."
+        }
+        let names = project.services.map(\.id).filter { services.contains($0) }
+        return "Runs \(names.joined(separator: ", ")). Choosing a profile runs it."
+    }
+}
+
+/// Less frequent project actions, behind one button so Stop and Restart
+/// stand out.
+private struct ProjectMoreMenu: View {
+    let canResetLogo: Bool
+    let canSaveProfile: Bool
+    let onSaveProfile: () -> Void
+    let onOpenConfig: () -> Void
+    let onChooseLogo: () -> Void
+    let onClearLogo: () -> Void
+    let onCopyAgentPrompt: () -> Void
+    @State private var copiedPrompt = false
+
+    var body: some View {
+        Menu {
+            Button("Edit .hun.yml", action: onOpenConfig)
+            Button("Save Running Services as Profile…", action: onSaveProfile)
+                .disabled(!canSaveProfile)
+            Divider()
+            Button("Choose Logo…", action: onChooseLogo)
+            if canResetLogo {
+                Button("Reset Logo", action: onClearLogo)
+            }
+            Divider()
+            Button("Copy Agent Prompt") {
+                onCopyAgentPrompt()
+                withAnimation(.easeOut(duration: 0.16)) { copiedPrompt = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
+                    withAnimation(.easeIn(duration: 0.18)) { copiedPrompt = false }
+                }
+            }
+        } label: {
+            Image(systemName: copiedPrompt ? "checkmark" : "ellipsis")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(copiedPrompt ? AppTheme.success : AppTheme.textPrimary)
+                .frame(width: 14, height: 14)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 5)
+                .background(
+                    HunRoundedShape()
+                        .fill(AppTheme.buttonFill)
+                )
+                .overlay(
+                    HunRoundedShape()
+                        .stroke(copiedPrompt ? AppTheme.success.opacity(0.35) : AppTheme.divider, lineWidth: 1)
+                )
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .buttonStyle(.plain)
+        .fixedSize()
+        .help(copiedPrompt ? "Agent prompt copied" : "More actions")
+    }
+}
+
+struct ActionButton: View {
     let title: String
     let systemImage: String
     let style: ActionStyle
@@ -1393,11 +1995,11 @@ private struct ActionButton: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                HunRoundedShape()
                     .fill(background)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                HunRoundedShape()
                     .stroke(border, lineWidth: 1)
             )
             .contentShape(Rectangle())
@@ -1433,86 +2035,13 @@ private struct ActionButton: View {
     }
 }
 
-private struct LogoMenuButton: View {
-    let canReset: Bool
-    let onChoose: () -> Void
-    let onClear: () -> Void
-
-    var body: some View {
-        Menu {
-            Button("Choose Logo…", action: onChoose)
-            if canReset {
-                Divider()
-                Button("Reset Logo", action: onClear)
-            }
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: "photo")
-                    .font(.system(size: 10, weight: .semibold))
-                Text("Logo")
-                    .font(.system(size: 12, weight: .medium))
-            }
-            .foregroundStyle(AppTheme.textPrimary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(AppTheme.buttonFill)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(AppTheme.divider, lineWidth: 1)
-            )
-            .contentShape(Rectangle())
-        }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-    }
-}
-
-private struct AgentPromptButton: View {
-    let action: () -> Void
-    @State private var hovering = false
-    @State private var copied = false
-
-    var body: some View {
-        Button {
-            action()
-            withAnimation(.easeOut(duration: 0.16)) { copied = true }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
-                withAnimation(.easeIn(duration: 0.18)) { copied = false }
-            }
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: copied ? "checkmark" : "sparkles")
-                    .font(.system(size: 10, weight: .semibold))
-                    .frame(width: 11)
-                Text(copied ? "Copied" : "Agent")
-                    .font(.system(size: 12, weight: .medium))
-            }
-            .foregroundStyle(copied ? AppTheme.success : (hovering ? AppTheme.textPrimary : AppTheme.textSecondary))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(hovering ? AppTheme.hover : AppTheme.buttonFill)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(copied ? AppTheme.success.opacity(0.35) : AppTheme.divider, lineWidth: 1)
-            )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .help("Copy agent prompt for .hun.yml")
-    }
-}
-
 // MARK: - Services Panel
 
 private struct ServicesPanelView: View {
     let services: [HunService]
+    /// The current profile and what it runs; nil when it runs every service.
+    let profileName: String?
+    let profileServices: Set<String>?
     @Binding var selectedID: String?
     @Binding var selectedScope: LogScope
     let onOpenConfig: () -> Void
@@ -1520,53 +2049,160 @@ private struct ServicesPanelView: View {
     let onRestart: (HunService) -> Void
     let onStop: (HunService) -> Void
     let onRemove: (HunService) -> Void
+    let onStopHolderAndRun: (HunService) -> Void
+    let isBusy: (HunService) -> Bool
+    @AppStorage(HunServicesDisplay.showOutsideProfileKey)
+    private var showsOutsideProfile = HunServicesDisplay.showOutsideProfileDefault
+
+    private func isHidden(_ service: HunService) -> Bool {
+        !showsOutsideProfile && !ServicesList.isInProfile(service, profileServices: profileServices)
+    }
+
+    private var hiddenCount: Int {
+        services.filter(isHidden).count
+    }
+
+    /// A hidden service is never shown just because it was selected (say,
+    /// remembered from before the profile changed); the first visible one
+    /// is selected instead.
+    private func selectVisibleService() {
+        guard let selected = services.first(where: { $0.id == selectedID }), isHidden(selected),
+              let replacement = services.first(where: { !isHidden($0) })
+        else { return }
+        selectedID = replacement.id
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
+            // Same type, height and divider as the logs header beside it, so
+            // the two read as one band across the panel.
+            HStack(spacing: 6) {
                 Text("Services")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(AppTheme.textSecondary)
-                    .textCase(.uppercase)
-                    .tracking(0.5)
-                Spacer()
-                Text("\(services.count)")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(AppTheme.textTertiary)
-                ToolbarIconButton(
-                    systemImage: "square.and.pencil",
-                    helpText: "Open .hun.yml",
-                    action: onOpenConfig
-                )
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-
-            ScrollView {
-                VStack(spacing: 2) {
-                    ForEach(services) { service in
-                        ServiceRowView(
-                            service: service,
-                            selected: service.id == selectedID,
-                            onTap: {
-                                withAnimation(.easeOut(duration: 0.12)) {
-                                    selectedID = service.id
-                                    selectedScope = .service
-                                }
-                            },
-                            onRun: { onRun(service) },
-                            onRestart: { onRestart(service) },
-                            onStop: { onStop(service) },
-                            onRemove: { onRemove(service) },
-                            onOpenConfig: onOpenConfig
-                        )
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(AppTheme.textPrimary)
+                Group {
+                    if hiddenCount > 0 {
+                        Text(verbatim: "\(services.count - hiddenCount) of \(services.count)")
+                            .help("\(hiddenCount) not in \(profileName ?? "this profile") are hidden. Show them in Settings › Appearance.")
+                    } else {
+                        Text(verbatim: "\(services.count)")
                     }
                 }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 12)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(AppTheme.textTertiary)
+                .monospacedDigit()
+                Spacer(minLength: 8)
+            }
+            .padding(.horizontal, 14)
+            .frame(height: LogsToolbarMetrics.controlHeight + 20)
+
+            Rectangle().fill(AppTheme.divider).frame(height: 1)
+
+            ScrollView {
+                ServicesList(
+                    services: services,
+                    profileName: profileName,
+                    profileServices: profileServices,
+                    showsOutsideProfile: showsOutsideProfile,
+                    selectedID: $selectedID,
+                    selectedScope: $selectedScope,
+                    onOpenConfig: onOpenConfig,
+                    onRun: onRun,
+                    onRestart: onRestart,
+                    onStop: onStop,
+                    onRemove: onRemove,
+                    onStopHolderAndRun: onStopHolderAndRun,
+                    isBusy: isBusy
+                )
             }
             .hunScrollStyle()
         }
+        .onAppear(perform: selectVisibleService)
+        .onChange(of: selectedID) { _, _ in selectVisibleService() }
+        .onChange(of: profileServices) { _, _ in selectVisibleService() }
+        .onChange(of: showsOutsideProfile) { _, _ in selectVisibleService() }
+    }
+}
+
+/// The service rows. Services the current profile leaves out are grouped
+/// below the rest.
+private struct ServicesList: View {
+    let services: [HunService]
+    let profileName: String?
+    let profileServices: Set<String>?
+    let showsOutsideProfile: Bool
+    @Binding var selectedID: String?
+    @Binding var selectedScope: LogScope
+    let onOpenConfig: () -> Void
+    let onRun: (HunService) -> Void
+    let onRestart: (HunService) -> Void
+    let onStop: (HunService) -> Void
+    let onRemove: (HunService) -> Void
+    let onStopHolderAndRun: (HunService) -> Void
+    let isBusy: (HunService) -> Bool
+
+    var body: some View {
+        VStack(spacing: 4) {
+            ForEach(profileServicesList) { service in
+                row(service)
+            }
+            if !otherServices.isEmpty {
+                // Services the profile leaves out stay one click away,
+                // grouped below so they don't crowd the ones in use.
+                Text(verbatim: "Not in \(profileName ?? "this profile")")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(AppTheme.textTertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 14)
+                    .padding(.bottom, 4)
+                ForEach(otherServices) { service in
+                    row(service)
+                        .opacity(service.id == selectedID ? 1 : 0.6)
+                }
+            }
+        }
+        // Same gap above the first card as at its sides, so it never
+        // sits on the header divider.
+        .padding(.horizontal, 8)
+        .padding(.top, 8)
+        .padding(.bottom, 12)
+    }
+
+    /// In the profile, or running anyway (started on its own or elsewhere).
+    static func isInProfile(_ service: HunService, profileServices: Set<String>?) -> Bool {
+        guard let profileServices else { return true }
+        return profileServices.contains(service.id) || service.status != .stopped
+    }
+
+    private var profileServicesList: [HunService] {
+        services.filter { Self.isInProfile($0, profileServices: profileServices) }
+    }
+
+    /// Shown only when the setting is on.
+    private var otherServices: [HunService] {
+        guard showsOutsideProfile else { return [] }
+        return services.filter { !Self.isInProfile($0, profileServices: profileServices) }
+    }
+
+    private func row(_ service: HunService) -> some View {
+        ServiceRowView(
+            service: service,
+            selected: service.id == selectedID,
+            onTap: {
+                withAnimation(.easeOut(duration: 0.12)) {
+                    selectedID = service.id
+                    selectedScope = .service
+                }
+            },
+            onRun: { onRun(service) },
+            onRestart: { onRestart(service) },
+            onStop: { onStop(service) },
+            onRemove: { onRemove(service) },
+            onOpenConfig: onOpenConfig,
+            onStopHolderAndRun: { onStopHolderAndRun(service) },
+            busy: isBusy(service)
+        )
     }
 }
 
@@ -1579,56 +2215,86 @@ private struct ServiceRowView: View {
     let onStop: () -> Void
     let onRemove: () -> Void
     let onOpenConfig: () -> Void
+    let onStopHolderAndRun: () -> Void
+    let busy: Bool
     @State private var hovering = false
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            Button(action: onTap) {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        Circle().fill(service.status.color).frame(width: 6, height: 6)
-                        Text(service.name)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(AppTheme.textPrimary)
-                        Spacer()
-                        Text(service.status.title.lowercased())
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(AppTheme.textTertiary)
+        HStack(alignment: .top, spacing: 10) {
+            // The dot has its own gutter so the name and command share one edge.
+            statusDot
+                .frame(width: 8, height: 17)
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Text(service.name)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(AppTheme.textPrimary)
+                        .lineLimit(1)
+                    if let statusLabel {
+                        Text(statusLabel)
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(service.status.color)
                     }
+                    if service.isExternal {
+                        Text("outside Hun")
+                            .font(.system(size: 9.5, weight: .medium))
+                            .foregroundStyle(AppTheme.textSecondary)
+                            .padding(.horizontal, 5)
+                            .frame(height: 15)
+                            .background(HunRoundedShape().fill(AppTheme.selection))
+                            .help(service.externalSourceText + ". Restart to run it in Hun with logs.")
+                    }
+                    Spacer(minLength: 8)
+                    portView
+                }
+                .frame(height: 17)
+
+                HStack(spacing: 8) {
                     Text(service.command)
                         .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(AppTheme.textSecondary)
+                        .foregroundStyle(AppTheme.textTertiary)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    HStack(spacing: 12) {
-                        MetaItem(icon: "number", text: service.pidText)
-                        MetaItem(icon: "network", text: service.portText)
-                        MetaItem(
-                            icon: service.ready ? "checkmark.circle" : "circle.dashed",
-                            text: service.ready ? "ready" : "waiting"
-                        )
+                    Spacer(minLength: 8)
+                    if service.pid > 0 {
+                        Text(verbatim: "\(service.pid)")
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(AppTheme.textTertiary)
+                            .help("Process ID")
                     }
                 }
-                .padding(10)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(selected ? AppTheme.selection : (hovering ? AppTheme.hover : Color.clear))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(selected ? AppTheme.divider : Color.clear, lineWidth: 1)
-                )
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
 
-            if let url = service.browserURL {
-                ServiceBrowserButton(url: url, isVisible: hovering)
-                    .padding(.bottom, 4)
-                    .padding(.trailing, 4)
+                if let holder = service.conflict {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 9.5))
+                            .foregroundStyle(AppTheme.warning)
+                        Text(verbatim: "Port \(holder.port) held by \(holder.summary)")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(AppTheme.textSecondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer(minLength: 4)
+                        InlineActionButton(title: "Stop it & run", action: onStopHolderAndRun)
+                            .disabled(busy)
+                    }
+                    .padding(.top, 4)
+                }
             }
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 12)
+        .background(
+            HunRoundedShape()
+                .fill(selected ? AppTheme.selectedFill : (hovering ? AppTheme.rowHover : Color.clear))
+        )
+        .contentShape(Rectangle())
+        // A tap gesture rather than a Button, so the port link inside works.
+        .onTapGesture(perform: onTap)
+        .accessibilityAddTraits(.isButton)
         .onHover { hovering = $0 }
+        .help(helpText)
         .contextMenu {
             if let url = service.browserURL {
                 Button("Open \(url.absoluteString)") {
@@ -1644,45 +2310,62 @@ private struct ServiceRowView: View {
             Button("Remove from Hun", role: .destructive, action: onRemove)
         }
     }
-}
 
-private struct ServiceBrowserButton: View {
-    let url: URL
-    let isVisible: Bool
-    @Environment(\.openURL) private var openURL
-    @State private var hovering = false
-    @FocusState private var keyboardFocused: Bool
-    @AccessibilityFocusState private var accessibilityFocused: Bool
-
-    private var revealed: Bool {
-        isVisible || keyboardFocused || accessibilityFocused
+    /// Color says running, stopped or crashed; a ring means still starting
+    /// (not ready yet), a solid dot means ready.
+    @ViewBuilder
+    private var statusDot: some View {
+        let isWarmingUp = service.status == .starting || (service.status == .running && !service.ready)
+        if isWarmingUp {
+            Circle()
+                .strokeBorder(service.status.color, lineWidth: 1.5)
+                .frame(width: 7, height: 7)
+        } else {
+            Circle()
+                .fill(service.status.color)
+                .frame(width: 6, height: 6)
+        }
     }
 
-    var body: some View {
-        Button {
-            openURL(url)
-        } label: {
-            Image(systemName: "arrow.up.right")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(hovering ? AppTheme.textPrimary : AppTheme.textTertiary)
-                .frame(width: 22, height: 22)
-                .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(hovering ? AppTheme.hover : Color.clear)
-                )
-                .contentShape(Rectangle())
+    /// Only states that need attention are spelled out next to the name.
+    private var statusLabel: String? {
+        switch service.status {
+        case .crashed: return "crashed"
+        case .starting: return "starting"
+        case .running, .stopped: return nil
         }
-        .buttonStyle(.plain)
-        .focusable()
-        .focused($keyboardFocused)
-        .accessibilityFocused($accessibilityFocused)
-        .onHover { hovering = $0 }
-        .opacity(revealed ? 1 : 0)
-        .allowsHitTesting(revealed)
-        .accessibilityHidden(false)
-        .animation(.easeOut(duration: 0.12), value: revealed)
-        .help("Open \(url.absoluteString) in the default browser")
-        .accessibilityLabel("Open \(url.absoluteString) in browser")
+    }
+
+    /// The port, a link while the service runs; a spinner while an action runs.
+    @ViewBuilder
+    private var portView: some View {
+        if busy {
+            ProgressView()
+                .controlSize(.mini)
+        } else if let url = service.browserURL {
+            Button {
+                NSWorkspace.shared.open(url)
+            } label: {
+                Text(service.portText)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(hovering ? AppTheme.textPrimary : AppTheme.textSecondary)
+                    .underline(hovering)
+            }
+            .buttonStyle(.plain)
+            .help("Open \(url.absoluteString)")
+        } else if service.port > 0 {
+            Text(service.portText)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(AppTheme.textTertiary)
+        }
+    }
+
+    private var helpText: String {
+        var parts = [service.status.title]
+        if service.pid > 0 { parts.append("pid \(service.pid)") }
+        if service.port > 0 { parts.append("port \(service.port)") }
+        if service.status == .running { parts.append(service.ready ? "ready" : "not ready yet") }
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -1691,11 +2374,10 @@ private struct ServiceBrowserButton: View {
 private struct LogsPanelView: View {
     let selectedService: HunService?
     @Binding var scope: LogScope
-    let logs: [HunLogLine]
+    let feed: HunLogFeed
     @Binding var searchText: String
-
-    @State private var copyConfirmCount: Int = 0
-    @State private var copyConfirmStamp: Date?
+    var onRestartService: (HunService) -> Void = { _ in }
+    var onClearLogs: () -> Void = {}
 
     private var title: String {
         scope == .combined ? "All logs" : (selectedService?.name ?? "Logs")
@@ -1707,8 +2389,23 @@ private struct LogsPanelView: View {
         scope == .combined ? "combined" : "service|\(selectedService?.id ?? "")"
     }
 
+    private var filter: HunLogFilter {
+        HunLogFilter(
+            service: scope == .service ? (selectedService?.id ?? "") : nil,
+            query: searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+
+    /// Stops at the first match, so it stays cheap as lines stream in.
+    private var hasLogs: Bool {
+        let filter = self.filter
+        return feed.lines.contains(where: filter.matches)
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
+        // Computed once per render; the toolbar and the content both use it.
+        let hasLogs = self.hasLogs
+        return VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
@@ -1717,14 +2414,23 @@ private struct LogsPanelView: View {
                 Spacer()
 
                 LogSearchField(text: $searchText)
-                    .frame(maxWidth: 200)
+                    .frame(maxWidth: 220)
 
-                CopyLogsButton(
-                    label: "Copy all",
-                    confirmCount: copyConfirmCount,
-                    confirmStamp: copyConfirmStamp,
-                    enabled: !logs.isEmpty,
+                LogsToolbarIconButton(
+                    icon: .symbol("doc.on.doc"),
+                    helpText: "Copy all visible logs (⌘C)",
+                    confirms: true,
+                    enabled: hasLogs,
                     action: copyAllLogs
+                )
+
+                LogsToolbarIconButton(
+                    icon: .trashOutline,
+                    helpText: scope == .combined
+                        ? "Clear all logs for this project"
+                        : "Clear logs for \(selectedService?.name ?? "this service")",
+                    enabled: hasLogs,
+                    action: onClearLogs
                 )
 
                 ScopeSegmented(scope: $scope)
@@ -1734,13 +2440,15 @@ private struct LogsPanelView: View {
 
             Rectangle().fill(AppTheme.divider).frame(height: 1)
 
-            if logs.isEmpty {
+            if !hasLogs, scope == .service, let service = selectedService, service.isExternal {
+                ExternalLogsEmptyState(service: service, onRestart: { onRestartService(service) })
+            } else if !hasLogs {
                 LogsEmptyState()
             } else {
                 LogsTailContainer(
-                    logs: logs,
-                    showService: scope == .combined,
-                    highlight: searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    feed: feed,
+                    filter: filter,
+                    showService: scope == .combined
                 )
                 .id(tailIdentity)
             }
@@ -1749,6 +2457,8 @@ private struct LogsPanelView: View {
     }
 
     private func copyAllLogs() {
+        let filter = self.filter
+        let logs = feed.lines.filter(filter.matches)
         guard !logs.isEmpty else { return }
         let text = logs
             .map { "\($0.time)  \($0.service.padding(toLength: 10, withPad: " ", startingAt: 0))  \($0.message)" }
@@ -1756,43 +2466,26 @@ private struct LogsPanelView: View {
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(text, forType: .string)
-        copyConfirmCount = logs.count
-        copyConfirmStamp = Date()
     }
 }
 
 private struct LogSearchField: View {
     @Binding var text: String
+    @FocusState private var focused: Bool
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(AppTheme.textTertiary)
-            TextField("Search", text: $text)
-                .textFieldStyle(.plain)
-                .font(.system(size: 11))
-                .foregroundStyle(AppTheme.textPrimary)
-            if !text.isEmpty {
-                Button { text = "" } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 11))
-                        .foregroundStyle(AppTheme.textTertiary)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 8)
-        .frame(height: LogsToolbarMetrics.controlHeight)
-        .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(AppTheme.searchField)
+        HunSearchField(
+            text: $text,
+            placeholder: "Search logs",
+            height: LogsToolbarMetrics.controlHeight,
+            fontSize: 11.5,
+            isFocused: $focused
         )
     }
 }
 
 private enum LogsToolbarMetrics {
-    static let controlHeight: CGFloat = 24
+    static let controlHeight: CGFloat = 26
 }
 
 private struct ScopeSegmented: View {
@@ -1806,7 +2499,7 @@ private struct ScopeSegmented: View {
         .padding(2)
         .frame(height: LogsToolbarMetrics.controlHeight)
         .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
+            HunRoundedShape()
                 .fill(AppTheme.searchField)
         )
     }
@@ -1821,7 +2514,7 @@ private struct ScopeSegmented: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 3)
                 .background(
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    HunRoundedShape()
                         .fill(scope == s ? AppTheme.tabActive : Color.clear)
                 )
                 .contentShape(Rectangle())
@@ -1830,10 +2523,44 @@ private struct ScopeSegmented: View {
     }
 }
 
-private struct CopyLogsButton: View {
-    let label: String
-    let confirmCount: Int
-    let confirmStamp: Date?
+private enum LogsToolbarIcon {
+    case symbol(String)
+    case trashOutline
+}
+
+/// A trash can drawn as a plain outline; SF Symbols only offers one with
+/// inner ribs or a filled one.
+private struct TrashOutline: Shape {
+    func path(in rect: CGRect) -> Path {
+        let w = rect.width
+        let h = rect.height
+        let lidY = h * 0.2
+        let radius = w * 0.12
+        var path = Path()
+        // Handle
+        path.move(to: CGPoint(x: w * 0.36, y: lidY))
+        path.addLine(to: CGPoint(x: w * 0.36, y: 0))
+        path.addLine(to: CGPoint(x: w * 0.64, y: 0))
+        path.addLine(to: CGPoint(x: w * 0.64, y: lidY))
+        // Lid
+        path.move(to: CGPoint(x: 0, y: lidY))
+        path.addLine(to: CGPoint(x: w, y: lidY))
+        // Can
+        path.move(to: CGPoint(x: w * 0.12, y: lidY))
+        path.addLine(to: CGPoint(x: w * 0.19, y: h - radius))
+        path.addQuadCurve(to: CGPoint(x: w * 0.19 + radius, y: h), control: CGPoint(x: w * 0.19, y: h))
+        path.addLine(to: CGPoint(x: w * 0.81 - radius, y: h))
+        path.addQuadCurve(to: CGPoint(x: w * 0.81, y: h - radius), control: CGPoint(x: w * 0.81, y: h))
+        path.addLine(to: CGPoint(x: w * 0.88, y: lidY))
+        return path
+    }
+}
+
+/// A square icon button sized to the logs toolbar controls.
+private struct LogsToolbarIconButton: View {
+    let icon: LogsToolbarIcon
+    let helpText: String
+    var confirms = false
     let enabled: Bool
     let action: () -> Void
 
@@ -1841,52 +2568,50 @@ private struct CopyLogsButton: View {
     @State private var showingConfirm = false
 
     var body: some View {
-        Button(action: {
+        Button {
             action()
+            guard confirms else { return }
             withAnimation(.easeOut(duration: 0.18)) { showingConfirm = true }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
                 withAnimation(.easeIn(duration: 0.25)) { showingConfirm = false }
             }
-        }) {
-            HStack(spacing: 5) {
-                ZStack {
-                    Image(systemName: "doc.on.doc")
-                        .opacity(showingConfirm ? 0 : 1)
-                        .scaleEffect(showingConfirm ? 0.6 : 1)
-                    Image(systemName: "checkmark")
-                        .opacity(showingConfirm ? 1 : 0)
-                        .scaleEffect(showingConfirm ? 1 : 0.6)
-                        .foregroundStyle(AppTheme.success)
-                }
-                .font(.system(size: 10, weight: .semibold))
-                .frame(width: 12, height: 12)
-
-                Text(showingConfirm ? confirmText : label)
-                    .font(.system(size: 11, weight: .medium))
-                    .contentTransition(.opacity)
-            }
-            .foregroundStyle(showingConfirm ? AppTheme.success : (hovering ? AppTheme.textPrimary : AppTheme.textSecondary))
-            .padding(.horizontal, 9)
-            .frame(height: LogsToolbarMetrics.controlHeight)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(hovering ? AppTheme.hover : AppTheme.searchField)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(showingConfirm ? AppTheme.success.opacity(0.3) : AppTheme.divider, lineWidth: 1)
-            )
-            .contentShape(Rectangle())
+        } label: {
+            iconView
+                .foregroundStyle(showingConfirm ? AppTheme.success : (hovering ? AppTheme.textPrimary : AppTheme.textSecondary))
+                .frame(width: LogsToolbarMetrics.controlHeight, height: LogsToolbarMetrics.controlHeight)
+                .background(
+                    HunRoundedShape()
+                        .fill(hovering ? AppTheme.hover : AppTheme.searchField)
+                )
+                .overlay(
+                    HunRoundedShape()
+                        .stroke(showingConfirm ? AppTheme.success.opacity(0.3) : AppTheme.divider, lineWidth: 1)
+                )
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.45)
         .onHover { hovering = $0 }
-        .help(label.hasPrefix("Copy ") && !label.contains("all") ? "Copy selected lines" : "Copy all visible logs (⌘C)")
+        .help(showingConfirm ? "Copied" : helpText)
     }
 
-    private var confirmText: String {
-        confirmCount == 1 ? "Copied" : "Copied \(confirmCount)"
+    @ViewBuilder
+    private var iconView: some View {
+        if showingConfirm {
+            Image(systemName: "checkmark")
+                .font(.system(size: 10.5, weight: .semibold))
+        } else {
+            switch icon {
+            case let .symbol(name):
+                Image(systemName: name)
+                    .font(.system(size: 10.5, weight: .semibold))
+            case .trashOutline:
+                TrashOutline()
+                    .stroke(style: StrokeStyle(lineWidth: 1.25, lineCap: .round, lineJoin: .round))
+                    .frame(width: 10, height: 11)
+            }
+        }
     }
 }
 
@@ -1907,24 +2632,70 @@ private struct LogsEmptyState: View {
     }
 }
 
+/// Shown for a service started outside Hun: its output went to whatever
+/// started it, so Hun can only show logs after it restarts the service.
+private struct ExternalLogsEmptyState: View {
+    let service: HunService
+    let onRestart: () -> Void
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "arrow.triangle.branch")
+                .font(.system(size: 22, weight: .light))
+                .foregroundStyle(AppTheme.textTertiary)
+            Text("Started outside Hun")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(AppTheme.textSecondary)
+            Text(service.isDocker
+                ? "Restart to attach Hun to this container and stream its logs here."
+                : "Its output goes to the terminal or tool that started it. Restart to run it in Hun and capture logs here.")
+                .font(.system(size: 11))
+                .foregroundStyle(AppTheme.textTertiary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 300)
+            InlineActionButton(title: "Restart in Hun", action: onRestart)
+                .padding(.top, 4)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
 // MARK: - Native log text view
 
-private struct LogsTailContainer: View {
-    let logs: [HunLogLine]
+/// Which lines the log view shows: one service's (or all) that match the
+/// search text.
+struct HunLogFilter: Equatable {
+    /// The service to show, or nil for all. An empty string shows nothing.
+    var service: String?
+    var query: String
+
+    func matches(_ line: HunLogLine) -> Bool {
+        if let service, line.service != service { return false }
+        guard !query.isEmpty else { return true }
+        return line.message.localizedCaseInsensitiveContains(query)
+            || line.service.localizedCaseInsensitiveContains(query)
+    }
+}
+
+struct LogsTailContainer: View {
+    let feed: HunLogFeed
+    let filter: HunLogFilter
     let showService: Bool
-    let highlight: String
 
     @State private var isTailing = true
     @State private var newSincePause = 0
-    @State private var lastSeenCount = 0
+    @State private var countedGeneration = 0
     @State private var scrollTrigger = 0
 
     var body: some View {
         ZStack(alignment: .bottom) {
             LogsTextView(
-                logs: logs,
+                feed: feed,
+                // Read here so a new batch redraws only this view.
+                generation: feed.generation,
+                lastSeq: feed.lastSeq,
+                filter: filter,
                 showService: showService,
-                highlight: highlight,
                 isTailing: $isTailing,
                 scrollTrigger: scrollTrigger
             )
@@ -1948,13 +2719,15 @@ private struct LogsTailContainer: View {
             }
         }
         .animation(.spring(response: 0.34, dampingFraction: 0.82), value: isTailing)
-        .onAppear { lastSeenCount = logs.count }
-        .onChange(of: logs.count) { old, new in
-            guard new != old else { return }
-            if !isTailing && new > old {
-                newSincePause += (new - old)
+        .onAppear { countedGeneration = feed.generation }
+        .onChange(of: feed.lastSeq) { old, new in
+            // A reload replaces the lines; only appended ones are "new".
+            guard feed.generation == countedGeneration else {
+                countedGeneration = feed.generation
+                return
             }
-            lastSeenCount = new
+            guard !isTailing, new > old else { return }
+            newSincePause += feed.lines.reversed().prefix { $0.id > old }.filter(filter.matches).count
         }
         .onChange(of: isTailing) { _, tailing in
             if tailing { newSincePause = 0 }
@@ -1988,9 +2761,9 @@ private struct LiveTailButton: View {
             .foregroundStyle(AppTheme.textPrimary)
             .padding(.horizontal, 14)
             .padding(.vertical, 7)
-            .background(.ultraThinMaterial, in: Capsule())
+            .background(.ultraThinMaterial, in: HunRoundedShape())
             .overlay(
-                Capsule()
+                HunRoundedShape()
                     .stroke(
                         hovering ? AppTheme.floatingBorderHover : AppTheme.floatingBorder,
                         lineWidth: 1
@@ -2007,20 +2780,37 @@ private struct LiveTailButton: View {
 }
 
 private struct LogsTextView: NSViewRepresentable {
-    let logs: [HunLogLine]
+    let feed: HunLogFeed
+    let generation: Int
+    let lastSeq: Int
+    let filter: HunLogFilter
     let showService: Bool
-    let highlight: String
     @Binding var isTailing: Bool
     let scrollTrigger: Int
     @Environment(\.colorScheme) private var colorScheme
 
+    /// What forces a full redraw when it changes; anything else is appended.
+    struct RenderKey: Equatable {
+        let generation: Int
+        let filter: HunLogFilter
+        let showService: Bool
+        let dark: Bool
+    }
+
     final class Coordinator: NSObject {
-        var lastSignature: String = ""
         var lastTrigger: Int = .min
         weak var scrollView: NSScrollView?
         weak var textView: LogsTextViewKit?
         var setTailing: ((Bool) -> Void)?
         var currentTailing: () -> Bool = { false }
+
+        // What the text view holds: the feed lines up to `renderedSeq` that
+        // match the filter, oldest first, joined by newlines.
+        var renderedKey: RenderKey?
+        var renderedSeq = 0
+        var renderedIDs: [Int] = []
+        var renderedLengths: [Int] = []
+        var styles: LogStyles?
 
         @objc func userDidScroll(_ note: Notification) {
             guard let scroll = scrollView, let doc = scroll.documentView else { return }
@@ -2034,9 +2824,8 @@ private struct LogsTextView: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    private var signature: String {
-        let lastID = logs.last.map { String(describing: $0.id) } ?? ""
-        return "\(logs.count)|\(lastID)|\(showService)|\(highlight)"
+    private var renderKey: RenderKey {
+        RenderKey(generation: generation, filter: filter, showService: showService, dark: colorScheme == .dark)
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -2110,10 +2899,7 @@ private struct LogsTextView: NSViewRepresentable {
             .foregroundColor: NSColor(AppTheme.selectedText)
         ]
 
-        let (attr, ranges) = buildAttributedString()
-        textView.textStorage?.setAttributedString(attr)
-        textView.lastLineRange = ranges.last
-        context.coordinator.lastSignature = signature
+        render(textView, coordinator: context.coordinator, scroll: scroll)
         context.coordinator.lastTrigger = scrollTrigger
         DispatchQueue.main.async { scrollToBottom(scroll: scroll) }
 
@@ -2121,7 +2907,6 @@ private struct LogsTextView: NSViewRepresentable {
     }
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
-        _ = colorScheme // Refresh native colors when macOS changes appearance.
         let coord = context.coordinator
         coord.currentTailing = { isTailing }
         coord.setTailing = { value in
@@ -2142,13 +2927,7 @@ private struct LogsTextView: NSViewRepresentable {
             .backgroundColor: NSColor(AppTheme.accent).withAlphaComponent(0.32),
             .foregroundColor: NSColor(AppTheme.selectedText)
         ]
-        textView.needsDisplay = true
-        guard coord.lastSignature != signature else { return }
-        let (attr, ranges) = buildAttributedString()
-        textView.textStorage?.setAttributedString(attr)
-        textView.lastLineRange = ranges.last
-        coord.lastSignature = signature
-        if isTailing {
+        if render(textView, coordinator: coord, scroll: scroll), isTailing {
             DispatchQueue.main.async { scrollToBottom(scroll: scroll) }
         }
     }
@@ -2159,75 +2938,135 @@ private struct LogsTextView: NSViewRepresentable {
         textView.scrollRangeToVisible(NSRange(location: storage.length, length: 0))
     }
 
-    // MARK: - Attributed string
+    // MARK: - Rendering
 
-    private static let timeFont: NSFont = .monospacedSystemFont(ofSize: 11, weight: .regular)
-    private static let bodyFont: NSFont = .monospacedSystemFont(ofSize: 12, weight: .regular)
-    private static let serviceFont: NSFont = .monospacedSystemFont(ofSize: 11, weight: .medium)
-
-    private static let highlightBackground = NSColor(red: 0.99, green: 0.80, blue: 0.30, alpha: 0.32)
-    private static let highlightForeground = AppTheme.nativeColor(
-        light: 0x3A3020,
-        dark: 0xFCFCFC
-    )
-
-    private func buildAttributedString() -> (NSAttributedString, [NSRange]) {
-        let result = NSMutableAttributedString()
-
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 1.5
-        paragraph.headIndent = serviceColumnWidth + timeColumnWidth + 4
-        paragraph.firstLineHeadIndent = 0
-
-        let query = highlight.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        var ranges: [NSRange] = []
-        ranges.reserveCapacity(logs.count)
-
-        for (idx, line) in logs.enumerated() {
-            let isLast = idx == logs.count - 1
-            let lineStart = result.length
-
-            // Time
-            let timeText = (line.time as NSString).padding(toLength: 13, withPad: " ", startingAt: 0)
-            result.append(NSAttributedString(string: timeText + "  ", attributes: [
-                .font: Self.timeFont,
-                .foregroundColor: NSColor(AppTheme.logTimestamp),
-                .paragraphStyle: paragraph
-            ]))
-
-            // Service (combined view)
-            if showService {
-                let serviceStart = result.length
-                let svc = (line.service as NSString).padding(toLength: 10, withPad: " ", startingAt: 0)
-                result.append(NSAttributedString(string: svc + "  ", attributes: [
-                    .font: Self.serviceFont,
-                    .foregroundColor: serviceAccent(for: line.service),
-                    .paragraphStyle: paragraph
-                ]))
-                highlightMatches(in: result, plain: line.service, startLocation: serviceStart, query: query)
-            }
-
-            // Message
-            let messageStart = result.length
-            let trailing = isLast ? "" : "\n"
-            result.append(NSAttributedString(string: line.message + trailing, attributes: [
-                .font: Self.bodyFont,
-                .foregroundColor: messageColor(for: line.level),
-                .paragraphStyle: paragraph
-            ]))
-            highlightMatches(in: result, plain: line.message, startLocation: messageStart, query: query)
-
-            let lineEnd = result.length - (trailing.isEmpty ? 0 : 1)
-            ranges.append(NSRange(location: lineStart, length: lineEnd - lineStart))
+    /// Brings the text view up to date with the feed. New lines are appended
+    /// and lines the feed dropped are trimmed from the top, so the cost
+    /// follows the batch, not the 5,000 lines on screen. Returns whether
+    /// anything changed.
+    @discardableResult
+    func render(_ textView: LogsTextViewKit, coordinator coord: Coordinator, scroll: NSScrollView) -> Bool {
+        guard let storage = textView.textStorage else { return false }
+        let lines = feed.lines
+        let key = renderKey
+        if coord.renderedKey != key || coord.styles == nil {
+            coord.renderedKey = key
+            coord.styles = LogStyles(showService: showService)
+            rebuild(textView, storage: storage, lines: lines, coord: coord)
+            return true
+        }
+        guard let styles = coord.styles, let newest = lines.last?.id, newest > coord.renderedSeq else {
+            return false
         }
 
-        return (result, ranges)
+        // Lines added since the last pass, found from the end.
+        var start = lines.count
+        while start > 0, lines[start - 1].id > coord.renderedSeq { start -= 1 }
+        let fresh = lines[start...].filter(filter.matches)
+        coord.renderedSeq = newest
+
+        // Drawn lines the feed has since dropped.
+        let oldestKept = lines.first?.id ?? .max
+        var dropCount = 0
+        while dropCount < coord.renderedIDs.count, coord.renderedIDs[dropCount] < oldestKept { dropCount += 1 }
+        if dropCount > 0, dropCount == coord.renderedIDs.count {
+            rebuild(textView, storage: storage, lines: lines, coord: coord)
+            return true
+        }
+        guard !fresh.isEmpty || dropCount > 0 else { return false }
+
+        let deleteLength = coord.renderedLengths.prefix(dropCount).reduce(0) { $0 + $1 + 1 }
+        // While reading back in the history, keep the same lines in view when
+        // the oldest ones are trimmed.
+        let removedHeight = (dropCount > 0 && !isTailing) ? heightOfText(before: deleteLength, in: textView) : 0
+
+        storage.beginEditing()
+        if !fresh.isEmpty {
+            let chunk = NSMutableAttributedString()
+            for line in fresh {
+                if storage.length > 0 || chunk.length > 0 {
+                    chunk.append(NSAttributedString(string: "\n", attributes: styles.newline))
+                }
+                let length = append(line, to: chunk, styles: styles)
+                coord.renderedIDs.append(line.id)
+                coord.renderedLengths.append(length)
+            }
+            storage.append(chunk)
+        }
+        if dropCount > 0 {
+            storage.deleteCharacters(in: NSRange(location: 0, length: deleteLength))
+            coord.renderedIDs.removeFirst(dropCount)
+            coord.renderedLengths.removeFirst(dropCount)
+        }
+        storage.endEditing()
+
+        textView.lastLineRange = coord.renderedLengths.last.map {
+            NSRange(location: storage.length - $0, length: $0)
+        }
+        if removedHeight > 0 {
+            let clip = scroll.contentView
+            clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: max(0, clip.bounds.origin.y - removedHeight)))
+            scroll.reflectScrolledClipView(clip)
+        }
+        return true
+    }
+
+    private func rebuild(_ textView: LogsTextViewKit, storage: NSTextStorage, lines: [HunLogLine], coord: Coordinator) {
+        guard let styles = coord.styles else { return }
+        let result = NSMutableAttributedString()
+        coord.renderedIDs = []
+        coord.renderedLengths = []
+        for line in lines where filter.matches(line) {
+            if result.length > 0 {
+                result.append(NSAttributedString(string: "\n", attributes: styles.newline))
+            }
+            coord.renderedLengths.append(append(line, to: result, styles: styles))
+            coord.renderedIDs.append(line.id)
+        }
+        coord.renderedSeq = lines.last?.id ?? 0
+        storage.setAttributedString(result)
+        textView.lastLineRange = coord.renderedLengths.last.map {
+            NSRange(location: storage.length - $0, length: $0)
+        }
+    }
+
+    /// Height of the text before `location`, which is where the line at
+    /// `location` starts.
+    private func heightOfText(before location: Int, in textView: NSTextView) -> CGFloat {
+        guard let layoutManager = textView.layoutManager,
+              let storage = textView.textStorage,
+              location < storage.length else { return 0 }
+        layoutManager.ensureLayout(forCharacterRange: NSRange(location: 0, length: location + 1))
+        let glyph = layoutManager.glyphIndexForCharacter(at: location)
+        return layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil).minY
+    }
+
+    /// Appends one log line (time, service in the All view, message) and
+    /// returns its length.
+    private func append(_ line: HunLogLine, to result: NSMutableAttributedString, styles: LogStyles) -> Int {
+        let lineStart = result.length
+        let query = filter.query
+
+        let timeText = (line.time as NSString).padding(toLength: 13, withPad: " ", startingAt: 0)
+        result.append(NSAttributedString(string: timeText + "  ", attributes: styles.time))
+
+        if showService {
+            let serviceStart = result.length
+            let svc = (line.service as NSString).padding(toLength: 10, withPad: " ", startingAt: 0)
+            result.append(NSAttributedString(string: svc + "  ", attributes: styles.service(line.service)))
+            highlightMatches(in: result, plain: line.service, startLocation: serviceStart, query: query, styles: styles)
+        }
+
+        let messageStart = result.length
+        result.append(NSAttributedString(string: line.message, attributes: styles.message(line.level)))
+        highlightMatches(in: result, plain: line.message, startLocation: messageStart, query: query, styles: styles)
+
+        return result.length - lineStart
     }
 
     /// Applies a search highlight to every case-insensitive occurrence of
     /// `query` within `plain`, offset to its position in `result`.
-    private func highlightMatches(in result: NSMutableAttributedString, plain: String, startLocation: Int, query: String) {
+    private func highlightMatches(in result: NSMutableAttributedString, plain: String, startLocation: Int, query: String, styles: LogStyles) {
         guard !query.isEmpty else { return }
         let haystack = plain as NSString
         var searchStart = 0
@@ -2236,62 +3075,82 @@ private struct LogsTextView: NSViewRepresentable {
             let found = haystack.range(of: query, options: [.caseInsensitive], range: scope)
             if found.location == NSNotFound { break }
             result.addAttributes(
-                [
-                    .backgroundColor: Self.highlightBackground,
-                    .foregroundColor: Self.highlightForeground
-                ],
+                styles.highlight,
                 range: NSRange(location: startLocation + found.location, length: found.length)
             )
             searchStart = found.location + max(found.length, 1)
         }
     }
+}
 
-    private var timeColumnWidth: CGFloat { 110 }
-    private var serviceColumnWidth: CGFloat { showService ? 100 : 0 }
+/// Fonts and colors for log lines, resolved once per redraw rather than for
+/// every line.
+final class LogStyles {
+    private static let timeFont: NSFont = .monospacedSystemFont(ofSize: 11, weight: .regular)
+    private static let bodyFont: NSFont = .monospacedSystemFont(ofSize: 12, weight: .regular)
+    private static let serviceFont: NSFont = .monospacedSystemFont(ofSize: 11, weight: .medium)
 
-    private func messageColor(for level: LogLevel) -> NSColor {
+    let time: [NSAttributedString.Key: Any]
+    let newline: [NSAttributedString.Key: Any]
+    let highlight: [NSAttributedString.Key: Any]
+    private let info: [NSAttributedString.Key: Any]
+    private let warning: [NSAttributedString.Key: Any]
+    private let error: [NSAttributedString.Key: Any]
+    private let paragraph: NSParagraphStyle
+    private let palette: [NSColor]
+    private var services: [String: [NSAttributedString.Key: Any]] = [:]
+
+    init(showService: Bool) {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 1.5
+        paragraph.headIndent = (showService ? 100 : 0) + 110 + 4
+        paragraph.firstLineHeadIndent = 0
+        self.paragraph = paragraph
+
+        func body(_ color: NSColor) -> [NSAttributedString.Key: Any] {
+            [.font: Self.bodyFont, .foregroundColor: color, .paragraphStyle: paragraph]
+        }
+        time = [.font: Self.timeFont, .foregroundColor: NSColor(AppTheme.logTimestamp), .paragraphStyle: paragraph]
+        newline = [.font: Self.bodyFont, .paragraphStyle: paragraph]
+        info = body(NSColor(AppTheme.logText))
+        warning = body(NSColor(AppTheme.warning))
+        error = body(NSColor(AppTheme.danger))
+        highlight = [
+            .backgroundColor: NSColor(red: 0.99, green: 0.80, blue: 0.30, alpha: 0.32),
+            .foregroundColor: AppTheme.nativeColor(light: 0x3A3020, dark: 0xFCFCFC)
+        ]
+        palette = [
+            AppTheme.nativeColor(light: 0x445DB7, darkRed: 0.45, darkGreen: 0.55, darkBlue: 0.95),
+            AppTheme.nativeColor(light: 0xB64C46, darkRed: 0.95, darkGreen: 0.55, darkBlue: 0.50),
+            AppTheme.nativeColor(light: 0x327C65, darkRed: 0.45, darkGreen: 0.78, darkBlue: 0.65),
+            AppTheme.nativeColor(light: 0x986327, darkRed: 0.85, darkGreen: 0.65, darkBlue: 0.45),
+            AppTheme.nativeColor(light: 0x744DA7, darkRed: 0.72, darkGreen: 0.55, darkBlue: 0.92)
+        ]
+    }
+
+    func message(_ level: LogLevel) -> [NSAttributedString.Key: Any] {
         switch level {
-        case .error: return NSColor(AppTheme.danger)
-        case .warning: return NSColor(AppTheme.warning)
-        case .info: return NSColor(AppTheme.logText)
+        case .error: return error
+        case .warning: return warning
+        case .info: return info
         }
     }
 
-    private func serviceAccent(for service: String) -> NSColor {
-        let palette: [NSColor] = [
-            AppTheme.nativeColor(
-                light: 0x445DB7,
-                darkRed: 0.45,
-                darkGreen: 0.55,
-                darkBlue: 0.95
-            ),
-            AppTheme.nativeColor(
-                light: 0xB64C46,
-                darkRed: 0.95,
-                darkGreen: 0.55,
-                darkBlue: 0.50
-            ),
-            AppTheme.nativeColor(
-                light: 0x327C65,
-                darkRed: 0.45,
-                darkGreen: 0.78,
-                darkBlue: 0.65
-            ),
-            AppTheme.nativeColor(
-                light: 0x986327,
-                darkRed: 0.85,
-                darkGreen: 0.65,
-                darkBlue: 0.45
-            ),
-            AppTheme.nativeColor(
-                light: 0x744DA7,
-                darkRed: 0.72,
-                darkGreen: 0.55,
-                darkBlue: 0.92
-            )
+    /// A service keeps the same color across launches (`hashValue` is
+    /// randomized per launch, so this uses a fixed FNV-1a hash).
+    func service(_ name: String) -> [NSAttributedString.Key: Any] {
+        if let cached = services[name] { return cached }
+        var hash: UInt32 = 2_166_136_261
+        for byte in name.utf8 {
+            hash = (hash ^ UInt32(byte)) &* 16_777_619
+        }
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: Self.serviceFont,
+            .foregroundColor: palette[Int(hash % UInt32(palette.count))],
+            .paragraphStyle: paragraph
         ]
-        let idx = abs(service.hashValue) % palette.count
-        return palette[idx]
+        services[name] = attributes
+        return attributes
     }
 }
 

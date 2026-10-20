@@ -15,6 +15,11 @@ import (
 	"time"
 )
 
+const (
+	defaultStopGrace = 5 * time.Second
+	dockerStopGrace  = 15 * time.Second
+)
+
 // Process represents a single running service process.
 type Process struct {
 	Name             string
@@ -23,10 +28,11 @@ type Process struct {
 	Env              map[string]string
 	PortEnv          string
 	ReadyPattern     string
-	observedPort     int  // currently reported to status and UI
-	basePort         int  // configured port before any availability fallback
-	launchPort       int  // port selected and requested at process launch
-	allowRuntimePort bool // multitask services may adopt another verified owned listener
+	observedPort     int           // currently reported to status and UI
+	basePort         int           // configured port before any availability fallback
+	launchPort       int           // port selected and requested at process launch
+	allowRuntimePort bool          // multitask services may adopt another verified owned listener
+	stopGrace        time.Duration // SIGTERM grace before SIGKILL; defaults to defaultStopGrace
 
 	cmd       *exec.Cmd
 	stdin     io.Closer
@@ -284,7 +290,11 @@ func (p *Process) Stop() error {
 		return fmt.Errorf("sending SIGTERM to %s: %w", p.Name, err)
 	}
 
-	if waitForProcessExit(exited, 5*time.Second) {
+	grace := p.stopGrace
+	if grace <= 0 {
+		grace = defaultStopGrace
+	}
+	if waitForProcessExit(exited, grace) {
 		return nil
 	}
 
@@ -414,23 +424,59 @@ func (p *Process) ReleasePortLease() {
 	lease.release()
 }
 
+// maxOutputLine caps one line of service output. Longer lines are cut short
+// rather than stopping the reader, which would leave the pipe undrained and
+// freeze the service on its next write.
+const maxOutputLine = 64 * 1024
+
 func (p *Process) scanOutput(r io.Reader, isErr bool) {
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 64*1024), 64*1024)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if p.onOutput != nil {
-			p.onOutput(line, isErr)
+	reader := bufio.NewReaderSize(r, maxOutputLine)
+	for {
+		line, err := readOutputLine(reader)
+		if err != nil && line == "" {
+			return
 		}
-		if !p.IsReady() && p.ReadyPattern != "" {
-			if strings.Contains(line, p.ReadyPattern) {
-				p.mu.Lock()
-				p.ready = true
-				p.mu.Unlock()
-				if p.onReady != nil {
-					p.onReady()
-				}
-			}
+		p.handleOutputLine(line, isErr)
+		if err != nil {
+			return
+		}
+	}
+}
+
+// readOutputLine reads one line without its line ending. A line longer than
+// maxOutputLine keeps its first maxOutputLine bytes plus a marker; the rest is
+// read and dropped. At EOF it returns any final unterminated line with the
+// error.
+func readOutputLine(reader *bufio.Reader) (string, error) {
+	chunk, isPrefix, err := reader.ReadLine()
+	if err != nil {
+		return "", err
+	}
+	if !isPrefix {
+		return string(chunk), nil
+	}
+	kept := append([]byte(nil), chunk...)
+	dropped := 0
+	for isPrefix {
+		chunk, isPrefix, err = reader.ReadLine()
+		dropped += len(chunk)
+		if err != nil {
+			break
+		}
+	}
+	return fmt.Sprintf("%s … [hun: line truncated, %d more bytes]", kept, dropped), err
+}
+
+func (p *Process) handleOutputLine(line string, isErr bool) {
+	if p.onOutput != nil {
+		p.onOutput(line, isErr)
+	}
+	if !p.IsReady() && p.ReadyPattern != "" && strings.Contains(line, p.ReadyPattern) {
+		p.mu.Lock()
+		p.ready = true
+		p.mu.Unlock()
+		if p.onReady != nil {
+			p.onReady()
 		}
 	}
 }

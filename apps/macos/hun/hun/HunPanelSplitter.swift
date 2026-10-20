@@ -45,9 +45,12 @@ enum HunWorkspacePanelMetrics {
     static let minimumDetailWidth: CGFloat = 160
     static let splitterWidth: CGFloat = 9
 
+    /// Whole points only: dragging produces widths like 321.02, which put
+    /// everything after the panel's edge on a fraction of a pixel and makes
+    /// its text render soft.
     static func clamp(_ requestedWidth: CGFloat, availableWidth: CGFloat) -> CGFloat {
         let range = allowedRange(availableWidth: availableWidth)
-        return min(max(requestedWidth, range.lowerBound), range.upperBound)
+        return min(max(requestedWidth, range.lowerBound), range.upperBound).rounded(.down)
     }
 
     static func allowedRange(availableWidth: CGFloat) -> ClosedRange<CGFloat> {
@@ -90,23 +93,76 @@ struct HunResizableWorkspaceSplit<Primary: View, Detail: View>: View {
                 availableWidth: proxy.size.width
             )
 
+            // The panels meet at a 1pt seam so their header dividers run right
+            // up to the vertical line; the wider grab area floats over the seam.
             HStack(spacing: 0) {
                 primary
                     .frame(width: visibleWidth)
                     .frame(maxHeight: .infinity)
                     .clipped()
 
+                Color.clear
+                    .frame(width: 1)
+
+                detail
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .overlay(alignment: .topLeading) {
                 HunWorkspaceResizeHandle(
                     preferredWidth: $preferredWidth,
                     allowedRange: allowedRange,
                     accessibilityLabel: accessibilityLabel
                 )
                 .frame(width: HunWorkspacePanelMetrics.splitterWidth)
-
-                detail
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxHeight: .infinity)
+                .offset(x: visibleWidth + 0.5 - HunWorkspacePanelMetrics.splitterWidth / 2)
             }
         }
+    }
+}
+
+/// The sidebar's width: draggable between a minimum that keeps project rows
+/// readable and a maximum that leaves the workspace room.
+enum HunSidebarMetrics {
+    static let preferenceKey = "hun.dashboard.sidebarWidth"
+    static let defaultWidth: Double = 250
+    static let minimumWidth: CGFloat = 200
+    static let maximumWidth: CGFloat = 360
+
+    static var allowedRange: ClosedRange<CGFloat> { minimumWidth ... maximumWidth }
+
+    /// Whole points, so text after the sidebar stays on the pixel grid.
+    static func clamp(_ width: Double) -> CGFloat {
+        min(max(CGFloat(width), minimumWidth), maximumWidth).rounded(.down)
+    }
+}
+
+/// The grab area on the sidebar's edge. In the classic layout it brightens
+/// the sidebar's divider while hovered; the refined layout has no divider
+/// there, so the resize cursor alone marks it rather than a floating line.
+struct HunSidebarResizeHandle: View {
+    @Binding var preferredWidth: Double
+    var showsDivider: Bool
+    @State private var hovering = false
+
+    var body: some View {
+        ZStack {
+            HunWorkspaceResizeSurface(
+                preferredWidth: $preferredWidth,
+                allowedRange: HunSidebarMetrics.allowedRange,
+                accessibilityLabel: "Resize sidebar"
+            )
+            if showsDivider {
+                Rectangle()
+                    .fill(hovering ? AppTheme.dividerStrong : AppTheme.divider)
+                    .frame(width: 1)
+                    .allowsHitTesting(false)
+            }
+        }
+        .frame(width: HunWorkspacePanelMetrics.splitterWidth)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
     }
 }
 

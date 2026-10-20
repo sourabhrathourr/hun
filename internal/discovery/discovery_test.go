@@ -35,7 +35,7 @@ func TestReconcileStateRegistersProjectsUnderConfiguredRoots(t *testing.T) {
 	}
 }
 
-func TestReconcileStateRemovesProjectsWithoutConfig(t *testing.T) {
+func TestReconcileStateRemovesProjectsWhoseFolderIsGone(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	root := t.TempDir()
@@ -48,8 +48,8 @@ func TestReconcileStateRemovesProjectsWithoutConfig(t *testing.T) {
 	}
 	st.Registry["gone"] = projectDir
 	st.Projects["gone"] = state.ProjectState{Status: "running"}
-	if err := os.Remove(filepath.Join(projectDir, ".hun.yml")); err != nil {
-		t.Fatalf("remove project config: %v", err)
+	if err := os.RemoveAll(projectDir); err != nil {
+		t.Fatalf("delete project folder: %v", err)
 	}
 
 	_, dirty, err := ReconcileState(st)
@@ -67,28 +67,161 @@ func TestReconcileStateRemovesProjectsWithoutConfig(t *testing.T) {
 	}
 }
 
-func TestScanDuplicateNamesKeepRegisteredPath(t *testing.T) {
+func TestReconcileRegistersSameNamedFoldersUnderDistinctKeys(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	root := t.TempDir()
 	writeGlobalConfig(t, home, root)
-	first := writeProject(t, root, "dupe", "api")
-	secondParent := filepath.Join(root, "z-second")
-	if err := os.MkdirAll(secondParent, 0o755); err != nil {
-		t.Fatalf("mkdir second parent: %v", err)
-	}
-	second := writeProject(t, secondParent, "dupe", "api")
+	first := writeProjectNamed(t, filepath.Join(root, "client-a", "web"), "web")
+	second := writeProjectNamed(t, filepath.Join(root, "client-b", "web"), "web")
 
-	result, err := Scan(&config.Global{ScanDirs: []string{root}}, map[string]string{"dupe": second})
+	st, err := state.Load()
 	if err != nil {
-		t.Fatalf("scan: %v", err)
+		t.Fatal(err)
 	}
-	if got := result.Projects["dupe"]; got != second {
-		t.Fatalf("selected duplicate = %q, want registered path %q (first was %q)", got, second, first)
+	if _, _, err := ReconcileState(st); err != nil {
+		t.Fatal(err)
 	}
-	if len(result.Warnings) == 0 {
-		t.Fatal("expected duplicate warning")
+	if st.Registry["web"] != first || st.Registry["client-b-web"] != second {
+		t.Fatalf("registry = %v", st.Registry)
 	}
+}
+
+func TestReconcileFollowsRenameWithoutDuplicating(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := t.TempDir()
+	writeGlobalConfig(t, home, root)
+	dir := writeProjectNamed(t, filepath.Join(root, "shop"), "shop")
+
+	st, err := state.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ReconcileState(st); err != nil {
+		t.Fatal(err)
+	}
+	st.Projects["shop"] = state.ProjectState{Path: dir, IconPath: "/icon.png"}
+	writeProjectNamed(t, dir, "storefront")
+
+	// A running project keeps its key until it stops.
+	st.Projects["shop"] = state.ProjectState{Path: dir, IconPath: "/icon.png", Status: "running"}
+	if _, _, err := ReconcileState(st); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Registry) != 1 || st.Registry["shop"] != dir {
+		t.Fatalf("while running: registry = %v", st.Registry)
+	}
+
+	st.Projects["shop"] = state.ProjectState{Path: dir, IconPath: "/icon.png", Status: "stopped"}
+	if _, _, err := ReconcileState(st); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Registry) != 1 || st.Registry["storefront"] != dir || st.Projects["storefront"].IconPath != "/icon.png" {
+		t.Fatalf("after stop: registry = %v projects = %v", st.Registry, st.Projects)
+	}
+}
+
+func TestReconcileCollapsesFolderRegisteredTwice(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := t.TempDir()
+	writeGlobalConfig(t, home, root)
+	dir := writeProjectNamed(t, filepath.Join(root, "shop"), "storefront")
+
+	st, err := state.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Registry["shop"] = dir
+	st.Registry["storefront"] = dir
+	if _, _, err := ReconcileState(st); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Registry) != 1 || st.Registry["storefront"] != dir {
+		t.Fatalf("registry = %v", st.Registry)
+	}
+}
+
+func TestReconcileKeepsRemovedProjectsOut(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := t.TempDir()
+	writeGlobalConfig(t, home, root)
+	dir := writeProjectNamed(t, filepath.Join(root, "shop"), "shop")
+
+	st, err := state.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ReconcileState(st); err != nil {
+		t.Fatal(err)
+	}
+	st.RemoveProject("shop")
+	if _, _, err := ReconcileState(st); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Registry) != 0 {
+		t.Fatalf("removed project came back: %v", st.Registry)
+	}
+
+	// Adding it explicitly again lifts the removal.
+	if key := st.RegisterPath("shop", dir); key != "shop" || st.IsIgnored(dir) {
+		t.Fatalf("re-add: key=%q ignored=%v", key, st.IsIgnored(dir))
+	}
+}
+
+func TestReconcileKeepsProjectWhoseConfigIsTemporarilyMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := t.TempDir()
+	writeGlobalConfig(t, home, root)
+	dir := writeProjectNamed(t, filepath.Join(root, "shop"), "shop")
+
+	st, err := state.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ReconcileState(st); err != nil {
+		t.Fatal(err)
+	}
+	st.Projects["shop"] = state.ProjectState{Path: dir, IconPath: "/icon.png", LastNote: "note"}
+	if err := os.Remove(filepath.Join(dir, ".hun.yml")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ReconcileState(st); err != nil {
+		t.Fatal(err)
+	}
+	if st.Registry["shop"] != dir || st.Projects["shop"].IconPath != "/icon.png" {
+		t.Fatalf("project lost while .hun.yml was missing: %v %v", st.Registry, st.Projects)
+	}
+}
+
+func TestScanOnlyWalksConfiguredRoots(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeProjectNamed(t, filepath.Join(home, "Desktop", "demo"), "demo")
+	writeProjectNamed(t, filepath.Join(home, "Desktop", "stray"), "stray")
+
+	result, err := Scan(&config.Global{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.ScanDirs) != 0 || len(result.Projects) != 0 {
+		t.Fatalf("scanned outside the default roots: %+v", result)
+	}
+}
+
+func writeProjectNamed(t *testing.T, dir, name string) string {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw := "name: " + name + "\nservices:\n  web:\n    cmd: sleep 5\n"
+	if err := os.WriteFile(filepath.Join(dir, ".hun.yml"), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
 
 func writeGlobalConfig(t *testing.T, home, root string) {
