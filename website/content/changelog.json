@@ -1,5 +1,28 @@
 [
   {
+    "version": "0.4.1",
+    "date": "2026-10-21",
+    "title": "A steadier menu bar and calmer profiles",
+    "summary": "Hun's menu bar icon stays where you put it, and choosing a profile no longer starts a stopped project.",
+    "groups": [
+      {
+        "title": "Improved",
+        "changes": [
+          "Hun's menu bar icon now stays where you ⌘-drag it, across restarts and updates.",
+          "Choosing a profile for a stopped project just selects it; Run starts it next time. Running projects still switch instantly.",
+          "The Hun skill for coding agents is simpler: it sets up .hun.yml from your project's own commands, helps you create profiles, and always starts services through Hun."
+        ]
+      },
+      {
+        "title": "Fixes",
+        "changes": [
+          "Clicking the menu bar icon again now closes the panel.",
+          "The menu bar panel opens aligned with its icon and shows fresh project status each time."
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.4.0",
     "date": "2026-10-20",
     "title": "Profiles and a redesigned Hun",
