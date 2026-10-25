@@ -118,6 +118,100 @@ struct hunTests {
         return components
     }
 
+    @Test func anEndedBetaLicenseAsksForAPaidOneAndRemembersIt() async {
+        let defaults = UserDefaults(suiteName: "hun-tests-\(UUID().uuidString)")!
+        let service = MockLicenseService()
+        service.isValid = false
+        let store = InMemoryLicenseStore(license: HunStoredLicense(
+            licenseKey: "beta-key",
+            instanceID: "lki_beta",
+            productID: "beta",
+            productName: "Hun Public Beta",
+            lastValidatedAt: Date(timeIntervalSince1970: 1_000)
+        ))
+        let configuration = HunLicenseConfiguration(
+            apiBaseURL: URL(string: "https://test.dodopayments.com")!,
+            allowedProductIDs: ["paid", "beta"],
+            checkoutURL: URL(string: "https://hun.sh")!,
+            offlineGracePeriod: 72 * 60 * 60,
+            betaProductIDs: ["beta"]
+        )
+        let manager = HunLicenseManager(
+            configuration: configuration,
+            service: service,
+            store: store,
+            defaults: defaults,
+            now: { Date(timeIntervalSince1970: 2_000) }
+        )
+
+        await manager.restore()
+        #expect(manager.state == .needsActivation)
+        #expect(manager.betaEnded)
+        #expect(manager.errorMessage == nil)
+        #expect((try? store.load()) == nil)
+
+        // Still says so after a relaunch, until a new key is activated.
+        let relaunched = HunLicenseManager(
+            configuration: configuration,
+            service: service,
+            store: store,
+            defaults: defaults
+        )
+        #expect(relaunched.betaEnded)
+        await relaunched.activate("paid-key")
+        #expect(relaunched.isLicensed)
+        #expect(!relaunched.betaEnded)
+        #expect(!defaults.bool(forKey: "HunBetaEnded"))
+    }
+
+    @Test func anInvalidPaidLicenseExplainsItselfWithoutMentioningTheBeta() async {
+        let service = MockLicenseService()
+        service.isValid = false
+        let manager = HunLicenseManager(
+            configuration: HunLicenseConfiguration(
+                apiBaseURL: URL(string: "https://test.dodopayments.com")!,
+                allowedProductIDs: ["paid"],
+                checkoutURL: URL(string: "https://hun.sh")!,
+                offlineGracePeriod: 72 * 60 * 60,
+                betaProductIDs: ["beta"]
+            ),
+            service: service,
+            store: InMemoryLicenseStore(license: HunStoredLicense(
+                licenseKey: "paid-key",
+                instanceID: "lki_paid",
+                productID: "paid",
+                productName: "Hun",
+                lastValidatedAt: Date(timeIntervalSince1970: 1_000)
+            )),
+            defaults: UserDefaults(suiteName: "hun-tests-\(UUID().uuidString)")!,
+            now: { Date(timeIntervalSince1970: 2_000) }
+        )
+
+        await manager.restore()
+        #expect(manager.state == .needsActivation)
+        #expect(!manager.betaEnded)
+        #expect(manager.errorMessage == "This license is no longer valid.")
+    }
+
+    @Test func recheckingOnlyRunsForAnActiveLicense() async {
+        let service = MockLicenseService()
+        let manager = HunLicenseManager(
+            configuration: HunLicenseConfiguration(
+                apiBaseURL: URL(string: "https://test.dodopayments.com")!,
+                allowedProductIDs: ["beta"],
+                checkoutURL: URL(string: "https://hun.sh")!,
+                offlineGracePeriod: 72 * 60 * 60
+            ),
+            service: service,
+            store: InMemoryLicenseStore(),
+            defaults: UserDefaults(suiteName: "hun-tests-\(UUID().uuidString)")!
+        )
+        await manager.restore()
+        await manager.recheck()
+        #expect(service.validatedInstances.isEmpty)
+        #expect(manager.state == .needsActivation)
+    }
+
     @Test func recentlyValidatedLicenseOpensBeforeTheServerAnswers() {
         let validatedAt = Date(timeIntervalSince1970: 1_000)
         let stored = HunStoredLicense(
@@ -229,7 +323,7 @@ struct hunTests {
                 statusCode: 403,
                 providerMessage: "License key activation limit reached"
             ).errorDescription
-                == "This key is already active on two Macs. Deactivate one before trying again."
+                == HunLicenseError.activationLimitMessage
         )
         #expect(
             HunLicenseError.rejected(
@@ -1760,6 +1854,7 @@ struct hunTests {
 private final class MockLicenseService: HunLicenseServing, @unchecked Sendable {
     var deactivatedInstances: [String] = []
     var validatedInstances: [String] = []
+    var isValid = true
 
     func activate(
         licenseKey: String,
@@ -1777,7 +1872,7 @@ private final class MockLicenseService: HunLicenseServing, @unchecked Sendable {
         instanceID: String
     ) async throws -> Bool {
         validatedInstances.append(instanceID)
-        return true
+        return isValid
     }
 
     func deactivate(

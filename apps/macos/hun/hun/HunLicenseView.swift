@@ -34,9 +34,9 @@ struct HunLicenseMenuBarView: View {
             MenuBarView()
         } else {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Hun needs a license")
+                Text(license.betaEnded ? "The Hun beta has ended" : "Hun needs a license")
                     .font(.system(size: 13, weight: .semibold))
-                Text("Open Hun to activate the public beta.")
+                Text(license.betaEnded ? "Open Hun to buy a license." : "Open Hun to activate your license.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(AppTheme.textSecondary)
                 Button("Open Hun") {
@@ -115,10 +115,12 @@ private struct HunLicenseGateView: View {
             appIdentity
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("Activate the public beta")
+                Text(license.betaEnded ? "The Hun beta has ended" : "Activate Hun")
                     .font(.system(size: 24, weight: .semibold))
                     .foregroundStyle(AppTheme.textPrimary)
-                Text("Paste the license key from your Dodo Payments email. Beta access remains active while your license is valid.")
+                Text(license.betaEnded
+                    ? "Thank you for testing Hun. To keep using it, buy a license, then paste the key from your purchase email."
+                    : "Paste the license key from your purchase email.")
                     .font(.system(size: 12.5))
                     .foregroundStyle(AppTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -163,17 +165,25 @@ private struct HunLicenseGateView: View {
             }
 
             HStack {
-                Button("Get a free beta key") {
+                Button {
                     NSWorkspace.shared.open(license.configuration.checkoutURL)
+                } label: {
+                    Text("Buy Hun · $9")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(AppTheme.textPrimary)
+                        .padding(.horizontal, 12)
+                        .frame(height: 28)
+                        .overlay {
+                            HunRoundedShape()
+                                .stroke(AppTheme.dividerStrong, lineWidth: 1)
+                        }
+                        .contentShape(HunRoundedShape())
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 11.5))
-                .foregroundStyle(AppTheme.textSecondary)
-                .underline()
 
                 Spacer()
 
-                Text("2 Macs per key")
+                Text("One-time purchase · 3 Macs per key")
                     .font(.system(size: 10.5))
                     .foregroundStyle(AppTheme.textTertiary)
             }
@@ -277,12 +287,7 @@ private struct HunFirstMouseButton: NSViewRepresentable {
         let usesDarkPalette = colorScheme == .dark
         button.layer?.backgroundColor = usesDarkPalette
             ? NSColor(calibratedWhite: 0.92, alpha: 1).cgColor
-            : NSColor(
-                srgbRed: 94.0 / 255,
-                green: 106.0 / 255,
-                blue: 210.0 / 255,
-                alpha: 1
-            ).cgColor
+            : NSColor(srgbRed: 0x1A / 255, green: 0x1A / 255, blue: 0x18 / 255, alpha: 1).cgColor
         button.attributedTitle = NSAttributedString(
             string: title,
             attributes: [
@@ -352,8 +357,8 @@ final class HunFirstMouseButtonView: NSButton {
     }
 
     func setUsesDarkPalette(_ usesDarkPalette: Bool) {
-        // Preserve the original dark button spinner; use a light spinner on
-        // the purple button in light appearance.
+        // A dark spinner on the light button in dark appearance, a light one
+        // on the near-black button in light appearance.
         progressIndicator.appearance = NSAppearance(
             named: usesDarkPalette ? .aqua : .darkAqua
         )

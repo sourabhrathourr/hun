@@ -2,11 +2,15 @@
 
 import { useState } from "react";
 
-type BetaLicenseCardProps = {
+type LicenseCardProps = {
   licenseKey: string;
+  label?: string;
 };
 
-export function BetaLicenseCard({ licenseKey }: BetaLicenseCardProps) {
+export function LicenseCard({
+  licenseKey,
+  label = "your license",
+}: LicenseCardProps) {
   const [copied, setCopied] = useState(false);
 
   async function copyLicenseKey() {
@@ -18,7 +22,7 @@ export function BetaLicenseCard({ licenseKey }: BetaLicenseCardProps) {
   return (
     <div className="space-y-3 rounded-sm border border-border bg-muted/20 p-4">
       <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground/45">
-        your beta license
+        {label}
       </p>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap text-[13px] text-foreground/85">

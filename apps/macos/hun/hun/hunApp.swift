@@ -24,6 +24,7 @@ struct hunApp: App {
         DispatchQueue.main.async {
             HunTheme.saved.apply()
             HunStatusItemController.install(store: store, license: license)
+            license.startMonitoring()
         }
     }
 
