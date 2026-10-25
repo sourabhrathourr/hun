@@ -1,5 +1,20 @@
 [
   {
+    "version": "0.4.3",
+    "date": "2026-10-25",
+    "title": "hun in your terminal, and quieter Docker starts",
+    "summary": "The hun command now works in any terminal and for coding agents, with no setup.",
+    "groups": [
+      {
+        "title": "Improved",
+        "changes": [
+          "Hun adds the hun command to your PATH, so terminals and coding agents can run it right away. A hun you installed yourself is left alone.",
+          "When a service needs Docker, Hun starts Docker in the background instead of bringing it to the front. Docker may still show its dashboard; turn that off in Docker Desktop's settings."
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.4.2",
     "date": "2026-10-25",
     "title": "Hun is now $9, once",

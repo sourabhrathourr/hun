@@ -15,6 +15,8 @@ If a service you need isn't in `.hun.yml`, add it there and start it with Hun. I
 
 The project name is the `name` in `.hun.yml`.
 
+If your shell can't find `hun`, use the copy inside the app instead, for example `/Applications/hun.app/Contents/Resources/hun status`. Don't install anything or edit shell files to fix it.
+
 - `hun status`: what's running, and on which ports. Check it first: the service may already be running.
 - `hun run <project>`: start the project. Add `-p <profile>` to run a profile, or use `<project>:<service>` for one service.
 - `hun restart <project>:<service>`, `hun stop <project>`, `hun stop <project>:<service>`.
