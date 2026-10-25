@@ -94,6 +94,9 @@ func (d *Daemon) Run() error {
 	// wait on a scan.
 	go d.manager.observer.get(observationMaxAge)
 
+	// Notice when Docker dies under services that run through it.
+	go d.manager.watchDocker(dockerWatchInterval)
+
 	// Recover previously running projects from persisted state in background.
 	// The daemon should start serving socket requests immediately.
 	go func() {

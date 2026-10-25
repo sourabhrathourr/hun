@@ -95,6 +95,16 @@ func TestStartProjectRollsBackOnServiceStartFailure(t *testing.T) {
 	if ps, ok := snap.Projects["broken"]; ok && ps.Status == "running" {
 		t.Fatalf("state marked project as running after rollback: %+v", ps)
 	}
+
+	explained := false
+	for _, line := range m.logs.GetLines("broken", "svc2", 20) {
+		if strings.HasPrefix(line.Text, "[hun] could not start: ") {
+			explained = true
+		}
+	}
+	if !explained {
+		t.Fatal("the failed service's log should say why it could not start")
+	}
 }
 
 func TestStatusShowsProjectDuringStartup(t *testing.T) {

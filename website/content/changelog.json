@@ -18,6 +18,13 @@
           "Hun checks your license every few hours and when your Mac wakes, not only at launch.",
           "Activation messages no longer assume a two-Mac limit."
         ]
+      },
+      {
+        "title": "Fixes",
+        "changes": [
+          "When Docker stops responding, services that run through it show as crashed within about 20 seconds instead of staying \"running\".",
+          "A service that can't start now says why in its own log."
+        ]
       }
     ]
   },
