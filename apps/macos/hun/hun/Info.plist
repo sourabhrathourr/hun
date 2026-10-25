@@ -22,12 +22,14 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
-	<key>HunBetaCheckoutURL</key>
-	<string>https://checkout.dodopayments.com/buy/pdt_0Nk9a6sOPWWJ4iOwu4bwl?quantity=1&amp;redirect_url=https://hun.sh%2Fbeta%2Fsuccess</string>
+	<key>HunCheckoutURL</key>
+	<string>https://checkout.dodopayments.com/buy/pdt_0NqT6hcDftBBLBUTgJc6P?quantity=1&amp;redirect_url=https://hun.sh%2Flicense%2Fsuccess</string>
+	<key>HunBetaProductIDs</key>
+	<string>pdt_0Nk9a6sOPWWJ4iOwu4bwl</string>
 	<key>HunLicenseAPIBaseURL</key>
 	<string>https://live.dodopayments.com</string>
 	<key>HunLicenseProductIDs</key>
-	<string>pdt_0Nk9a6sOPWWJ4iOwu4bwl</string>
+	<string>pdt_0NqT6hcDftBBLBUTgJc6P,pdt_0Nk9a6sOPWWJ4iOwu4bwl</string>
 	<key>NSAccentColorName</key>
 	<string>AccentColor</string>
 	<key>NSHighResolutionCapable</key>

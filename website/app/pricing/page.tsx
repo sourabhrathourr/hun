@@ -4,9 +4,10 @@ import {
 } from "@/components/marketing-shell";
 import { Reveal } from "@/components/reveal";
 import {
-  hunBetaCheckoutURL,
+  HUN_MAC_LIMIT,
+  HUN_PRICE,
   hunBetaEndDateLong,
-  hunBetaEndDateShort,
+  hunCheckoutURL,
 } from "@/lib/dodo";
 import type { Metadata } from "next";
 import Link from "next/link";
@@ -14,12 +15,11 @@ import Link from "next/link";
 export const metadata: Metadata = {
   title: "Pricing — Hun",
   description:
-    "Use the complete Hun macOS app free during public beta. A $15 lifetime license is planned for the paid release.",
+    `Hun is ${HUN_PRICE} once: a lifetime license for the complete macOS app on up to ${HUN_MAC_LIMIT} Macs. No subscription.`,
   alternates: { canonical: "/pricing" },
   openGraph: {
     title: "Hun pricing — simple by design",
-    description:
-      "Free during public beta, then a planned $15 lifetime license for two Macs.",
+    description: `${HUN_PRICE} once, a lifetime license for up to ${HUN_MAC_LIMIT} Macs.`,
     url: "https://hun.sh/pricing",
   },
 };
@@ -27,11 +27,11 @@ export const metadata: Metadata = {
 const included = [
   {
     title: "The complete macOS app",
-    body: "No reduced beta tier and no locked product areas.",
+    body: "No reduced tier and no locked product areas.",
   },
   {
-    title: "Two Mac activations",
-    body: "Use the same license on your primary and secondary Mac.",
+    title: `${HUN_MAC_LIMIT} Mac activations`,
+    body: "Use the same license on every Mac you work on.",
   },
   {
     title: "Every local workflow",
@@ -45,29 +45,26 @@ const included = [
 
 const questions = [
   {
-    question: "Is the beta feature-limited?",
-    answer:
-      "No. The public beta includes the complete product. The time limit applies to the beta license, not to individual features.",
+    question: "Is it a subscription?",
+    answer: `No. Hun is a one-time ${HUN_PRICE} payment for a lifetime license.`,
   },
   {
-    question: "When does the public beta end?",
-    answer:
-      `All public beta licenses expire together on ${hunBetaEndDateLong}. We will explain the paid transition inside the app before that date.`,
+    question: "How many Macs can I use it on?",
+    answer: `Up to ${HUN_MAC_LIMIT}. To move Hun to a new Mac, deactivate it on an old one from Hun's settings.`,
   },
   {
-    question: "Is the paid license a subscription?",
+    question: "Can I get a refund?",
     answer:
-      "No. The planned price is a one-time $15 payment for a lifetime Hun license on up to two Macs.",
+      "Yes. Ask within 14 days of purchase and you'll get a full refund, no questions asked.",
   },
   {
-    question: "Will my projects or settings disappear after beta?",
-    answer:
-      "No. Hun's project configuration and local state remain on your Mac. After the beta license expires, you will need a paid license to continue using the app.",
+    question: "What happens to the free public beta?",
+    answer: `Beta licenses expire on ${hunBetaEndDateLong}. After that, buy a license to keep using Hun; your projects and settings stay on your Mac.`,
   },
   {
     question: "How are payments handled?",
     answer:
-      "Dodo Payments will provide checkout, tax handling, receipts, and payment support when paid access launches.",
+      "Dodo Payments handles checkout, taxes, receipts and payment support. Your license key appears after checkout and in your purchase email.",
   },
 ];
 
@@ -93,9 +90,8 @@ export default function PricingPage() {
                 </h1>
               </div>
               <p className="max-w-xl text-[13px] leading-6 text-foreground/48 lg:justify-self-end sm:text-[14px]">
-                Use the complete app free during public beta. When beta ends,
-                the plan is one affordable lifetime license—no recurring
-                subscription and no feature ladder.
+                One payment and Hun is yours: the complete app on up to{" "}
+                {HUN_MAC_LIMIT} Macs. No subscription and no feature ladder.
               </p>
             </div>
           </Reveal>
@@ -117,62 +113,56 @@ export default function PricingPage() {
                     Available now
                   </div>
                   <p className="mt-7 text-[12px] font-medium text-foreground/45">
-                    Public beta
-                  </p>
-                  <div className="mt-3 flex flex-wrap items-end gap-x-4 gap-y-2">
-                    <span className="text-[64px] font-medium leading-none tracking-[-0.055em] sm:text-[76px]">
-                      $0
-                    </span>
-                    <span className="pb-2 text-[12px] leading-5 text-foreground/42">
-                      complete access
-                      <br />
-                      through {hunBetaEndDateShort}
-                    </span>
-                  </div>
-                  <p className="mt-6 max-w-lg text-[12px] leading-6 text-foreground/48 sm:text-[13px]">
-                    One shared beta period for everyone. Your free license works
-                    on two Macs and unlocks the entire product until the public
-                    beta ends.
-                  </p>
-                  {hunBetaCheckoutURL ? (
-                    <a
-                      href={hunBetaCheckoutURL}
-                      className="mt-8 inline-flex h-11 items-center gap-2 rounded-lg bg-foreground pl-4 pr-3.5 text-[13px] font-medium text-background transition-[opacity,transform] duration-150 ease-out hover:opacity-[0.88] active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
-                    >
-                      Get a free beta key
-                      <ArrowIcon />
-                    </a>
-                  ) : (
-                    <p className="mt-8 inline-flex min-h-11 items-center rounded-lg bg-white/[0.04] px-4 text-[12px] text-foreground/45 shadow-[0_0_0_1px_oklch(1_0_0/0.07)]">
-                      Beta access opens after payment-account verification
-                    </p>
-                  )}
-                </article>
-
-                <article className="border-t border-white/[0.07] p-6 sm:p-10 lg:border-t-0 lg:p-12">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/32">
-                    Planned after beta
-                  </p>
-                  <p className="mt-7 text-[12px] font-medium text-foreground/45">
                     Lifetime license
                   </p>
                   <div className="mt-3 flex flex-wrap items-end gap-x-4 gap-y-2">
                     <span className="text-[64px] font-medium leading-none tracking-[-0.055em] sm:text-[76px]">
-                      $15
+                      {HUN_PRICE}
                     </span>
                     <span className="pb-2 text-[12px] leading-5 text-foreground/42">
                       one time
                       <br />
-                      two Macs
+                      up to {HUN_MAC_LIMIT} Macs
                     </span>
                   </div>
                   <p className="mt-6 max-w-lg text-[12px] leading-6 text-foreground/48 sm:text-[13px]">
-                    Keep the same complete app after beta. Paid checkout is not
-                    open yet; the final offer will be confirmed before launch.
+                    The complete app, with updates delivered inside Hun. Pay
+                    once and keep using it.
                   </p>
-                  <span className="mt-8 inline-flex min-h-11 items-center rounded-lg bg-white/[0.04] px-4 text-[12px] text-foreground/42 shadow-[0_0_0_1px_oklch(1_0_0/0.07)]">
-                    Available after beta
-                  </span>
+                  <a
+                    href={hunCheckoutURL}
+                    className="mt-8 inline-flex h-11 items-center gap-2 rounded-lg bg-foreground pl-4 pr-3.5 text-[13px] font-medium text-background transition-[opacity,transform] duration-150 ease-out hover:opacity-[0.88] active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
+                  >
+                    Buy Hun · {HUN_PRICE}
+                    <ArrowIcon />
+                  </a>
+                </article>
+
+                <article className="border-t border-white/[0.07] p-6 sm:p-10 lg:border-t-0 lg:p-12">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground/32">
+                    How it works
+                  </p>
+                  <ol className="mt-7 space-y-6">
+                    {[
+                      ["Buy", "Checkout takes a minute and shows your license key."],
+                      ["Download", "Install Hun and move it to Applications."],
+                      ["Activate", "Paste the key into Hun. It is also in your purchase email."],
+                    ].map(([title, body], index) => (
+                      <li key={title} className="flex gap-4">
+                        <span className="pt-0.5 text-[10px] font-medium tabular-nums text-foreground/28">
+                          0{index + 1}
+                        </span>
+                        <div>
+                          <p className="text-[14px] font-medium tracking-[-0.02em] text-foreground/86">
+                            {title}
+                          </p>
+                          <p className="mt-1 text-[11px] leading-5 text-foreground/42">
+                            {body}
+                          </p>
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
                 </article>
               </div>
 
@@ -201,60 +191,6 @@ export default function PricingPage() {
             </div>
           </section>
         </Reveal>
-
-        <section className="mt-28 sm:mt-40">
-          <Reveal>
-            <div className="grid gap-8 lg:grid-cols-[0.75fr_1.25fr] lg:items-end">
-              <div>
-                <p className="text-[11px] uppercase tracking-[0.18em] text-foreground/35">
-                  The transition
-                </p>
-                <h2 className="mt-4 max-w-xl text-[36px] font-medium leading-[1.02] tracking-[-0.04em] sm:text-[48px]">
-                  Free now. Predictable later.
-                </h2>
-              </div>
-              <p className="max-w-2xl text-[13px] leading-6 text-foreground/48 lg:justify-self-end sm:text-[14px]">
-                The beta is for learning what Hun needs to become, not for
-                hiding the price. Everyone receives the same access and the
-                same deadline.
-              </p>
-            </div>
-          </Reveal>
-
-          <Reveal delay={0.06}>
-            <ol className="mt-10 grid gap-px overflow-hidden rounded-[20px] bg-white/[0.07] shadow-[0_18px_60px_-40px_oklch(0_0_0/0.9)] sm:grid-cols-3">
-              {[
-                [
-                  "01",
-                  "Join the beta",
-                  "Download Hun and activate a free key on up to two Macs.",
-                ],
-                [
-                  "02",
-                  "Use everything",
-                  "No beta-only tier. Every current workflow is included.",
-                ],
-                [
-                  "03",
-                  "Choose at launch",
-                  "Buy the planned lifetime license only if Hun earns its place.",
-                ],
-              ].map(([number, title, body]) => (
-                <li key={number} className="bg-[#0a0a0a] p-6 sm:p-7">
-                  <span className="text-[10px] font-medium text-foreground/28">
-                    {number}
-                  </span>
-                  <h3 className="mt-10 text-[17px] font-medium tracking-[-0.025em] text-foreground/88">
-                    {title}
-                  </h3>
-                  <p className="mt-3 text-[11px] leading-5 text-foreground/42">
-                    {body}
-                  </p>
-                </li>
-              ))}
-            </ol>
-          </Reveal>
-        </section>
 
         <section className="mt-28 grid gap-10 sm:mt-40 lg:grid-cols-[0.7fr_1.3fr]">
           <Reveal>

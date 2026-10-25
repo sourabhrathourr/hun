@@ -1,5 +1,5 @@
 import { LegalPage } from "@/components/marketing-shell";
-import { hunBetaEndDateLong } from "@/lib/dodo";
+import { HUN_MAC_LIMIT, HUN_PRICE, hunBetaEndDateLong } from "@/lib/dodo";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 export default function TermsPage() {
   return (
     <LegalPage
-      eyebrow="Effective 26 July 2026"
+      eyebrow="Effective 25 October 2026"
       title="Terms of Use"
       summary="These terms govern your use of the Hun website, macOS application, bundled runtime, and related services."
     >
@@ -43,11 +43,10 @@ export default function TermsPage() {
 
       <h2>4. Paid licenses</h2>
       <p>
-        Paid licenses are not yet available. The currently planned offer is a
-        $15 one-time license for use on up to two Macs. Final price, scope, and
-        checkout terms will be displayed before any payment is taken. Dodo
-        Payments will act as the checkout and payment provider for paid
-        purchases.
+        A paid license is a one-time purchase of {HUN_PRICE} (plus any
+        applicable tax) for use on up to {HUN_MAC_LIMIT} Macs. The price and
+        checkout terms are shown before any payment is taken. Dodo Payments
+        acts as the checkout and payment provider for paid purchases.
       </p>
 
       <h2>5. License and acceptable use</h2>

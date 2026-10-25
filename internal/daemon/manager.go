@@ -243,7 +243,11 @@ func (m *Manager) StartProfile(projectName, profile string, projConfig *config.P
 			continue
 		}
 		if err != nil {
-			return rollback(fmt.Errorf("starting service %s: %w", svcName, err))
+			startErr := rollback(fmt.Errorf("starting service %s: %w", svcName, err))
+			// Say why in the service's own log, which is where people look.
+			// After the rollback, which clears the project's logs.
+			m.emitInternalServiceLine(projectName, svcName, "[hun] could not start: "+err.Error(), true)
+			return startErr
 		}
 		started[svcName] = proc
 	}
@@ -390,7 +394,11 @@ func (m *Manager) startService(projectName, serviceName string, projConfig *conf
 			continue
 		}
 		if err != nil {
-			return rollback(fmt.Errorf("starting service %s: %w", svcName, err))
+			startErr := rollback(fmt.Errorf("starting service %s: %w", svcName, err))
+			// Say why in the service's own log, which is where people look.
+			// After the rollback, which clears the project's logs.
+			m.emitInternalServiceLine(projectName, svcName, "[hun] could not start: "+err.Error(), true)
+			return startErr
 		}
 		started[svcName] = proc
 	}

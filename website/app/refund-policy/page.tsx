@@ -4,16 +4,16 @@ import type { Metadata } from "next";
 
 export const metadata: Metadata = {
   title: "Refund Policy — Hun",
-  description: "Refund information for Hun beta and future paid licenses.",
+  description: "Refunds for Hun licenses: a full refund within 14 days of purchase.",
   alternates: { canonical: "/refund-policy" },
 };
 
 export default function RefundPolicyPage() {
   return (
     <LegalPage
-      eyebrow="Effective 26 July 2026"
+      eyebrow="Effective 25 October 2026"
       title="Refund Policy"
-      summary="The public beta is free. This page explains how refunds will work when paid Hun licenses become available."
+      summary="If Hun isn't right for you, ask for a refund within 14 days of purchase and you'll get your money back. No questions asked."
     >
       <h2>1. Public beta</h2>
       <p>
@@ -24,10 +24,10 @@ export default function RefundPolicyPage() {
 
       <h2>2. Paid licenses</h2>
       <p>
-        Paid checkout is not currently open. Before paid licenses launch, the
-        checkout page and this policy will show the final price and any
-        time-based refund eligibility that applies. You will be able to review
-        those terms before paying.
+        You can ask for a full refund of a Hun license within 14 days of
+        purchase, for any reason. You don&apos;t need to explain why. Refunds
+        go back to the original payment method through Dodo Payments; how long
+        they take to appear depends on your bank or card provider.
       </p>
 
       <h2>3. Faulty or misdescribed product</h2>
@@ -48,7 +48,9 @@ export default function RefundPolicyPage() {
 
       <h2>5. Requesting help</h2>
       <p>
-        Submit billing or product questions through{" "}
+        To ask for a refund, email{" "}
+        <a href="mailto:rathoursourabh5@gmail.com">rathoursourabh5@gmail.com</a>{" "}
+        with the payment ID from your receipt. For other product questions, use{" "}
         <a href="https://github.com/sourabhrathourr/hun/issues">
           Hun support on GitHub
         </a>

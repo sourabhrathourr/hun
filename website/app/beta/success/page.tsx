@@ -1,4 +1,4 @@
-import { BetaLicenseCard } from "@/components/beta-license-card";
+import { LicenseCard } from "@/components/license-card";
 import { hunBetaEndDateLong } from "@/lib/dodo";
 import type { Metadata } from "next";
 import Image from "next/image";
@@ -67,7 +67,7 @@ export default async function BetaSuccessPage({
           </div>
 
           {licenseKey ? (
-            <BetaLicenseCard licenseKey={licenseKey} />
+            <LicenseCard licenseKey={licenseKey} label="your beta license" />
           ) : (
             <div className="rounded-sm border border-border bg-muted/20 p-4 text-[13px] leading-relaxed text-muted-foreground/60">
               {succeeded

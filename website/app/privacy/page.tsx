@@ -10,7 +10,7 @@ export const metadata: Metadata = {
 export default function PrivacyPage() {
   return (
     <LegalPage
-      eyebrow="Effective 26 July 2026"
+      eyebrow="Effective 25 October 2026"
       title="Privacy Policy"
       summary="Hun is designed around local development. This policy explains what stays on your Mac and what limited information leaves it."
     >
@@ -86,10 +86,8 @@ export default function PrivacyPage() {
       <p>
         You can stop local processing by quitting or uninstalling Hun. You may
         request access, correction, or deletion of personal information,
-        subject to legal and transactional retention requirements, through{" "}
-        <a href="https://github.com/sourabhrathourr/hun/issues">
-          Hun support on GitHub
-        </a>
+        subject to legal and transactional retention requirements, by emailing{" "}
+        <a href="mailto:rathoursourabh5@gmail.com">rathoursourabh5@gmail.com</a>
         .
       </p>
 

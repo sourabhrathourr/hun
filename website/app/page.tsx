@@ -4,7 +4,12 @@ import {
 } from "@/components/marketing-shell";
 import { Reveal } from "@/components/reveal";
 import releases from "@/content/changelog.json";
-import { hunBetaCheckoutURL, hunBetaEndDateLong } from "@/lib/dodo";
+import {
+  HUN_MAC_LIMIT,
+  HUN_PRICE,
+  hunBetaEndDateLong,
+  hunCheckoutURL,
+} from "@/lib/dodo";
 import macosImage from "@/public/macos-image.png";
 import type { Metadata } from "next";
 import Image from "next/image";
@@ -35,6 +40,19 @@ export const metadata: Metadata = {
   },
 };
 
+// The people who used Hun during the public beta.
+const earlyTesters = [
+  "Shadev Kumar",
+  "Nikhil Kumar Saha",
+  "Subhajit Kundu",
+  "Rushil",
+  "Tijil Jha",
+  "Devendra Singh",
+  "Harssha",
+  "Kedar Deore",
+  "Ashwin Parande",
+];
+
 const questions = [
   {
     question: "What exactly does Hun replace?",
@@ -52,9 +70,9 @@ const questions = [
       "No. The macOS app is the primary product and bundles the runtime it needs. The standalone CLI and TUI remain optional for automation, remote machines, and terminal-first workflows.",
   },
   {
-    question: "What happens when the public beta ends?",
+    question: "How much does Hun cost?",
     answer:
-      `The beta is free through ${hunBetaEndDateLong}. After that, continued use will require the planned $15 lifetime license. The paid-license transition will ship before the beta deadline.`,
+      `${HUN_PRICE}, once, for a lifetime license on up to ${HUN_MAC_LIMIT} Macs. There is no subscription. Free public beta licenses expire on ${hunBetaEndDateLong}; your projects and settings stay on your Mac.`,
   },
 ];
 
@@ -81,23 +99,13 @@ export default function HomePage() {
               </p>
               <div className="flex flex-wrap items-center gap-3 pt-2">
                 <DownloadButton />
-                {hunBetaCheckoutURL ? (
-                  <a
-                    href={hunBetaCheckoutURL}
-                    className="inline-flex h-11 items-center gap-2 rounded-lg border border-border pl-4 pr-3.5 text-[12px] font-medium text-foreground/80 transition-[background-color,color,transform] duration-150 ease-out hover:bg-muted/30 hover:text-foreground active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
-                  >
-                    Get a free beta key
-                    <ArrowIcon />
-                  </a>
-                ) : (
-                  <Link
-                    href="/pricing"
-                    className="inline-flex h-11 items-center gap-2 rounded-lg border border-border pl-4 pr-3.5 text-[12px] font-medium text-foreground/80 transition-[background-color,color,transform] duration-150 ease-out hover:bg-muted/30 hover:text-foreground active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
-                  >
-                    View beta access
-                    <ArrowIcon />
-                  </Link>
-                )}
+                <a
+                  href={hunCheckoutURL}
+                  className="inline-flex h-11 items-center gap-2 rounded-lg border border-border pl-4 pr-3.5 text-[12px] font-medium text-foreground/80 transition-[background-color,color,transform] duration-150 ease-out hover:bg-muted/30 hover:text-foreground active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
+                >
+                  Buy Hun · {HUN_PRICE}
+                  <ArrowIcon />
+                </a>
                 <span className="text-[11px] tabular-nums text-muted-foreground/45">
                   v{currentVersion} · Apple silicon
                 </span>
@@ -107,21 +115,21 @@ export default function HomePage() {
 
           <Reveal delay={0.12}>
             <div
-              id="beta"
+              id="license"
               className="grid gap-4 border-y border-border py-4 text-[12px] sm:grid-cols-[1fr_auto] sm:items-center"
             >
               <p className="max-w-3xl leading-relaxed text-muted-foreground/65">
                 <span className="font-medium text-foreground/85">
-                  The full app is free during the public beta.
+                  {HUN_PRICE}, once. No subscription.
                 </span>{" "}
-                A beta license key is required, works on two Macs, and expires
-                for everyone on {hunBetaEndDateLong}.
+                A lifetime license for the complete app, on up to{" "}
+                {HUN_MAC_LIMIT} Macs.
               </p>
               <Link
                 href="/pricing"
                 className="inline-flex min-h-11 items-center text-foreground/75 underline underline-offset-4 transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
               >
-                How beta pricing works
+                See pricing
               </Link>
             </div>
           </Reveal>
@@ -272,34 +280,31 @@ export default function HomePage() {
                   <div>
                     <div className="inline-flex items-center gap-2 rounded-full bg-emerald-400/[0.07] px-3 py-1.5 text-[10px] font-medium text-emerald-300/70 shadow-[0_0_0_1px_oklch(0.8_0.14_155/0.13)]">
                       <span className="size-1.5 rounded-full bg-emerald-300" />
-                      Public beta
+                      Lifetime license
                     </div>
                     <h2 className="mt-5 max-w-3xl text-[36px] font-medium leading-[1.02] tracking-[-0.04em] sm:text-[48px]">
-                      free while we build it with you.
+                      {HUN_PRICE}, once. yours to keep.
                     </h2>
                     <p className="mt-5 max-w-2xl text-[13px] leading-6 text-foreground/48">
-                      Use every feature through {hunBetaEndDateLong}. After
-                      beta, the planned price is $15 once for a lifetime license
-                      on two Macs—no subscription and no feature ladder.
+                      The complete app on up to {HUN_MAC_LIMIT} Macs—no
+                      subscription and no feature ladder.
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-3 lg:justify-end">
+                    <a
+                      href={hunCheckoutURL}
+                      className="inline-flex h-11 items-center gap-2 rounded-lg bg-foreground pl-4 pr-3.5 text-[12px] font-medium text-background transition-[opacity,transform] duration-150 ease-out hover:opacity-[0.88] active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
+                    >
+                      Buy Hun · {HUN_PRICE}
+                      <ArrowIcon />
+                    </a>
                     <Link
                       href="/pricing"
-                      className="inline-flex h-11 items-center gap-2 rounded-lg bg-foreground pl-4 pr-3.5 text-[12px] font-medium text-background transition-[opacity,transform] duration-150 ease-out hover:opacity-[0.88] active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
+                      className="inline-flex h-11 items-center gap-2 rounded-lg border border-border px-4 text-[12px] font-medium text-foreground/70 transition-[background-color,color,transform] duration-150 ease-out hover:bg-white/[0.04] hover:text-foreground active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
                     >
                       See pricing
                       <ArrowIcon />
                     </Link>
-                    {hunBetaCheckoutURL ? (
-                      <a
-                        href={hunBetaCheckoutURL}
-                        className="inline-flex h-11 items-center gap-2 rounded-lg border border-border px-4 text-[12px] font-medium text-foreground/70 transition-[background-color,color,transform] duration-150 ease-out hover:bg-white/[0.04] hover:text-foreground active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
-                      >
-                        Get a beta key
-                        <ArrowIcon />
-                      </a>
-                    ) : null}
                   </div>
                 </div>
               </div>
@@ -340,6 +345,32 @@ export default function HomePage() {
               </Reveal>
             ))}
           </div>
+        </section>
+
+        <section className="mt-28 border-t border-border pt-10 sm:mt-40 sm:pt-14">
+          <Reveal>
+            <div className="grid gap-6 lg:grid-cols-[0.7fr_1.3fr] lg:gap-10">
+              <p className="text-[11px] uppercase tracking-[0.18em] text-foreground/35">
+                early testers
+              </p>
+              <div className="min-w-0 space-y-3">
+                <p className="max-w-2xl text-[13px] leading-6 text-foreground/48">
+                  Hun was shaped by the people who used it first. Thank you
+                  for the bug reports, the ideas and the patience.
+                </p>
+                <ul className="flex max-w-3xl flex-wrap text-[14px] leading-7 text-foreground/72 sm:text-[15px]">
+                  {earlyTesters.map((name, index) => (
+                    <li key={name} className="whitespace-nowrap">
+                      {name}
+                      {index < earlyTesters.length - 1 ? (
+                        <span className="px-2 text-foreground/25">·</span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </Reveal>
         </section>
 
         <MarketingFooter />

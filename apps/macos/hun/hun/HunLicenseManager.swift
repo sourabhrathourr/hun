@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 import Security
@@ -7,6 +8,9 @@ nonisolated struct HunLicenseConfiguration: Sendable {
     let allowedProductIDs: Set<String>
     let checkoutURL: URL
     let offlineGracePeriod: TimeInterval
+    /// Products whose keys belonged to the free public beta. When one stops
+    /// being valid, Hun says the beta has ended rather than showing an error.
+    var betaProductIDs: Set<String> = []
 
     static var current: HunLicenseConfiguration {
         let info = Bundle.main.infoDictionary ?? [:]
@@ -14,23 +18,30 @@ nonisolated struct HunLicenseConfiguration: Sendable {
             string: info["HunLicenseAPIBaseURL"] as? String
                 ?? "https://live.dodopayments.com"
         )!
-        let productIDs = (
-            info["HunLicenseProductIDs"] as? String
-                ?? "pdt_0Nk9a6sOPWWJ4iOwu4bwl"
-        )
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
         let checkoutURL = URL(
-            string: info["HunBetaCheckoutURL"] as? String
-                ?? "https://checkout.dodopayments.com/buy/pdt_0Nk9a6sOPWWJ4iOwu4bwl?quantity=1&redirect_url=https://hun.sh%2Fbeta%2Fsuccess"
+            string: info["HunCheckoutURL"] as? String
+                ?? "https://checkout.dodopayments.com/buy/pdt_0NqT6hcDftBBLBUTgJc6P?quantity=1&redirect_url=https://hun.sh%2Flicense%2Fsuccess"
         )!
 
         return HunLicenseConfiguration(
             apiBaseURL: apiBaseURL,
-            allowedProductIDs: Set(productIDs),
+            allowedProductIDs: productIDs(
+                info["HunLicenseProductIDs"] as? String
+                    ?? "pdt_0NqT6hcDftBBLBUTgJc6P,pdt_0Nk9a6sOPWWJ4iOwu4bwl"
+            ),
             checkoutURL: checkoutURL,
-            offlineGracePeriod: 72 * 60 * 60
+            offlineGracePeriod: 72 * 60 * 60,
+            betaProductIDs: productIDs(
+                info["HunBetaProductIDs"] as? String ?? "pdt_0Nk9a6sOPWWJ4iOwu4bwl"
+            )
+        )
+    }
+
+    private static func productIDs(_ list: String) -> Set<String> {
+        Set(
+            list.split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
         )
     }
 }
@@ -65,23 +76,36 @@ enum HunLicenseState: Equatable {
 final class HunLicenseManager {
     private(set) var state: HunLicenseState = .checking
     private(set) var errorMessage: String?
+    /// The beta license on this Mac ran out, so activation asks for a paid
+    /// license. Kept across launches until a new key is activated.
+    private(set) var betaEnded: Bool {
+        didSet { defaults.set(betaEnded, forKey: Self.betaEndedKey) }
+    }
 
     let configuration: HunLicenseConfiguration
 
     private let service: HunLicenseServing
     private let store: HunLicenseStoring
+    private let defaults: UserDefaults
     private let now: @Sendable () -> Date
+    @ObservationIgnored private var monitor: Task<Void, Never>?
+    @ObservationIgnored private var wakeObserver: NSObjectProtocol?
+
+    private static let betaEndedKey = "HunBetaEnded"
 
     init(
         configuration: HunLicenseConfiguration = .current,
         service: HunLicenseServing? = nil,
         store: HunLicenseStoring = HunLicenseStores.default,
+        defaults: UserDefaults = .standard,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.configuration = configuration
         self.service = service ?? HunDodoLicenseService(baseURL: configuration.apiBaseURL)
         self.store = store
+        self.defaults = defaults
         self.now = now
+        betaEnded = defaults.bool(forKey: Self.betaEndedKey)
         // A license validated within the offline grace period opens the app on
         // the first frame; restore() then confirms it with the server.
         if let stored = try? store.load(), mayUseCachedLicense(stored) {
@@ -126,7 +150,11 @@ final class HunLicenseManager {
             )
             guard valid else {
                 try? store.delete()
-                errorMessage = "This license is no longer valid."
+                if configuration.betaProductIDs.contains(stored.productID) {
+                    betaEnded = true
+                } else {
+                    errorMessage = "This license is no longer valid."
+                }
                 state = .needsActivation
                 return
             }
@@ -149,7 +177,7 @@ final class HunLicenseManager {
     func activate(_ licenseKey: String) async {
         let trimmedKey = licenseKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedKey.isEmpty else {
-            errorMessage = "Enter the license key from your beta email."
+            errorMessage = "Enter the license key from your purchase email."
             return
         }
 
@@ -173,6 +201,7 @@ final class HunLicenseManager {
                     lastValidatedAt: now()
                 )
                 try store.save(stored)
+                betaEnded = false
                 state = .active(stored.session(isOffline: false))
             } catch {
                 try? await service.deactivate(
@@ -188,6 +217,34 @@ final class HunLicenseManager {
     }
 
     func retryValidation() async {
+        await restore()
+    }
+
+    /// Rechecks an active license every few hours and when the Mac wakes, so a
+    /// license that ends while Hun stays open is noticed without a relaunch.
+    func startMonitoring(every interval: Duration = .seconds(6 * 60 * 60)) {
+        guard monitor == nil else { return }
+        // The manager lives as long as the app.
+        monitor = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: interval)
+                await self.recheck()
+            }
+        }
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                Task { await self.recheck() }
+            }
+        }
+    }
+
+    /// Confirms an active license with the server; does nothing while Hun is
+    /// asking for a key.
+    func recheck() async {
+        guard isLicensed else { return }
         await restore()
     }
 
@@ -232,6 +289,9 @@ enum HunLicenseError: LocalizedError {
         }
     }
 
+    static let activationLimitMessage =
+        "This key is already active on as many Macs as it allows. Deactivate Hun on one of them and try again."
+
     private static func rejectionDescription(
         statusCode: Int,
         providerMessage: String?
@@ -242,7 +302,7 @@ enum HunLicenseError: LocalizedError {
             || message.contains("maximum activation")
             || message.contains("too many activation")
         {
-            return "This key is already active on two Macs. Deactivate one before trying again."
+            return Self.activationLimitMessage
         }
         if message.contains("expired") {
             return "This license key has expired."
@@ -258,7 +318,7 @@ enum HunLicenseError: LocalizedError {
         case 400, 404, 422:
             return "That license key isn’t valid. Check the key and try again."
         case 403:
-            return "This key is already active on two Macs. Deactivate one before trying again."
+            return Self.activationLimitMessage
         case 429:
             return "Too many activation attempts. Wait a moment and try again."
         case 500 ... 599:
