@@ -26,6 +26,9 @@ struct hunApp: App {
             HunStatusItemController.install(store: store, license: license)
             license.startMonitoring()
         }
+        DispatchQueue.global(qos: .utility).async {
+            HunCLILinker.linkBundledCLI()
+        }
     }
 
     var body: some Scene {

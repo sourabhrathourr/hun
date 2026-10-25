@@ -35,18 +35,18 @@ func ensureDockerReadyForCommand(command string, emit func(string)) error {
 		return errors.New("Docker daemon is not running; start Docker and retry")
 	}
 
-	emitDockerLine(emit, "Docker daemon is not running; opening Docker Desktop...")
+	emitDockerLine(emit, "Docker isn't running; starting it in the background...")
 	if err := launchDockerApp(); err != nil {
-		return fmt.Errorf("opening Docker Desktop: %w", err)
+		return fmt.Errorf("starting Docker: %w", err)
 	}
 
 	deadline := time.Now().Add(dockerReadyTimeout)
 	for {
 		if err := checkDockerDaemonWithTimeout(); err == nil {
-			emitDockerLine(emit, "Docker daemon is ready.")
+			emitDockerLine(emit, "Docker is ready.")
 			return nil
 		} else if time.Now().After(deadline) {
-			return fmt.Errorf("Docker Desktop opened, but Docker daemon did not become ready within %s: %w", dockerReadyTimeout.Round(time.Second), err)
+			return fmt.Errorf("Docker was started, but it did not become ready within %s: %w", dockerReadyTimeout.Round(time.Second), err)
 		}
 		sleepBeforeRecheck(dockerReadyPollInterval)
 	}
@@ -121,17 +121,28 @@ func findDockerExecutable() (string, error) {
 	return "", errors.New("docker executable not found")
 }
 
+// defaultLaunchDockerApp starts Docker Desktop without bringing it in front
+// of the user's work. Its own CLI starts the engine in the background; older
+// versions without that command are opened in the background instead.
+// Whether Docker shows its dashboard is Docker's own setting.
 func defaultLaunchDockerApp() error {
 	if runtime.GOOS != "darwin" {
 		return errors.New("Docker Desktop auto-start is only supported on macOS")
 	}
+	if dockerPath, err := findDockerExecutable(); err == nil {
+		cmd := exec.Command(dockerPath, "desktop", "start", "--detach")
+		cmd.Env = withDeveloperEnvironment(os.Environ())
+		if cmd.Run() == nil {
+			return nil
+		}
+	}
 	if _, err := exec.LookPath("open"); err != nil {
 		return err
 	}
-	if err := exec.Command("open", "-a", "Docker").Run(); err == nil {
+	if err := exec.Command("open", "-g", "-j", "-a", "Docker").Run(); err == nil {
 		return nil
 	}
-	return exec.Command("open", "/Applications/Docker.app").Run()
+	return exec.Command("open", "-g", "-j", "/Applications/Docker.app").Run()
 }
 
 func isExecutableFile(path string) bool {

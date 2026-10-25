@@ -212,6 +212,45 @@ struct hunTests {
         #expect(manager.state == .needsActivation)
     }
 
+    @Test func bundledCLIIsLinkedOntoThePATHWithoutTouchingTheUsersOwn() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("cli-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+        func app(_ name: String) throws -> URL {
+            let cli = root.appendingPathComponent("\(name)/hun.app/Contents/Resources/hun")
+            try fm.createDirectory(at: cli.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data().write(to: cli)
+            return cli
+        }
+        let cli = try app("New")
+        let missing = root.appendingPathComponent("missing-bin")
+        let shared = root.appendingPathComponent("shared-bin")
+        let local = root.appendingPathComponent("home/.local/bin")
+        try fm.createDirectory(at: shared, withIntermediateDirectories: true)
+
+        // The first folder that exists and is writable gets the link.
+        let linked = HunCLILinker.link(cli: cli, into: [missing, shared, local])
+        #expect(linked == shared.appendingPathComponent("hun"))
+        #expect(try fm.destinationOfSymbolicLink(atPath: shared.appendingPathComponent("hun").path) == cli.path)
+
+        // Hun's own link follows the app when it moves.
+        let moved = try app("Moved")
+        #expect(HunCLILinker.link(cli: moved, into: [missing, shared, local]) == shared.appendingPathComponent("hun"))
+        #expect(try fm.destinationOfSymbolicLink(atPath: shared.appendingPathComponent("hun").path) == moved.path)
+
+        // With nowhere else to go, ~/.local/bin is created.
+        try fm.removeItem(at: shared.appendingPathComponent("hun"))
+        try fm.removeItem(at: shared)
+        #expect(HunCLILinker.link(cli: cli, into: [missing, shared, local]) == local.appendingPathComponent("hun"))
+
+        // A hun the user installed themselves is left alone.
+        try fm.createDirectory(at: shared, withIntermediateDirectories: true)
+        try Data("#!/bin/sh".utf8).write(to: shared.appendingPathComponent("hun"))
+        try fm.removeItem(at: local.appendingPathComponent("hun"))
+        #expect(HunCLILinker.link(cli: cli, into: [shared, local]) == nil)
+        #expect(!fm.fileExists(atPath: local.appendingPathComponent("hun").path))
+    }
+
     @Test func recentlyValidatedLicenseOpensBeforeTheServerAnswers() {
         let validatedAt = Date(timeIntervalSince1970: 1_000)
         let stored = HunStoredLicense(

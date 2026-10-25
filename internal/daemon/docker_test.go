@@ -87,7 +87,7 @@ func TestEnsureDockerReadyForCommandOpensDockerDesktopOnMac(t *testing.T) {
 	if launches != 1 {
 		t.Fatalf("Docker launches = %d, want 1", launches)
 	}
-	if strings.Join(emitted, "\n") != "Docker daemon is not running; opening Docker Desktop...\nDocker daemon is ready." {
+	if strings.Join(emitted, "\n") != "Docker isn't running; starting it in the background...\nDocker is ready." {
 		t.Fatalf("emitted lines = %q", emitted)
 	}
 }
