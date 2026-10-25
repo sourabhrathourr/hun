@@ -53,6 +53,11 @@ const questions = [
     answer: `Up to ${HUN_MAC_LIMIT}. To move Hun to a new Mac, deactivate it on an old one from Hun's settings.`,
   },
   {
+    question: "Can I get a refund?",
+    answer:
+      "Yes. Ask within 14 days of purchase and you'll get a full refund, no questions asked.",
+  },
+  {
     question: "What happens to the free public beta?",
     answer: `Beta licenses expire on ${hunBetaEndDateLong}. After that, buy a license to keep using Hun; your projects and settings stay on your Mac.`,
   },

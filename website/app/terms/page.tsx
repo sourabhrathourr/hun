@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 export default function TermsPage() {
   return (
     <LegalPage
-      eyebrow="Effective 26 July 2026"
+      eyebrow="Effective 25 October 2026"
       title="Terms of Use"
       summary="These terms govern your use of the Hun website, macOS application, bundled runtime, and related services."
     >

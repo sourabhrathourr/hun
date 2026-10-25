@@ -1,5 +1,27 @@
 [
   {
+    "version": "0.4.2",
+    "date": "2026-10-25",
+    "title": "Hun is now $9, once",
+    "summary": "Buy a lifetime license for up to 3 Macs. The free public beta ends on 31 October 2026.",
+    "groups": [
+      {
+        "title": "New",
+        "changes": [
+          "Buy Hun for $9, once: a lifetime license for the complete app on up to 3 Macs, with no subscription.",
+          "When a beta license ends, Hun says so clearly and lets you buy and activate a license right there."
+        ]
+      },
+      {
+        "title": "Improved",
+        "changes": [
+          "Hun checks your license every few hours and when your Mac wakes, not only at launch.",
+          "Activation messages no longer assume a two-Mac limit."
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.4.1",
     "date": "2026-10-21",
     "title": "A steadier menu bar and calmer profiles",
