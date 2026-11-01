@@ -1,5 +1,42 @@
 [
   {
+    "version": "0.5.0",
+    "date": "2026-11-02",
+    "title": "A welcome, your agent, and a new menu bar",
+    "summary": "Hun now sets projects up with the coding agent you already use, greets you with a proper welcome, and has a menu bar worth opening.",
+    "groups": [
+      {
+        "title": "New",
+        "changes": [
+          "A welcome for first launch: unlock Hun, connect your coding agent, add a project and run it, with music you can mute. Replay it any time from Settings › About.",
+          "When you add a project, Claude Code or Codex reads it and writes its .hun.yml for you. No agent installed? Hun works it out from the project's files, as before.",
+          "Ask your agent to change a project's setup from the new Claude or Codex button in the project's header. Every change is checked before Hun uses it, and you can undo it.",
+          "A new menu bar: a photo vista, how many projects are running, and a switch for each project. Pick your vista in Settings › Appearance; light and dark mode each keep their own.",
+          "Choose how running projects show in the sidebar: Bar, Activity or Ring, in Settings › Appearance. A crash shows in red.",
+          "⌘-click a link in a service's log to open it in your browser."
+        ]
+      },
+      {
+        "title": "Improved",
+        "changes": [
+          "Clay is now the default look, and terracotta is Hun's accent in both palettes and in dark mode.",
+          "New installs start in Multitask, so projects run side by side. The welcome explains the difference, and you can switch any time.",
+          "In the menu bar, a project with one crashed service stays on, shows how many crashed, and can be restarted in one click.",
+          "The menu bar panel opens and closes with a short fade.",
+          "Agent chats start at the top and stay readable as they grow.",
+          "Tooltips are gone; buttons speak for themselves."
+        ]
+      },
+      {
+        "title": "Fixes",
+        "changes": [
+          "The welcome shows again after Hun is deleted and installed again, but not after an update.",
+          "Opening the menu bar panel no longer puts the cursor in a search field."
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.4.4",
     "date": "2026-11-01",
     "title": "Clay, a warm palette for light mode",
