@@ -6,3 +6,6 @@ dist/
 *.log
 *.xcuserstate
 xcuserdata/
+
+# Image options from design rounds; kept locally, not shipped.
+design-archive/
