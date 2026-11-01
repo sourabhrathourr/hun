@@ -104,7 +104,7 @@ struct HunTerminalPanel: View {
             Circle()
                 .fill(statusColor(for: session.state))
                 .frame(width: 5, height: 5)
-                .help(session.state.statusText)
+                .accessibilityHint(session.state.statusText)
                 .accessibilityLabel(session.state.statusText)
 
             Image(systemName: "terminal")
@@ -125,7 +125,7 @@ struct HunTerminalPanel: View {
                 .foregroundStyle(AppTheme.textTertiary)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .help(session.currentDirectory)
+                .accessibilityHint(session.currentDirectory)
 
             Spacer(minLength: 12)
 
@@ -240,7 +240,7 @@ private struct HunTerminalHeaderButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help(helpText)
+        .accessibilityHint(helpText)
     }
 }
 

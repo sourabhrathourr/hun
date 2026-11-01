@@ -10,6 +10,18 @@ final class HunStatusItemController: NSObject {
     private static var installed: HunStatusItemController?
 
     /// Creates the menu bar item once, after the app has started.
+    /// Where Hun's switch sits on screen, for pointing at it.
+    static var buttonFrameOnScreen: NSRect? {
+        guard let button = installed?.statusItem.button, let window = button.window else { return nil }
+        return window.convertToScreen(button.convert(button.bounds, to: nil))
+    }
+
+    #if DEBUG
+    /// Debug builds: opens the panel, for screenshots.
+    static func debugToggle() { installed?.toggleFromDebug() }
+    private func toggleFromDebug() { isOpen ? close() : open() }
+    #endif
+
     static func install(store: HunStore, license: HunLicenseManager) {
         guard installed == nil else { return }
         installed = HunStatusItemController(store: store, license: license)
@@ -98,13 +110,21 @@ final class HunStatusItemController: NSObject {
     private func open() {
         guard let button = statusItem.button else { return }
         isClosing = false
-        // Replaces a fade-out still in flight.
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0
-            panel.animator().alphaValue = 1
-        }
-        panel.setFrame(frame(for: hosting.fittingSize, under: button), display: false)
+        // Fades in while settling a few points down from the menu bar, the
+        // way the system's own menus arrive. Replaces a fade-out in flight.
+        let target = frame(for: hosting.fittingSize, under: button)
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        panel.alphaValue = 0
+        panel.setFrame(reduceMotion ? target : target.offsetBy(dx: 0, dy: 6), display: false)
         panel.makeKeyAndOrderFront(nil)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = reduceMotion ? 0.12 : 0.2
+            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.23, 1, 0.32, 1)
+            context.allowsImplicitAnimation = true
+            panel.animator().alphaValue = 1
+            panel.animator().setFrame(target, display: true)
+        }
+        DispatchQueue.main.async { [weak self] in self?.panel.invalidateShadow() }
         button.highlight(true)
         startDismissMonitoring()
         Task { await store.refresh(force: true) }
@@ -119,7 +139,8 @@ final class HunStatusItemController: NSObject {
         statusItem.button?.highlight(false)
         stopDismissMonitoring()
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.12
+            context.duration = 0.14
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             panel.animator().alphaValue = 0
         } completionHandler: { [weak self] in
             MainActor.assumeIsolated {
@@ -136,6 +157,7 @@ final class HunStatusItemController: NSObject {
     private func resizePanel(to size: CGSize) {
         guard isOpen, let button = statusItem.button, size.height > 0 else { return }
         panel.setFrame(frame(for: size, under: button), display: true)
+        panel.invalidateShadow()
     }
 
     /// Left edge lined up with the icon's, like a system menu, a few points
@@ -187,7 +209,7 @@ final class HunStatusItemController: NSObject {
 }
 
 /// A borderless, rounded panel like a menu bar extra's window: no arrow, and
-/// it can take keyboard focus for the project search without activating Hun.
+/// it can take keyboard focus (for Esc) without activating Hun.
 final class HunMenuPanel: NSPanel {
     init() {
         super.init(
@@ -209,12 +231,10 @@ final class HunMenuPanel: NSPanel {
     override var canBecomeKey: Bool { true }
 
     func setContent(_ view: NSView) {
+        // The content draws its own shape (the doorway) and edge; the
+        // window is clear around it, and its shadow follows that shape.
         let container = NSView()
         container.wantsLayer = true
-        container.layer?.cornerRadius = 12
-        container.layer?.cornerCurve = .continuous
-        container.layer?.masksToBounds = true
-        container.layer?.borderWidth = 1
         view.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(view)
         NSLayoutConstraint.activate([
@@ -224,18 +244,5 @@ final class HunMenuPanel: NSPanel {
             view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
         contentView = container
-        updateBorder()
-    }
-
-    override func becomeKey() {
-        super.becomeKey()
-        updateBorder()
-    }
-
-    /// A hairline edge in the current appearance, like the system's panels.
-    private func updateBorder() {
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            contentView?.layer?.borderColor = NSColor(AppTheme.dividerStrong).cgColor
-        }
     }
 }

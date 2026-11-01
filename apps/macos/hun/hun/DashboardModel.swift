@@ -44,6 +44,18 @@ final class HunStore {
     var isRecoveringServices = false
     var isAddingProject = false
     var pendingProjectReview: HunProjectInitReview?
+    /// Setup conversations with the coding agent, by project folder. Loaded
+    /// from disk the first time a project is shown.
+    private(set) var agentChats: [String: HunAgentChat] = [:]
+    private var loadedAgentChats: Set<String> = []
+    /// Logs or Setup in each project's right-hand pane, by project folder.
+    var paneTabs: [String: HunPaneTab] = [:]
+    /// Messages typed while the agent was busy, sent in order when it's free.
+    private(set) var agentQueues: [String: [HunQueuedMessage]] = [:]
+    /// The coding agent on this Mac Hun asks (Claude Code, then Codex), once found.
+    private(set) var availableAgent: HunAgent?
+    private var agentEnvironment: [String: String]?
+    private var agentTasks: [String: Task<Void, Never>] = [:]
     var lastError: String?
     /// Set when the last action failed because something else holds a port.
     var portConflict: HunPortConflict?
@@ -67,13 +79,18 @@ final class HunStore {
     private var modeChangeGeneration = 0
     private var hasStarted = false
 
+    /// Off in tests, so adding a project never starts a real agent.
+    private let findsCodingAgents: Bool
+
     init(
         client: HunDaemonClientProtocol = HunDaemonClient(),
         supervisor: HunDaemonSupervisorProtocol = HunDaemonSupervisor(),
         projectInitializer: HunProjectInitializing = HunProjectInitializer(),
         navigationDefaults: UserDefaults? = nil,
-        startAutomatically: Bool = true
+        startAutomatically: Bool = true,
+        findsCodingAgents: Bool = true
     ) {
+        self.findsCodingAgents = findsCodingAgents
         self.client = client
         self.supervisor = supervisor
         self.projectInitializer = projectInitializer
@@ -154,6 +171,7 @@ final class HunStore {
         await refresh(force: true)
         installAgentSkillIfPossible()
         startPolling()
+        _ = await resolveAgent()
     }
 
     func refreshNow() {
@@ -209,6 +227,11 @@ final class HunStore {
         Task { await addProject(at: url) }
     }
 
+    /// Adds a folder as a project. A new project is registered straight
+    /// away; if a coding agent is installed, it then writes the project's
+    /// .hun.yml in the background while the window shows it working. Hun's
+    /// own rule-based draft is the fallback. A .hun.yml already in the
+    /// folder is used as it is.
     func addProject(at url: URL) async {
         guard !isAddingProject else { return }
         HunTrace.addProject("flow start path=\(url.path)")
@@ -222,13 +245,374 @@ final class HunStore {
         }
 
         do {
-            pendingProjectReview = try await projectInitializer.initializeProject(at: url)
-            HunTrace.addProject("flow review_ready path=\(url.path) name=\(pendingProjectReview?.name ?? "")")
+            let agent = await resolveAgent()
+            let draft = try await projectInitializer.initializeProject(at: url)
+            HunTrace.addProject("flow drafted path=\(draft.path) created=\(draft.createdConfig) agent=\(agent?.kind.rawValue ?? "none")")
+            if draft.createdConfig, let agent {
+                // Show the agent at work before the rule-based draft can.
+                loadedAgentChats.insert(draft.path)
+                agentChats[draft.path] = HunAgentChat(agent: agent.kind, sessionID: nil, messages: [.agentWorking(isSetup: true)])
+            }
+            try await supervisor.ensureDaemon()
+            try await client.registerProject(path: draft.path)
+            await refresh(force: true)
+            selectProject(at: URL(fileURLWithPath: draft.path))
             lastError = nil
+            if draft.createdConfig, let agent {
+                runAgent(agent, path: draft.path, prompt: HunAgentBrief.setup, resuming: nil)
+            }
         } catch {
             HunTrace.addProject("flow failed path=\(url.path) error=\(HunTrace.compact(error.localizedDescription))")
+            agentChats[url.path] = nil
             lastError = error.localizedDescription
         }
+    }
+
+    // MARK: Coding agents
+
+    /// The setup conversation for a project folder.
+    func agentChat(for path: String) -> HunAgentChat? {
+        agentChats[path]
+    }
+
+    /// Reads conversations from disk for projects seen for the first time.
+    private func loadAgentChats(for paths: [String]) {
+        for path in paths where !loadedAgentChats.contains(path) {
+            loadAgentChat(for: path)
+        }
+    }
+
+    private func loadAgentChat(for path: String) {
+        if !loadedAgentChats.contains(path) {
+            loadedAgentChats.insert(path)
+            if var chat = HunAgentChatArchive.load(for: path) {
+                // A reply that was running when Hun quit didn't finish.
+                if let last = chat.messages.indices.last, chat.messages[last].status == .working {
+                    chat.messages[last].status = .failed
+                    chat.messages[last].text = "This was interrupted when Hun quit."
+                }
+                agentChats[path] = chat
+            }
+        }
+    }
+
+    /// Sends a message now, or queues it if the agent is still working.
+    func sendAgentMessage(_ text: String, for project: HunProject) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        if agentChats[project.path]?.isWorking == true {
+            agentQueues[project.path, default: []].append(HunQueuedMessage(text: text))
+        } else {
+            askAgent(text, for: project)
+        }
+    }
+
+    /// Steers: stops the turn in progress and sends this instead, in the
+    /// same session, so the agent still has what was asked before.
+    func steerAgent(_ text: String, for project: HunProject) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        if agentChats[project.path]?.isWorking == true {
+            cancelAgent(for: project.path, note: "Stopped for your next message.")
+            askAgent(text, for: project, steering: true)
+        } else {
+            askAgent(text, for: project)
+        }
+    }
+
+    func removeQueuedAgentMessage(_ id: UUID, for path: String) {
+        agentQueues[path]?.removeAll { $0.id == id }
+    }
+
+    /// Sends a queued message right away, steering the turn in progress.
+    func sendQueuedAgentMessageNow(_ id: UUID, for project: HunProject) {
+        guard let message = agentQueues[project.path]?.first(where: { $0.id == id }) else { return }
+        removeQueuedAgentMessage(id, for: project.path)
+        steerAgent(message.text, for: project)
+    }
+
+    /// After a turn ends, the next queued message, if any.
+    private func sendNextQueuedAgentMessage(for path: String) {
+        guard var queue = agentQueues[path], !queue.isEmpty,
+              let project = model.projects.first(where: { $0.path == path })
+        else { return }
+        let next = queue.removeFirst()
+        agentQueues[path] = queue.isEmpty ? nil : queue
+        askAgent(next.text, for: project)
+    }
+
+    /// Asks the project's agent to change its .hun.yml ("put the API in Docker").
+    func askAgent(_ request: String, for project: HunProject, steering: Bool = false) {
+        let request = request.trimmingCharacters(in: .whitespacesAndNewlines)
+        loadAgentChat(for: project.path)
+        guard !request.isEmpty, agentChats[project.path]?.isWorking != true else { return }
+        Task {
+            guard let agent = await resolveAgent() else {
+                lastError = "Install Claude Code or Codex to change the setup by asking."
+                return
+            }
+            let configURL = URL(fileURLWithPath: project.path).appendingPathComponent(".hun.yml")
+            let current = (try? String(contentsOf: configURL, encoding: .utf8)) ?? ""
+            var chat = agentChats[project.path]
+                ?? HunAgentChat(agent: agent.kind, sessionID: nil, messages: [])
+            // A different agent can't pick up another one's session.
+            if chat.agent != agent.kind {
+                chat.agent = agent.kind
+                chat.sessionID = nil
+            }
+            chat.messages.append(.user(request))
+            chat.messages.append(.agentWorking(isSetup: false))
+            agentChats[project.path] = chat
+            let state = await liveState(for: project)
+            runAgent(
+                agent, path: project.path,
+                prompt: HunAgentBrief.change(
+                    steering ? "Change of plan, this replaces what I asked just before: \(request)" : request,
+                    current: current, state: state
+                ),
+                resuming: chat.sessionID,
+                previousConfig: current
+            )
+        }
+    }
+
+    /// Stops the agent. A first setup keeps Hun's rule-based draft.
+    func cancelAgent(for path: String, note: String? = nil) {
+        agentTasks[path]?.cancel()
+        agentTasks[path] = nil
+        updateLastAgentMessage(path: path) { message in
+            guard message.status == .working else { return }
+            message.status = .failed
+            message.isThinking = nil
+            message.text = note ?? (message.isSetup
+                ? "Stopped. Hun's own setup is in place; ask for any changes here."
+                : "Stopped.")
+        }
+    }
+
+    /// Puts back the .hun.yml from before a reply's change.
+    func undoAgentChange(_ messageID: UUID, for project: HunProject) {
+        guard var chat = agentChats[project.path], !chat.isWorking,
+              let index = chat.messages.firstIndex(where: { $0.id == messageID }),
+              let change = chat.messages[index].change, !change.undone
+        else { return }
+        Task {
+            if let problem = await saveAgentConfig(change.previousConfig, path: project.path) {
+                lastError = problem
+                return
+            }
+            await refresh(force: true)
+            chat.messages[index].change?.undone = true
+            agentChats[project.path] = chat
+            HunAgentChatArchive.save(chat, for: project.path)
+        }
+    }
+
+    /// Starts the setup conversation over. The project's .hun.yml stays as it is.
+    func clearAgentChat(for path: String) {
+        guard agentChats[path]?.isWorking != true else { return }
+        agentChats[path] = nil
+        agentQueues[path] = nil
+        HunAgentChatArchive.remove(for: path)
+    }
+
+    /// Looks for an agent again, for after someone installs one.
+    func recheckAgent() async {
+        availableAgent = nil
+        agentEnvironment = nil
+        await resolveAgent()
+    }
+
+    /// Each service's status and port, and the latest log lines, so the agent
+    /// can answer "why did the API crash?".
+    private func liveState(for project: HunProject) async -> String? {
+        let services = project.services.filter { !$0.isExternal }
+        guard !services.isEmpty else { return nil }
+        var lines = services.map { service -> String in
+            let port = service.port > 0 ? " on port \(service.port)" : ""
+            return "- \(service.name): \(service.status.rawValue)\(port)"
+        }
+        if let logs = try? await client.logs(project: project.id, service: nil, lines: 120), !logs.isEmpty {
+            lines.append("")
+            lines.append("Latest log lines (oldest first):")
+            lines += logs.suffix(120).map { "[\($0.service)]\($0.isErr ? " (stderr)" : "") \($0.text)" }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    #if DEBUG
+    /// Debug builds: act as if no agent is installed, to see that state.
+    var debugHidesAgent = false
+    #endif
+
+    /// The agent to ask, found once (and looked for again until one is installed).
+    @discardableResult
+    func resolveAgent() async -> HunAgent? {
+        guard findsCodingAgents else { return nil }
+        #if DEBUG
+        if debugHidesAgent { availableAgent = nil; return nil }
+        #endif
+        if let availableAgent { return availableAgent }
+        let environment = await environmentForAgents()
+        let agent = await Task.detached(priority: .utility) {
+            HunAgentLocator.preferred(environment: environment)
+        }.value
+        availableAgent = agent
+        return agent
+    }
+
+    /// Every coding agent installed on this Mac (Claude Code first).
+    func installedAgents() async -> [HunAgent] {
+        guard findsCodingAgents else { return [] }
+        #if DEBUG
+        if debugHidesAgent { return [] }
+        #endif
+        let environment = await environmentForAgents()
+        return await Task.detached(priority: .utility) {
+            HunAgentLocator.installed(environment: environment)
+        }.value
+    }
+
+    private func environmentForAgents() async -> [String: String] {
+        if let agentEnvironment { return agentEnvironment }
+        let environment = await HunShellEnvironment.loginEnvironment()
+        agentEnvironment = environment
+        return environment
+    }
+
+    private func runAgent(
+        _ agent: HunAgent,
+        path: String,
+        prompt: String,
+        resuming session: String?,
+        previousConfig: String? = nil
+    ) {
+        agentTasks[path]?.cancel()
+        let before = setupOutline(path: path)
+        HunTrace.addProject("agent start path=\(path) agent=\(agent.kind.rawValue) resume=\(session != nil)")
+        agentTasks[path] = Task { [weak self] in
+            guard let self else { return }
+            let environment = await self.environmentForAgents()
+            let directory = URL(fileURLWithPath: path, isDirectory: true)
+            let apply: @MainActor @Sendable (HunAgentEvent) -> Void = { [weak self] event in
+                self?.applyAgentEvent(event, path: path)
+            }
+            let onEvent: @Sendable (HunAgentEvent) -> Void = { event in
+                Task { @MainActor in apply(event) }
+            }
+            do {
+                var result = try await HunAgentRunner.run(
+                    agent, in: directory, prompt: prompt, resuming: session,
+                    environment: environment, onEvent: onEvent
+                )
+                if let problem = await self.saveAgentConfig(result.yaml, path: path) {
+                    // One more go, with the daemon's reason.
+                    HunTrace.addProject("agent retry path=\(path) problem=\(HunTrace.compact(problem))")
+                    self.applyAgentEvent(.step("Fixing the setup", files: []), path: path)
+                    let summary = result.summary
+                    result = try await HunAgentRunner.run(
+                        agent, in: directory, prompt: HunAgentBrief.fix(problem),
+                        resuming: result.sessionID ?? session, environment: environment, onEvent: onEvent
+                    )
+                    if result.summary.isEmpty { result = HunAgentResult(yaml: result.yaml, summary: summary, sessionID: result.sessionID) }
+                    if let again = await self.saveAgentConfig(result.yaml, path: path) {
+                        throw HunAgentError.failed(again)
+                    }
+                }
+                await self.refresh(force: true)
+                var change: HunAgentChange?
+                if let previousConfig, let before {
+                    let lines = HunSetupOutline.changes(from: before, to: self.setupOutline(path: path) ?? before)
+                    change = HunAgentChange(lines: lines, previousConfig: previousConfig, undone: false)
+                }
+                self.finishAgent(path: path, summary: result.summary, sessionID: result.sessionID, change: change)
+            } catch is CancellationError {
+                HunTrace.addProject("agent cancelled path=\(path)")
+            } catch {
+                HunTrace.addProject("agent failed path=\(path) error=\(HunTrace.compact(error.localizedDescription))")
+                let reason = HunAgentError.friendly(error, agent: agent.kind)
+                self.updateLastAgentMessage(path: path) { message in
+                    message.status = .failed
+                    message.isThinking = nil
+                    message.text = message.isSetup
+                        ? "I couldn't finish, so Hun's own setup is in place. \(reason)"
+                        : reason
+                }
+            }
+            if !Task.isCancelled {
+                self.agentTasks[path] = nil
+                self.sendNextQueuedAgentMessage(for: path)
+            }
+        }
+    }
+
+    /// The project's services and profiles as the daemon last reported them.
+    private func setupOutline(path: String) -> HunSetupOutline? {
+        guard let project = model.projects.first(where: { $0.path == path }) else { return nil }
+        var services: [String: HunSetupOutline.Service] = [:]
+        for service in project.services where !service.isExternal {
+            services[service.name] = .init(command: service.command, port: service.port)
+        }
+        var profiles: [String: [String]] = [:]
+        for profile in project.profiles {
+            profiles[profile.name] = profile.services
+        }
+        return HunSetupOutline(services: services, profiles: profiles)
+    }
+
+    /// Saves through the daemon, which checks it first. Returns why not, if it can't.
+    private func saveAgentConfig(_ yaml: String, path: String) async -> String? {
+        do {
+            try await client.saveConfig(path: path, content: yaml)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    private func applyAgentEvent(_ event: HunAgentEvent, path: String) {
+        updateLastAgentMessage(path: path, save: false) { message in
+            guard message.status == .working else { return }
+            switch event {
+            case let .step(step, files):
+                message.isThinking = nil
+                if message.steps.last != step { message.steps.append(step) }
+                var read = message.files ?? []
+                for file in files where !read.contains(file) { read.append(file) }
+                message.files = read.isEmpty ? nil : read
+            case .thinking:
+                message.isThinking = true
+            case let .reply(text):
+                message.isThinking = nil
+                message.text = text
+            }
+        }
+    }
+
+    private func finishAgent(path: String, summary: String, sessionID: String?, change: HunAgentChange?) {
+        // When a new project's first setup finishes, show what was set up.
+        if agentChats[path]?.isFirstSetupRunning == true {
+            paneTabs[path] = .setup
+        }
+        updateLastAgentMessage(path: path) { message in
+            message.status = .done
+            message.isThinking = nil
+            if !summary.isEmpty { message.text = summary }
+            message.change = change
+        }
+        if let sessionID, var chat = agentChats[path] {
+            chat.sessionID = sessionID
+            agentChats[path] = chat
+            HunAgentChatArchive.save(chat, for: path)
+        }
+        HunTrace.addProject("agent done path=\(path)")
+    }
+
+    private func updateLastAgentMessage(path: String, save: Bool = true, _ update: (inout HunAgentMessage) -> Void) {
+        guard var chat = agentChats[path], let index = chat.messages.lastIndex(where: { $0.role == .agent }) else { return }
+        update(&chat.messages[index])
+        agentChats[path] = chat
+        if save { HunAgentChatArchive.save(chat, for: path) }
     }
 
     func acceptPendingProject() async {
@@ -670,6 +1054,7 @@ final class HunStore {
         let projects = snapshot.projects.map { project in
             HunProject(snapshot: project, activeID: snapshot.activeProject)
         }
+        loadAgentChats(for: projects.map(\.path))
         // A project renamed in .hun.yml comes back under a new ID; keep its
         // tab and selection by matching the folder.
         let previousPaths = Dictionary(model.projects.map { ($0.id, $0.path) }, uniquingKeysWith: { first, _ in first })

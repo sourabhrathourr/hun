@@ -12,6 +12,15 @@ private enum ThemeTestError: Error {
 
 @MainActor
 struct hunTests {
+    @Test func welcomeShowsAgainAfterAReinstallButNotAfterAnUpdate() {
+        // Same copy: nothing changed.
+        #expect(HunOnboarding.installChange(from: "4412:0.4.4", to: "4412:0.4.4") == .same)
+        // A new copy of the same version: deleted and installed again.
+        #expect(HunOnboarding.installChange(from: "4412:0.4.4", to: "9050:0.4.4") == .reinstalled)
+        // A new copy of a new version: Sparkle or Homebrew updated it.
+        #expect(HunOnboarding.installChange(from: "4412:0.4.4", to: "9050:0.4.5") == .updated)
+    }
+
     @Test func appThemeUsesCreamCanvasInLightMode() throws {
         // These are Graphite's values; don't inherit the palette saved on this Mac.
         HunPalette.current = .graphite
@@ -629,7 +638,7 @@ struct hunTests {
     @Test func snapshotDecodingMapsProjectState() async throws {
         let client = MockDaemonClient()
         client.nextSnapshot = .fixture(activeProject: "app")
-        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false, findsCodingAgents: false)
 
         await store.refresh(force: true)
 
@@ -645,7 +654,7 @@ struct hunTests {
     @Test func clearingLogsEmptiesTheViewAndTheDaemonBuffer() async throws {
         let client = MockDaemonClient()
         client.nextSnapshot = .fixture(activeProject: "app")
-        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false, findsCodingAgents: false)
         await store.refresh(force: true)
         store.selectedLogScope = .combined
         // Changing the scope reloads logs in the background; let it finish.
@@ -691,7 +700,7 @@ struct hunTests {
     @Test func runningAProfileAndSavingOneSendTheRightRequests() async throws {
         let client = MockDaemonClient()
         client.nextSnapshot = .fixture(activeProject: "app")
-        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false, findsCodingAgents: false)
         await store.refresh(force: true)
         let project = try #require(store.model.projects.first)
 
@@ -718,7 +727,7 @@ struct hunTests {
             projects: [HunDaemonProject(id: "shop", name: "shop", path: "/w/shop", status: "stopped", isActive: false, branch: nil, lastNote: nil, startedAt: nil, services: [], configError: nil)],
             warnings: []
         )
-        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false, findsCodingAgents: false)
         await store.refresh(force: true)
         let project = try #require(store.model.projects.first)
 
@@ -740,7 +749,7 @@ struct hunTests {
             projects: [HunDaemonProject(id: "shop", name: "shop", path: folder.path, status: "stopped", isActive: false, branch: nil, lastNote: nil, startedAt: nil, services: [], configError: nil)],
             warnings: []
         )
-        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false, findsCodingAgents: false)
         await store.refresh(force: true)
         let project = try #require(store.model.projects.first)
 
@@ -824,7 +833,7 @@ struct hunTests {
         }
         let client = MockDaemonClient()
         client.nextSnapshot = snapshot(id: "shop")
-        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false, findsCodingAgents: false)
         await store.refresh(force: true)
         store.selectProject("shop")
 
@@ -839,7 +848,7 @@ struct hunTests {
     @Test func cachedSnapshotKeepsProjectsVisibleDuringRecovery() async {
         let client = MockDaemonClient()
         client.nextSnapshot = HunDaemonSnapshot.fixture(activeProject: "app").replacingLifecycleBusy(true)
-        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false, findsCodingAgents: false)
 
         await store.refresh(force: true)
 
@@ -862,7 +871,7 @@ struct hunTests {
             client: firstClient,
             supervisor: MockSupervisor(),
             navigationDefaults: defaults,
-            startAutomatically: false
+            startAutomatically: false, findsCodingAgents: false
         )
         await firstStore.refresh(force: true)
         firstStore.selectProject("shop")
@@ -876,7 +885,7 @@ struct hunTests {
             client: restoredClient,
             supervisor: MockSupervisor(),
             navigationDefaults: defaults,
-            startAutomatically: false
+            startAutomatically: false, findsCodingAgents: false
         )
         #expect(restoredStore.selectedLogScope == .combined)
         await restoredStore.refresh(force: true)
@@ -891,7 +900,7 @@ struct hunTests {
         let client = MockDaemonClient()
         client.nextSnapshot = HunDaemonSnapshot.fixture(activeProject: "app")
             .appending(.fixtureProject(path: "/tmp/projects/shop"))
-        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false, findsCodingAgents: false)
         await store.refresh(force: true)
         let project = try #require(store.project(id: "shop"))
 
@@ -1038,7 +1047,7 @@ struct hunTests {
             startedAt: "2026-07-11T06:30:00Z"
         )
         let supervisor = MockSupervisor()
-        let store = HunStore(client: client, supervisor: supervisor, startAutomatically: false)
+        let store = HunStore(client: client, supervisor: supervisor, startAutomatically: false, findsCodingAgents: false)
 
         await store.refreshDaemonInfo()
 
@@ -1289,7 +1298,7 @@ struct hunTests {
             ],
             warnings: []
         )
-        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false, findsCodingAgents: false)
 
         await store.refresh(force: true)
 
@@ -1335,18 +1344,14 @@ struct hunTests {
             client: client,
             supervisor: MockSupervisor(),
             projectInitializer: initializer,
-            startAutomatically: false
+            startAutomatically: false, findsCodingAgents: false
         )
 
         await store.addProject(at: projectURL)
 
+        // Added straight away: no review step. Without a coding agent the
+        // rules draft is the setup.
         #expect(initializer.urls == [projectURL])
-        #expect(client.snapshotForces.isEmpty)
-        #expect(store.pendingProjectReview?.path == projectURL.path)
-        #expect(store.selectedProjectID == nil)
-
-        await store.acceptPendingProject()
-
         #expect(client.actions.contains("register:/tmp/projects/newapp"))
         #expect(client.snapshotForces == [true])
         #expect(store.selectedProjectID == "newapp")
@@ -1356,7 +1361,7 @@ struct hunTests {
     @Test func actionsSendDaemonRequestsAndRefresh() async throws {
         let client = MockDaemonClient()
         client.nextSnapshot = .fixture(activeProject: "app")
-        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false, findsCodingAgents: false)
         await store.refresh(force: true)
 
         guard let project = store.model.projects.first else {
@@ -1411,7 +1416,7 @@ struct hunTests {
     @Test func rapidModeChangesApplyLatestIntentLast() async throws {
         let client = MockDaemonClient()
         client.modeChangeDelay = .milliseconds(100)
-        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false, findsCodingAgents: false)
         await store.refresh(force: true)
 
         store.changeMode(.multitask, preferredProject: nil)
@@ -1426,7 +1431,7 @@ struct hunTests {
     @Test func modeChangeCommitsOnlyAfterDaemonAcknowledgesIt() async throws {
         let client = MockDaemonClient()
         client.modeChangeDelay = .milliseconds(100)
-        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false, findsCodingAgents: false)
         await store.refresh(force: true)
 
         store.changeMode(.multitask, preferredProject: nil)
@@ -1440,7 +1445,7 @@ struct hunTests {
     @Test func modeChangeRetriesLifecycleRecoveryContention() async throws {
         let client = MockDaemonClient()
         client.modeErrors = [TestError.lifecycleBusy]
-        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false, findsCodingAgents: false)
         await store.refresh(force: true)
 
         store.changeMode(.multitask, preferredProject: nil)
@@ -1453,7 +1458,7 @@ struct hunTests {
     @Test func failedModeChangeRollsBackPendingSelection() async throws {
         let client = MockDaemonClient()
         client.modeErrors = [TestError.boom]
-        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false, findsCodingAgents: false)
         await store.refresh(force: true)
 
         store.changeMode(.multitask, preferredProject: nil)
@@ -1466,7 +1471,7 @@ struct hunTests {
 
     @Test func modeChangeWithoutDashboardPreferenceDoesNotUseHiddenSelection() async throws {
         let client = MockDaemonClient()
-        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false, findsCodingAgents: false)
         await store.refresh(force: true)
 
         store.changeMode(.multitask, preferredProject: nil)
@@ -1481,7 +1486,7 @@ struct hunTests {
         let client = MockDaemonClient()
         client.startProjectDelay = .milliseconds(200)
         client.nextSnapshot = .fixture(activeProject: "app")
-        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false, findsCodingAgents: false)
         await store.refresh(force: true)
 
         guard let project = store.model.projects.first else {
@@ -1499,7 +1504,7 @@ struct hunTests {
     @Test func logSubscriptionSwitchesBetweenServiceAndCombinedScopes() async throws {
         let client = MockDaemonClient()
         client.nextSnapshot = .fixture(activeProject: "app")
-        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false, findsCodingAgents: false)
 
         await store.refresh(force: true)
 
@@ -1523,7 +1528,7 @@ struct hunTests {
     @Test func removedProjectCleansSelectionAndTabs() async throws {
         let client = MockDaemonClient()
         client.nextSnapshot = .fixture(activeProject: "app")
-        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false, findsCodingAgents: false)
         await store.refresh(force: true)
         store.selectProject("app")
 
@@ -1545,7 +1550,7 @@ struct hunTests {
     @Test func daemonErrorsSurfaceWithoutClearingState() async throws {
         let client = MockDaemonClient()
         client.nextSnapshot = .fixture(activeProject: "app")
-        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false, findsCodingAgents: false)
         await store.refresh(force: true)
 
         client.error = TestError.boom
@@ -1558,7 +1563,7 @@ struct hunTests {
     @Test func transientDaemonTransportErrorsDoNotShowBanner() async throws {
         let client = MockDaemonClient()
         client.nextSnapshot = .fixture(activeProject: "app")
-        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false, findsCodingAgents: false)
         await store.refresh(force: true)
 
         client.error = TestError.connectionClosed
@@ -2599,7 +2604,7 @@ struct HunWebsiteRenders {
     private func store(_ projects: [String], select project: String) async throws -> HunStore {
         let client = MockDaemonClient()
         client.nextSnapshot = try snapshot(projects, active: project)
-        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false, findsCodingAgents: false)
         await store.refresh(force: true)
         store.selectProject(project)
         return store

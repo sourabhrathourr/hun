@@ -77,7 +77,7 @@ struct HunConfigEditorSheet: View {
                 Circle()
                     .fill(AppTheme.textTertiary)
                     .frame(width: 6, height: 6)
-                    .help("Unsaved changes")
+                    .accessibilityHint("Unsaved changes")
             }
             Spacer(minLength: 12)
             Text(collapsedPath(target.fileURL.path))

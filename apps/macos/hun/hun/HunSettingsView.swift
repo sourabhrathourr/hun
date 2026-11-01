@@ -99,7 +99,7 @@ struct HunSettingsNavigation: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsNavigationRow(title: "Projects", icon: "chevron.left", selected: false, action: onBack)
-                .help("Back to projects (Esc)")
+                .accessibilityHint("Back to projects (Esc)")
                 .padding(.top, SidebarMetrics.inset)
 
             Text("Settings")
@@ -224,7 +224,8 @@ struct HunSettingsPage: View {
 private struct HunAppearanceSettings: View {
     @AppStorage(HunLayout.roundedPanelsKey) private var roundedPanels = HunLayout.roundedPanelsDefault
     @AppStorage(HunTheme.key) private var theme = HunTheme.system.rawValue
-    @AppStorage(HunPalette.key) private var palette = HunPalette.graphite.rawValue
+    @AppStorage(HunPalette.key) private var palette = HunPalette.clay.rawValue
+    @AppStorage(HunRunningMarker.key) private var runningMarker = HunRunningMarker.defaultValue.rawValue
     /// The palette only applies to light mode, so it's offered only there.
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage(HunServicesDisplay.showOutsideProfileKey)
@@ -247,7 +248,7 @@ private struct HunAppearanceSettings: View {
             if colorScheme == .light {
                 SettingsRow(
                     title: "Light palette",
-                    detail: "Graphite is crisp and neutral, with an indigo accent. Clay is warm paper and soft ink, with a terracotta accent."
+                    detail: "Clay is warm paper and soft ink, like hun.sh. Graphite is crisp, neutral grey. Both use Hun's terracotta."
                 ) {
                     SettingsSegmented(
                         options: HunPalette.allCases.map { ($0.rawValue, $0.title, $0.icon) },
@@ -255,13 +256,24 @@ private struct HunAppearanceSettings: View {
                             get: { palette },
                             set: { newValue in
                                 palette = newValue
-                                HunPalette.select(HunPalette(rawValue: newValue) ?? .graphite)
+                                HunPalette.select(HunPalette(rawValue: newValue) ?? .clay)
                                 hunApp.redrawColors()
                             }
                         )
                     )
                 }
             }
+            SettingsRow(
+                title: "Running projects",
+                detail: "How the sidebar marks a project that's running."
+            ) {
+                SettingsSegmented(
+                    options: HunRunningMarker.allCases.map { ($0.rawValue, $0.title, $0.icon) },
+                    selection: $runningMarker
+                )
+            }
+            Rectangle().fill(AppTheme.divider).frame(height: 1).padding(.leading, 16)
+            HunVistaPicker()
             SettingsRow(
                 title: "Services outside the profile",
                 detail: "List the services the current profile doesn't run, dimmed below the rest. When off, the services count shows how many are hidden."
@@ -284,6 +296,63 @@ private struct HunAppearanceSettings: View {
                     .tint(AppTheme.textSecondary)
             }
         }
+    }
+}
+
+/// Vistas: the view behind Hun's menu bar. Light mode offers every vista;
+/// dark mode, the ones with night versions. Each mode keeps its own choice.
+private struct HunVistaPicker: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @AppStorage(HunMenuLook.lightVistaKey) private var lightVista = HunMenuLook.defaultLightVista.rawValue
+    @AppStorage(HunMenuLook.darkVistaKey) private var darkVista = HunMenuLook.defaultDarkVista.rawValue
+
+    private var isDark: Bool { colorScheme == .dark }
+    private var options: [HunMenuLook.Scene] {
+        HunMenuLook.Scene.allCases.filter { !isDark || $0.hasNightVersion }
+    }
+    private var selected: HunMenuLook.Scene { HunMenuLook.vista(named: isDark ? darkVista : lightVista, dark: isDark) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Menu bar vista")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(AppTheme.textPrimary)
+                Text(isDark
+                     ? "The view behind Hun's menu bar at night. \(selected.title)."
+                     : "The view behind Hun's menu bar. \(selected.title). Dark mode has its own, from the night vistas.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(AppTheme.textTertiary)
+            }
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(78), spacing: 8), count: 7), alignment: .leading, spacing: 10) {
+                ForEach(options, id: \.self) { option in
+                    Button {
+                        if isDark { darkVista = option.rawValue } else { lightVista = option.rawValue }
+                    } label: {
+                        VStack(spacing: 5) {
+                            HunVistaImage(scene: option)
+                                .frame(width: 78, height: 96)
+                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .strokeBorder(option == selected ? AppTheme.accent : AppTheme.divider, lineWidth: option == selected ? 2 : 1)
+                                )
+                            Text(option.title)
+                                .font(.system(size: 10.5, weight: option == selected ? .semibold : .regular))
+                                .foregroundStyle(option == selected ? AppTheme.textPrimary : AppTheme.textSecondary)
+                                .lineLimit(1)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(option.title)
+                    .accessibilityAddTraits(option == selected ? .isSelected : [])
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -415,6 +484,7 @@ private struct HunLicenseSettings: View {
 
 private struct HunAboutSettings: View {
     @Environment(HunStore.self) private var store
+    @Environment(HunLicenseManager.self) private var license
     @State private var copiedDiagnostics = false
     private let appVersion = HunAppVersion.current
 
@@ -435,6 +505,36 @@ private struct HunAboutSettings: View {
                         action: copyDiagnostics
                     )
                 }
+            }
+
+            SettingsGroup {
+                SettingsRow(
+                    title: "The welcome",
+                    detail: "Hun's first-run tour, music and all. Your projects and settings stay as they are.",
+                    isFirst: true
+                ) {
+                    ActionButton(title: "Play again", systemImage: "play", style: .secondary) {
+                        UserDefaults.standard.set(false, forKey: HunOnboarding.completedKey)
+                    }
+                }
+                #if DEBUG
+                SettingsRow(
+                    title: "Replay as a new user",
+                    detail: "Debug builds: the whole welcome as a buyer sees it, with your projects hidden. Nothing goes to Dodo and your license stays. Any key unlocks; these fail as in real life: " + HunLicenseManager.rehearsalKeys.map { "\($0.key) (\($0.outcome))" }.joined(separator: ", ") + "."
+                ) {
+                    ActionButton(title: "Start", systemImage: "person.crop.circle.badge.plus", style: .secondary) {
+                        HunOnboarding.rehearse(asBeta: false, license: license)
+                    }
+                }
+                SettingsRow(
+                    title: "Replay as a beta user",
+                    detail: "Debug builds: the welcome as a beta tester sees it once the beta has ended, with your projects shown. Same test keys."
+                ) {
+                    ActionButton(title: "Start", systemImage: "testtube.2", style: .secondary) {
+                        HunOnboarding.rehearse(asBeta: true, license: license)
+                    }
+                }
+                #endif
             }
 
             SettingsGroup(title: "Files") {
@@ -642,7 +742,7 @@ private struct SettingsValue: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help(copied ? "Copied" : "Copy")
+                .accessibilityHint(copied ? "Copied" : "Copy")
             }
         }
     }

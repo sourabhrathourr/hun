@@ -5,11 +5,17 @@ struct HunLicensedRootView: View {
     @Environment(HunStore.self) private var store
     @Environment(HunLicenseManager.self) private var license
     @State private var storeStarted = false
+    @AppStorage(HunOnboarding.completedKey) private var onboardingDone = false
 
     var body: some View {
         ZStack {
-            if license.isLicensed {
+            if !onboardingDone {
+                HunOnboardingView(onFinish: { onboardingDone = true })
+                    .ignoresSafeArea()
+                    .transition(.opacity)
+            } else if license.isLicensed {
                 ContentView()
+                    .transition(.opacity)
             } else {
                 HunLicenseGateView()
             }
@@ -49,6 +55,8 @@ struct HunLicenseMenuBarView: View {
             .padding(14)
             .frame(width: 260, alignment: .leading)
             .background(AppTheme.menuBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(AppTheme.dividerStrong, lineWidth: 1))
         }
     }
 }
@@ -233,7 +241,10 @@ private struct HunLicenseGateView: View {
 
     private func activate() {
         guard !isActivating else { return }
-        Task { await license.activate(licenseKey) }
+        Task {
+            await license.activate(licenseKey)
+            if license.isLicensed { HunConfetti.celebrate() }
+        }
     }
 
     private var isActivating: Bool {
