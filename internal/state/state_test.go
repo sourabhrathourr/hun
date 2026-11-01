@@ -115,3 +115,15 @@ func TestLoadPrunesRegistryEntriesWithoutProjectConfig(t *testing.T) {
 		t.Fatalf("expected missing project absent after persistence")
 	}
 }
+
+func TestLoadWithoutStateFileStartsInMultitask(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	st, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if st.Mode != "multitask" {
+		t.Fatalf("mode = %q, want multitask", st.Mode)
+	}
+}
