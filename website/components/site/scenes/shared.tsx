@@ -204,7 +204,7 @@ export function LogTail({
               }}
             >
               {last && (
-                <span aria-hidden style={{ position: "absolute", left: -22, right: -22, top: -0.5, bottom: 0.5, background: "rgba(94,106,210,.13)" }} />
+                <span aria-hidden style={{ position: "absolute", left: -22, right: -22, top: -0.5, bottom: 0.5, background: "rgba(194,74,31,.13)" }} />
               )}
               <span style={{ position: "relative", display: "block", whiteSpace: "pre", overflow: "hidden", textOverflow: "ellipsis" }}>
                 <span style={{ fontSize: 11, letterSpacing: MLS[11], color: T.logTime }}>{l.time.padEnd(13, " ") + "  "}</span>

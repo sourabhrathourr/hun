@@ -27,7 +27,7 @@ struct AddProjectButton: View {
         .disabled(store.isAddingProject)
         .opacity(store.isAddingProject ? 0.75 : 1)
         .onHover { hovering = $0 }
-        .help(helpText)
+        .accessibilityHint(helpText)
         .keyboardShortcut("n", modifiers: .command)
         .animation(.easeOut(duration: 0.12), value: hovering)
         .fileImporter(
@@ -200,7 +200,7 @@ private struct AddProjectReviewSheet: View {
     private var iconBadge: some View {
         Image(systemName: review.createdConfig ? "doc.badge.plus" : "doc.text.magnifyingglass")
             .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(AppTheme.accent)
+            .foregroundStyle(AppTheme.accentText)
             .frame(width: 30, height: 30)
             .background(
                 HunRoundedShape()
@@ -353,7 +353,7 @@ private struct CloseButton: View {
         .buttonStyle(.plain)
         .keyboardShortcut(.cancelAction)
         .onHover { hovering = $0 }
-        .help("Close (esc)")
+        .accessibilityHint("Close (esc)")
     }
 }
 

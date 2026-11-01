@@ -8,7 +8,15 @@ struct ProjectIconView: View {
     let cornerRadius: CGFloat
     var emphasized = false
     var status: ProjectStatus?
+    /// The colour around the status badge, so it reads as cut out of what's behind.
+    var badgeRim: Color = AppTheme.appBackground
     @Environment(\.colorScheme) private var colorScheme
+    @AppStorage(HunRunningMarker.key) private var markerName = HunRunningMarker.defaultValue.rawValue
+    @State private var pulsing = false
+
+    private var marker: HunRunningMarker {
+        HunRunningMarker(rawValue: markerName) ?? .defaultValue
+    }
 
     private var loaded: ProjectIconLoader.Icon? {
         ProjectIconLoader.icon(at: iconPath)
@@ -33,25 +41,52 @@ struct ProjectIconView: View {
                 .strokeBorder(AppTheme.divider, lineWidth: 0.5)
         }
         .frame(width: size, height: size)
-        // Running: a thin green ring set just outside the icon, at one fixed
-        // strength whether or not the row is selected.
+        // Ring marker: a green ring set just outside the icon, sized in whole
+        // points so it sits evenly on every side.
         .overlay {
-            if status == .running {
-                RoundedRectangle(cornerRadius: cornerRadius + Self.ringGap, style: .continuous)
-                    .strokeBorder(AppTheme.success.opacity(0.3), lineWidth: 1)
-                    .padding(-Self.ringGap)
+            if marker == .ring && (status == .running || status == .starting || status == .crashed) {
+                let gap: CGFloat = 2
+                RoundedRectangle(cornerRadius: cornerRadius + gap, style: .continuous)
+                    .strokeBorder(ringColor.opacity(0.65), lineWidth: 1.5)
+                    .frame(width: size + gap * 2, height: size + gap * 2)
+                    .opacity(status == .starting && pulsing ? 0.35 : 1)
+                    .onAppear { startPulse() }
             }
         }
         .animation(.easeOut(duration: 0.16), value: status)
+        // One family of corner badges: green running, amber starting (it
+        // breathes), red crashed. The badge sits cut out of the background.
         .overlay(alignment: .bottomTrailing) {
-            if status == .crashed {
+            if let badge = badgeColor {
                 Circle()
-                    .fill(AppTheme.danger)
-                    .frame(width: max(6, size * 0.27), height: max(6, size * 0.27))
-                    .overlay(Circle().stroke(AppTheme.appBackground, lineWidth: 1.5))
+                    .fill(badge)
+                    .frame(width: badgeSize, height: badgeSize)
+                    .overlay(Circle().stroke(badgeRim, lineWidth: 1.5))
+                    .opacity(status == .starting && pulsing ? 0.45 : 1)
                     .offset(x: 2, y: 2)
+                    .transition(.scale(scale: 0.4).combined(with: .opacity))
+                    .onAppear { startPulse() }
             }
         }
+    }
+
+    private var badgeSize: CGFloat { max(6, size * 0.36) }
+
+    /// A crash shows in the chosen marker, in red, rather than as a badge.
+    private var badgeColor: Color? { nil }
+
+    private var ringColor: Color {
+        switch status {
+        case .starting: return AppTheme.warning
+        case .crashed: return AppTheme.danger
+        default: return AppTheme.liveMarker
+        }
+    }
+
+    /// A starting project's marker breathes until it's up.
+    private func startPulse() {
+        guard status == .starting, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) { pulsing = true }
     }
 
     private var initial: String {
@@ -216,5 +251,64 @@ private enum ProjectIconLoader {
         let icon = Icon(image: image, traits: traits)
         cache.setObject(icon, forKey: key)
         return icon
+    }
+}
+
+/// How the sidebar marks a running project, chosen in Settings ›
+/// Appearance. Running names also read brighter and stopped ones step back.
+enum HunRunningMarker: String, CaseIterable, Identifiable {
+    /// A small level meter at the end of the row.
+    case activity
+    /// A green ring around the icon.
+    case ring
+    /// A tinted bar with a green stroke at the start of the row.
+    case bar
+
+    static let key = "hun.appearance.runningMarker"
+    static let defaultValue = HunRunningMarker.bar
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .activity: return "Activity"
+        case .ring: return "Ring"
+        case .bar: return "Bar"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .activity: return "chart.bar.fill"
+        case .ring: return "app"
+        case .bar: return "capsule.portrait"
+        }
+    }
+}
+
+/// The Bar marker: a soft tint inside a green stroke.
+struct HunRunningBar: View {
+    let color: Color
+
+    var body: some View {
+        Capsule().fill(color.opacity(0.22))
+            .overlay(Capsule().strokeBorder(color.opacity(0.85), lineWidth: 1))
+            .frame(width: 5, height: 15)
+            .accessibilityHidden(true)
+    }
+}
+
+/// The Activity marker: three bars rising short to tall, like a level meter.
+struct HunActivityBars: View {
+    let color: Color
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 1.5) {
+            ForEach([4.0, 6.5, 9.0], id: \.self) { height in
+                Capsule().fill(color).frame(width: 2, height: height)
+            }
+        }
+        .frame(height: 9, alignment: .bottom)
+        .accessibilityHidden(true)
     }
 }

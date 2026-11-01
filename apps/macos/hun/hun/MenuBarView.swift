@@ -5,7 +5,15 @@ import AppKit
 /// and the way into the dashboard.
 struct MenuBarView: View {
     @Environment(HunStore.self) private var store
-    @State private var query = ""
+    @Environment(\.colorScheme) private var colorScheme
+    @AppStorage(HunMenuLook.lightVistaKey) private var lightVista = HunMenuLook.defaultLightVista.rawValue
+    @AppStorage(HunMenuLook.darkVistaKey) private var darkVista = HunMenuLook.defaultDarkVista.rawValue
+
+    private var scene: HunMenuLook.Scene {
+        colorScheme == .dark
+            ? HunMenuLook.vista(named: darkVista, dark: true)
+            : HunMenuLook.vista(named: lightVista, dark: false)
+    }
 
     private var projects: [HunProject] {
         store.model.projects.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -16,87 +24,439 @@ struct MenuBarView: View {
     }
 
     private var others: [HunProject] {
-        let rest = projects.filter { project in !running.contains { $0.id == project.id } }
-        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { return rest }
-        return rest.filter { $0.name.localizedCaseInsensitiveContains(q) }
+        projects.filter { project in !running.contains { $0.id == project.id } }
     }
 
-    /// Search appears once the list is long enough to need it.
-    private var showsSearch: Bool { projects.count - running.count > 6 }
+    /// Running first (they matter most), then the rest by name.
+    private var ordered: [HunProject] { running + others }
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            HunVistaImage(scene: scene)
+
+            VStack(spacing: 0) {
+                MenuSky(
+                    showsGlow: scene.needsGlow,
+                    // Up if any service runs; a crashed service is counted on its own.
+                    running: running.filter { project in project.services.contains { $0.status == .running || $0.status == .starting } },
+                    crashedCount: running.reduce(0) { $0 + $1.services.filter { $0.status == .crashed }.count },
+                    mode: store.displayedMode
+                )
+                .padding(.top, 44)
+
+                Spacer(minLength: 56)
+
+                // The glass sill: every project, with its switch.
+                VStack(spacing: 0) {
+                    if projects.isEmpty {
+                        MenuEmptyState()
+                    } else {
+                        SleekMenuScrollView(maxHeight: 236) {
+                            VStack(spacing: 2) {
+                                ForEach(ordered) { project in
+                                    MenuSwitchRow(
+                                        project: project,
+                                        pendingAction: store.projectAction(for: project),
+                                        onOpen: { open(project) },
+                                        onRun: { store.globalMode == .focus ? store.focus(project) : store.run(project) },
+                                        onStop: { store.stop(project) },
+                                        onRestart: { store.restart(project) }
+                                    )
+                                }
+                            }
+                            .padding(6)
+                        }
+                    }
+                    MenuDivider()
+                    MenuSillFooter(
+                        mode: Binding(
+                            get: { store.displayedMode },
+                            set: { store.changeMode($0, preferredProject: nil) }
+                        ),
+                        isModePending: store.isChangingMode
+                    )
+                }
+                // Solid, in the dashboard's own colours: warm near-white in
+                // light mode, a deep near-black in dark mode.
+                .background(HunRoundedShape().fill(colorScheme == .dark ? Color(red: 0.05, green: 0.05, blue: 0.055).opacity(0.94) : AppTheme.menuBackground.opacity(0.95)))
+                .background(HunRoundedShape().fill(.ultraThinMaterial))
+                .overlay(HunRoundedShape().strokeBorder(colorScheme == .dark ? Color.white.opacity(0.08) : AppTheme.divider, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .padding(10)
+            }
+        }
+        .frame(width: 340)
+        .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).strokeBorder(Color.black.opacity(0.12), lineWidth: 1))
+    }
+
+    private func open(_ project: HunProject) {
+        store.selectProject(project.id)
+        hunApp.openDashboard()
+    }
+}
+
+/// Vistas: the photos behind Hun's menu bar panel.
+enum HunMenuLook {
+    /// The vista chosen for each appearance; dark mode offers only the
+    /// vistas that have night versions.
+    static let lightVistaKey = "hun.menu.vista.light"
+    static let darkVistaKey = "hun.menu.vista.dark"
+    static let defaultLightVista = Scene.valley
+    static let defaultDarkVista = Scene.lavender
+
+    static func vista(named name: String, dark: Bool) -> Scene {
+        let fallback = dark ? defaultDarkVista : defaultLightVista
+        let scene = Scene(rawValue: name) ?? fallback
+        return dark && !scene.hasNightVersion ? fallback : scene
+    }
+
+    enum Scene: String, CaseIterable {
+        case doorway, valley, lavender, path, dunes, wall, saltpans
+        case meadow, birches, mountains, lake
+
+        var title: String {
+            switch self {
+            case .doorway: return "Doorway"
+            case .valley: return "Olive valley"
+            case .lavender: return "Lavender"
+            case .path: return "Hill path"
+            case .dunes: return "Dunes"
+            case .wall: return "Plaster wall"
+            case .saltpans: return "Salt pans"
+            case .meadow: return "Meadow tree"
+            case .birches: return "Birches"
+            case .mountains: return "Mountains"
+            case .lake: return "Lake"
+            }
+        }
+
+        var asset: String {
+            switch self {
+            case .doorway: return "OnboardingWelcome"
+            case .valley: return "OnboardingLicense"
+            case .lavender: return "OnboardingModes"
+            case .path: return "OnboardingRun"
+            case .dunes: return "OnboardingAgent"
+            case .wall: return "OnboardingProject"
+            case .saltpans: return "OnboardingMenuBar"
+            default: return "MenuScene-\(rawValue)"
+            }
+        }
+
+        /// Busy enough behind the header that its words need a soft glow.
+        var needsGlow: Bool { self == .meadow || self == .birches }
+
+        /// 1–7 come with night versions; the website's are darkened instead.
+        var hasNightVersion: Bool { !asset.hasPrefix("MenuScene-") }
+
+        /// Which part of the photo shows, across (0 left, 1 right) and down
+        /// (0 top, 1 bottom), so its subject sits above the glass sill.
+        var focus: CGPoint {
+            switch self {
+            case .doorway: return CGPoint(x: 0.5, y: 0.62)
+            case .valley: return CGPoint(x: 0.35, y: 0.45)
+            case .lavender: return CGPoint(x: 0.5, y: 0.35)
+            case .path: return CGPoint(x: 0.8, y: 0.4)
+            case .dunes: return CGPoint(x: 0.5, y: 0.45)
+            case .wall: return CGPoint(x: 0.5, y: 0.3)
+            case .saltpans: return CGPoint(x: 0.5, y: 0.4)
+            case .meadow: return CGPoint(x: 0.62, y: 0.4)
+            case .birches: return CGPoint(x: 0.72, y: 0.4)
+            case .mountains: return CGPoint(x: 0.5, y: 0.4)
+            case .lake: return CGPoint(x: 0.5, y: 0.4)
+            }
+        }
+    }
+}
+
+/// A vista filling its frame, framed on its subject. The menu bar's
+/// backdrop, and the thumbnails in Settings.
+struct HunVistaImage: View {
+    let scene: HunMenuLook.Scene
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        GeometryReader { proxy in
+            let image = NSImage(named: scene.asset)
+            let natural = image?.size ?? CGSize(width: 16, height: 9)
+            // Fill the panel, then slide the photo so its focus point shows.
+            let scale = max(proxy.size.width / natural.width, proxy.size.height / natural.height)
+            let size = CGSize(width: natural.width * scale, height: natural.height * scale)
+            let x = -(size.width - proxy.size.width) * scene.focus.x
+            let y = -(size.height - proxy.size.height) * scene.focus.y
+            Image(scene.asset)
+                .resizable()
+                .interpolation(.high)
+                // A little less warmth in light mode; deeper at night, so the
+                // panel sits as dark as the dashboard.
+                .saturation(colorScheme == .dark ? 0.8 : 0.82)
+                .frame(width: size.width, height: size.height)
+                .offset(x: x, y: y)
+                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
+                .clipped()
+                .overlay(colorScheme == .dark ? Color.black.opacity(scene.hasNightVersion ? 0.12 : 0.4) : Color.clear)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// The sky: today's date, and how many projects are running, large, like
+/// a clock on a lock screen.
+private struct MenuSky: View {
+    /// A soft glow behind the words, for the vistas busy enough to need it.
+    let showsGlow: Bool
+    let running: [HunProject]
+    let crashedCount: Int
+    let mode: HunMode
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var ink: Color { colorScheme == .dark ? .white : Color(red: 0x2B / 255, green: 0x26 / 255, blue: 0x22 / 255) }
+
+    /// Focus runs one project at a time, so it shows which; Multitask shows how many.
+    private var focused: HunProject? { mode == .focus ? running.first : nil }
 
     var body: some View {
         VStack(spacing: 0) {
-            MenuHeader(
-                runningCount: running.filter { $0.status != .crashed }.count,
-                crashedCount: running.filter { $0.status == .crashed }.count,
-                mode: Binding(
-                    get: { store.displayedMode },
-                    set: { store.changeMode($0, preferredProject: nil) }
-                ),
-                isModePending: store.isChangingMode
-            )
-
-            if projects.isEmpty {
-                MenuEmptyState()
+            Text(focused == nil ? Date.now.formatted(.dateTime.weekday(.wide).day().month(.wide)) : "Focused on")
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(ink.opacity(0.7))
+            if let focused {
+                Text(focused.name)
+                    .font(.system(size: focused.name.count > 12 ? 34 : 46, weight: .semibold, design: .rounded))
+                    .foregroundStyle(ink.opacity(colorScheme == .dark ? 0.9 : 0.8))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 8)
+                    .shadow(color: (colorScheme == .dark ? Color.black : Color.white).opacity(0.35), radius: 14)
             } else {
-                SleekMenuScrollView(maxHeight: 380) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        if !running.isEmpty {
-                            MenuSectionLabel(title: "Running")
-                            ForEach(running) { project in
-                                row(project)
-                            }
-                        }
-                        if !running.isEmpty && !(others.isEmpty && query.isEmpty) {
-                            Spacer().frame(height: 10)
-                        }
-                        if showsSearch {
-                            MenuSearchField(text: $query)
-                                .padding(.horizontal, 4)
-                                .padding(.bottom, 6)
-                        }
-                        if !others.isEmpty {
-                            if !running.isEmpty || showsSearch {
-                                MenuSectionLabel(title: "Projects")
-                            }
-                            ForEach(others) { project in
-                                row(project)
-                            }
-                        } else if !query.isEmpty {
-                            Text("No projects match")
-                                .font(.system(size: 12))
-                                .foregroundStyle(AppTheme.textTertiary)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 8)
-                        }
-                    }
-                    .padding(.horizontal, 6)
-                    .padding(.top, 2)
-                    .padding(.bottom, 6)
-                }
+                Text(verbatim: "\(running.count)")
+                    .font(.system(size: 88, weight: .semibold, design: .rounded))
+                    .foregroundStyle(ink.opacity(colorScheme == .dark ? 0.88 : 0.78))
+                    .shadow(color: (colorScheme == .dark ? Color.black : Color.white).opacity(0.35), radius: 14)
+                    .contentTransition(.numericText())
+                    .padding(.top, -4)
             }
-
-            MenuDivider()
-            MenuFooter()
+            Text(caption)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(crashedCount > 0 && running.isEmpty ? AppTheme.danger : ink.opacity(0.72))
+                .padding(.top, focused == nil ? -8 : -4)
         }
-        .frame(width: 340)
-        .background(AppTheme.menuBackground)
+        .padding(.horizontal, 30)
+        .padding(.vertical, 14)
+        // One height in Focus and Multitask, so switching modes never
+        // resizes the panel.
+        .frame(height: 170)
+        // A soft glow of the page colour behind the words, so they read on
+        // any vista.
+        .background(
+            RadialGradient(
+                colors: [AppTheme.menuBackground.opacity(showsGlow ? (colorScheme == .dark ? 0.55 : 0.7) : 0), AppTheme.menuBackground.opacity(0)],
+                center: .center,
+                startRadius: 10,
+                endRadius: 150
+            )
+            .blur(radius: 12)
+        )
+        .animation(.spring(duration: 0.4), value: running.map(\.id))
     }
 
-    private func row(_ project: HunProject) -> some View {
-        MenuProjectRow(
-            project: project,
-            mode: store.globalMode,
-            pendingAction: store.projectAction(for: project),
-            onOpen: {
-                store.selectProject(project.id)
-                hunApp.openDashboard()
-            },
-            onRun: { store.globalMode == .focus ? store.focus(project) : store.run(project) },
-            onStop: { store.stop(project) },
-            onRestart: { store.restart(project) }
-        )
+    private var caption: String {
+        let crashed = crashedCount == 0 ? nil : (crashedCount == 1 ? "1 service crashed" : "\(crashedCount) services crashed")
+        if let focused {
+            let services = focused.services.filter { $0.status == .running }.count
+            let up = services == 1 ? "1 service running" : "\(services) services running"
+            return [up, crashed].compactMap { $0 }.joined(separator: " · ")
+        }
+        if running.isEmpty { return crashed ?? "all quiet" }
+        return ["running", crashed].compactMap { $0 }.joined(separator: " · ")
+    }
+}
+
+/// One project on the sill: its icon and name, what it serves, and Hun's
+/// switch, which runs or stops it. Click the row to open it in Hun.
+private struct MenuSwitchRow: View {
+    let project: HunProject
+    let pendingAction: HunActionKind?
+    let onOpen: () -> Void
+    let onRun: () -> Void
+    let onStop: () -> Void
+    let onRestart: () -> Void
+    @State private var hovering = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var crashedServices: [HunService] { project.services.filter { $0.status == .crashed } }
+    private var anyUp: Bool { project.services.contains { $0.status == .running || $0.status == .starting } }
+    /// Still running, even if a service crashed: on, with its ports.
+    private var isOn: Bool { project.status == .running || project.status == .starting || (project.status == .crashed && anyUp) }
+    /// Nothing left running: the whole project is down.
+    private var crashed: Bool { project.status == .crashed && !anyUp }
+    /// Running, but some services crashed.
+    private var partlyCrashed: Bool { isOn && !crashedServices.isEmpty }
+
+    private var ports: [HunService] {
+        project.services.filter { $0.status == .running && $0.port > 0 }.sorted { $0.port < $1.port }
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ProjectIconView(
+                name: project.name, iconPath: project.iconPath, size: 22, cornerRadius: 6, emphasized: false,
+                // The switch says running or crashed; the icon stays plain.
+                status: nil,
+                badgeRim: colorScheme == .dark ? Color(red: 0.05, green: 0.05, blue: 0.055) : AppTheme.menuBackground
+            )
+            .opacity(isOn || crashed || hovering ? 1 : 0.7)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(project.name)
+                    .font(.system(size: 13, weight: isOn ? .semibold : .regular))
+                    .foregroundStyle(isOn || crashed || hovering ? AppTheme.textPrimary : AppTheme.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if let pendingAction {
+                    Text(pendingAction.statusText)
+                        .font(.system(size: 11))
+                        .foregroundStyle(AppTheme.textTertiary)
+                } else if crashed {
+                    Text("Crashed")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(AppTheme.danger)
+                } else if isOn && (!ports.isEmpty || partlyCrashed) {
+                    // A crash is a short count, never a service name, so the
+                    // line stays the same size however services are called.
+                    HStack(spacing: 4) {
+                        if partlyCrashed {
+                            Text("\(crashedServices.count) crashed")
+                                .font(.system(size: 10.5, weight: .semibold))
+                                .foregroundStyle(AppTheme.danger)
+                                .padding(.horizontal, 5)
+                                .frame(height: 17)
+                                .background(HunRoundedShape().fill(AppTheme.danger.opacity(0.12)))
+                                .fixedSize()
+                        }
+                        let shown = partlyCrashed ? 1 : 3
+                        ForEach(ports.prefix(shown)) { service in
+                            MenuPortLink(service: service)
+                        }
+                        if ports.count > shown {
+                            Text("+\(ports.count - shown)")
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(AppTheme.textTertiary)
+                                .fixedSize()
+                        }
+                    }
+                }
+            }
+            Spacer(minLength: 6)
+            if (crashed || partlyCrashed) && pendingAction == nil {
+                MenuIconButton(systemImage: "arrow.clockwise", help: "Restart \(project.name)", action: onRestart)
+            }
+            MenuHunSwitch(
+                isOn: isOn || crashed,
+                isBusy: pendingAction != nil,
+                // Dark mode: a deeper green than the bright system one.
+                tint: crashed ? AppTheme.danger : (colorScheme == .dark ? Color(red: 0x2A / 255, green: 0x8C / 255, blue: 0x50 / 255) : AppTheme.success),
+                help: isOn || crashed ? "Stop \(project.name)" : "Run \(project.name)"
+            ) {
+                if isOn || crashed { onStop() } else { onRun() }
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(HunRoundedShape().fill(hovering ? AppTheme.rowHover : (isOn ? AppTheme.textPrimary.opacity(0.05) : Color.clear)))
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onOpen)
+        .onHover { hovering = $0 }
+        .accessibilityHint("Open \(project.name) in Hun")
+        .animation(.easeOut(duration: 0.15), value: hovering)
+    }
+}
+
+/// A port that opens in the browser.
+private struct MenuPortLink: View {
+    let service: HunService
+    @State private var hovering = false
+
+    var body: some View {
+        Button {
+            if let url = service.browserURL { NSWorkspace.shared.open(url) }
+        } label: {
+            HStack(spacing: 2) {
+                Text(verbatim: ":\(service.port)")
+                    .font(.system(size: 10.5, design: .monospaced))
+                if hovering {
+                    Image(systemName: "arrow.up.right").font(.system(size: 7, weight: .bold))
+                }
+            }
+            .foregroundStyle(hovering ? AppTheme.textPrimary : AppTheme.textTertiary)
+            .padding(.horizontal, 5)
+            .frame(height: 17)
+            .background(HunRoundedShape().fill(hovering ? AppTheme.hover : AppTheme.searchField))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .disabled(service.browserURL == nil)
+        .onHover { hovering = $0 }
+        .accessibilityHint(service.browserURL.map { "Open \(service.name) at \($0.absoluteString)" } ?? service.name)
+    }
+}
+
+/// Hun's switch, the one in its logo and the menu bar: on runs, off stops.
+private struct MenuHunSwitch: View {
+    let isOn: Bool
+    let isBusy: Bool
+    let tint: Color
+    let help: String
+    let action: () -> Void
+    @State private var hovering = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Button(action: action) {
+            ZStack(alignment: isOn ? .trailing : .leading) {
+                Capsule()
+                    .fill(isOn ? tint : AppTheme.textTertiary.opacity(hovering ? 0.4 : 0.28))
+                    .frame(width: 34, height: 20)
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: 16, height: 16)
+                    .shadow(color: .black.opacity(0.2), radius: 1, y: 0.5)
+                    .padding(2)
+                    .overlay {
+                        if isBusy {
+                            ProgressView().controlSize(.mini).scaleEffect(0.5)
+                        }
+                    }
+            }
+            .frame(width: 34, height: 20)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isBusy)
+        .onHover { hovering = $0 }
+        .animation(.spring(duration: 0.28, bounce: 0.25), value: isOn)
+        .accessibilityHint(help)
+        .accessibilityLabel(help)
+        .accessibilityValue(isOn ? "On" : "Off")
+    }
+}
+
+/// The bottom of the sill: how projects run, and the way into Hun.
+private struct MenuSillFooter: View {
+    @Binding var mode: HunMode
+    let isModePending: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            MenuModeSwitch(mode: $mode, isPending: isModePending)
+            Spacer(minLength: 8)
+            MenuIconButton(systemImage: "macwindow", help: "Open Hun (⌘D)") { hunApp.openDashboard() }
+            MenuIconButton(systemImage: "power", help: "Quit Hun (⌘Q)") { NSApp.terminate(nil) }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
     }
 }
 
@@ -398,43 +758,6 @@ private struct MenuScrollIndicator: View {
 
 // MARK: - Header
 
-private struct MenuHeader: View {
-    let runningCount: Int
-    let crashedCount: Int
-    @Binding var mode: HunMode
-    let isModePending: Bool
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Hun")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(AppTheme.textPrimary)
-                Text(summary)
-                    .font(.system(size: 11))
-                    .foregroundStyle(AppTheme.textTertiary)
-                    .contentTransition(.numericText())
-            }
-            Spacer(minLength: 8)
-            MenuModeSwitch(mode: $mode, isPending: isModePending)
-        }
-        .padding(.horizontal, 14)
-        .padding(.top, 12)
-        .padding(.bottom, 10)
-    }
-
-    private var summary: String {
-        let running: String
-        switch runningCount {
-        case 0: running = crashedCount == 0 ? "Nothing running" : "Nothing else running"
-        case 1: running = "1 project running"
-        default: running = "\(runningCount) projects running"
-        }
-        guard crashedCount > 0 else { return running }
-        return "\(running) · \(crashedCount) crashed"
-    }
-}
-
 private struct MenuModeSwitch: View {
     @Binding var mode: HunMode
     let isPending: Bool
@@ -455,7 +778,7 @@ private struct MenuModeSwitch: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help(option.helpText)
+                .accessibilityHint(option.helpText)
             }
         }
         .padding(2)
@@ -484,158 +807,6 @@ private struct MenuSectionLabel: View {
 
 /// One project. The row opens it in the dashboard; its action (run, switch,
 /// stop, restart) appears on hover, and stays while it's in progress.
-private struct MenuProjectRow: View {
-    let project: HunProject
-    let mode: HunMode
-    let pendingAction: HunActionKind?
-    let onOpen: () -> Void
-    let onRun: () -> Void
-    let onStop: () -> Void
-    let onRestart: () -> Void
-    @State private var hovering = false
-
-    private var isRunning: Bool { project.status == .running || project.status == .starting }
-
-    var body: some View {
-        HStack(spacing: 10) {
-            ProjectIconView(
-                name: project.name,
-                iconPath: project.iconPath,
-                size: 20,
-                cornerRadius: 5,
-                emphasized: false,
-                status: project.status
-            )
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(project.name)
-                    .font(.system(size: 13, weight: isRunning ? .medium : .regular))
-                    .foregroundStyle(isRunning || hovering ? AppTheme.textPrimary : AppTheme.textSecondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                if let detail {
-                    Text(detail)
-                        .font(.system(size: 11))
-                        .foregroundStyle(detailColor)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-            }
-
-            Spacer(minLength: 6)
-
-            trailing
-        }
-        .padding(.horizontal, 8)
-        .frame(minHeight: detail == nil ? 32 : 42)
-        .background(HunRoundedShape().fill(hovering ? AppTheme.rowHover : Color.clear))
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onOpen)
-        .onHover { hovering = $0 }
-        .help("Open \(project.name) in Hun")
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
-        .accessibilityAction(named: "Open in Hun", onOpen)
-    }
-
-    /// Running projects say what's running; stopped ones stay one line.
-    private var detail: String? {
-        if let pendingAction { return pendingAction.statusText }
-        switch project.status {
-        case .running:
-            let count = project.services.filter { $0.status == .running || $0.status == .starting }.count
-            let services = count == 1 ? "1 service" : "\(count) services"
-            return [project.profile, services].compactMap { $0 }.joined(separator: " · ")
-        case .starting: return "Starting…"
-        case .crashed: return "Crashed"
-        case .stopped: return nil
-        }
-    }
-
-    private var detailColor: Color {
-        project.status == .crashed && pendingAction == nil ? AppTheme.danger : AppTheme.textTertiary
-    }
-
-    /// The first running service that serves a page.
-    private var webService: HunService? {
-        project.services.first { $0.status == .running && $0.browserURL != nil }
-    }
-
-    @ViewBuilder
-    private var trailing: some View {
-        HStack(spacing: 4) {
-            if let service = webService, let url = service.browserURL, pendingAction == nil {
-                MenuPortChip(port: service.port, url: url, serviceName: service.name)
-            }
-            if let pendingAction {
-                MenuIconButton(systemImage: icon(for: pendingAction), help: pendingAction.progressTitle, isLoading: true) {}
-            } else if project.status == .crashed {
-                // Restart stays in view; Stop clears the crash.
-                if hovering {
-                    MenuIconButton(systemImage: "stop.fill", help: "Stop \(project.name)", tone: .danger, action: onStop)
-                }
-                MenuIconButton(systemImage: "arrow.clockwise", help: "Restart \(project.name)", action: onRestart)
-            } else if hovering {
-                action
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var action: some View {
-        switch project.status {
-        case .running, .starting:
-            MenuIconButton(systemImage: "stop.fill", help: "Stop \(project.name)", tone: .danger, action: onStop)
-        case .crashed:
-            MenuIconButton(systemImage: "arrow.clockwise", help: "Restart \(project.name)", action: onRestart)
-        case .stopped:
-            MenuIconButton(
-                systemImage: mode == .focus ? "bolt.fill" : "play.fill",
-                help: mode == .focus ? "Switch to \(project.name)" : "Run \(project.name)",
-                action: onRun
-            )
-        }
-    }
-
-    private func icon(for action: HunActionKind) -> String {
-        switch action {
-        case .stopProject, .stopService: return "stop.fill"
-        case .restartProject, .restartService: return "arrow.clockwise"
-        default: return "play.fill"
-        }
-    }
-}
-
-/// The port a running project serves, opening it in the browser.
-private struct MenuPortChip: View {
-    let port: Int
-    let url: URL
-    let serviceName: String
-    @State private var hovering = false
-
-    var body: some View {
-        Button {
-            NSWorkspace.shared.open(url)
-        } label: {
-            HStack(spacing: 3) {
-                Text(verbatim: ":\(port)")
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                Image(systemName: "arrow.up.right")
-                    .font(.system(size: 8, weight: .bold))
-                    .opacity(hovering ? 1 : 0.6)
-            }
-            .foregroundStyle(hovering ? AppTheme.textPrimary : AppTheme.textSecondary)
-            .padding(.horizontal, 7)
-            .frame(height: 22)
-            .background(HunRoundedShape().fill(hovering ? AppTheme.hover : AppTheme.searchField))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .help("Open \(serviceName) at \(url.absoluteString)")
-    }
-}
-
 private struct MenuIconButton: View {
     enum Tone { case neutral, danger }
 
@@ -667,7 +838,7 @@ private struct MenuIconButton: View {
         .buttonStyle(.plain)
         .disabled(isLoading)
         .onHover { hovering = $0 }
-        .help(help)
+        .accessibilityHint(help)
         .accessibilityLabel(help)
     }
 
@@ -679,24 +850,6 @@ private struct MenuIconButton: View {
     private var background: Color {
         guard hovering else { return AppTheme.searchField }
         return tone == .danger ? AppTheme.danger.opacity(0.14) : AppTheme.hover
-    }
-}
-
-private struct MenuSearchField: View {
-    @Binding var text: String
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(AppTheme.textTertiary)
-            TextField("Find a project", text: $text)
-                .textFieldStyle(.plain)
-                .font(.system(size: 12))
-        }
-        .padding(.horizontal, 8)
-        .frame(height: 26)
-        .background(HunRoundedShape().fill(AppTheme.selectedFill))
     }
 }
 

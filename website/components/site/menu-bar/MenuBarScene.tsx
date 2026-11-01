@@ -7,12 +7,13 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { HunSim, type Mode, type SimProject, projectStatus } from "../hun-window/sim";
 import { MenuPanel, PANEL_W } from "./MenuPanel";
+import { menuBarClock, useNow } from "./use-now";
 
 /** The wallpaper behind the menu bar. */
 export const MENU_SCENE_BG = "/site/bg/scene-menu.jpg";
 
 /** The tray's height, and the narrowest it lays out at before scaling as a unit. */
-const SCENE_H = 440;
+const SCENE_H = 540;
 const MIN_W = 460;
 /** macOS menu bar height, and the gap between it and a menu bar extra's panel. */
 const BAR_H = 24;
@@ -26,7 +27,7 @@ const css = `
 .mbs-item { height: 22px; display: flex; align-items: center; padding: 0 7px; border-radius: 5px; }
 .mbs-hun { all: unset; box-sizing: border-box; cursor: default; height: 22px; display: flex; align-items: center; padding: 0 5px; border-radius: 5px; }
 .mbs-hun[aria-expanded="true"] { background: rgba(0,0,0,.1); }
-.mbs-hun:focus-visible { outline: 2px solid rgba(94,106,210,.55); outline-offset: 0; }
+.mbs-hun:focus-visible { outline: 2px solid rgba(194,74,31,.55); outline-offset: 0; }
 .mbs-glyph { transition: opacity .16s ease-out; }
 .mbs-panel { transition: opacity .12s ease-out; }
 @media (prefers-reduced-motion: reduce) { .mbs-glyph, .mbs-panel { transition: none; } }
@@ -184,6 +185,7 @@ function MenuBar({
   onToggle: () => void;
 }) {
   const ink = "rgba(0,0,0,.85)";
+  const now = useNow();
   return (
     <div
       style={{
@@ -227,7 +229,7 @@ function MenuBar({
           <ControlCentreIcon color={ink} />
         </span>
         <span aria-hidden className="mbs-item" style={{ fontWeight: 500, paddingRight: 4, letterSpacing: "-0.08px" }}>
-          Sun 9:41
+          {menuBarClock(now)}
         </span>
       </div>
     </div>

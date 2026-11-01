@@ -77,7 +77,7 @@ struct HunRepositoryStatusCapsule: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help("Switch branch")
+        .accessibilityHint("Switch branch")
     }
 }
 
@@ -384,7 +384,7 @@ private struct HunGitBranchDialog: View {
             }
             .buttonStyle(.plain)
             .disabled(model.isBusy)
-            .help("Check the remote for new branches and commits without changing your files")
+            .accessibilityHint("Check the remote for new branches and commits without changing your files")
         }
         .padding(.horizontal, 14)
         .frame(height: 36)
@@ -459,7 +459,7 @@ private struct HunBranchRow: View {
                 // Always reserve the column so names line up.
                 Image(systemName: isCurrent ? "checkmark" : (leadingSymbol ?? "checkmark"))
                     .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(AppTheme.accent)
+                    .foregroundStyle(AppTheme.accentText)
                     .opacity(isCurrent || leadingSymbol != nil ? 1 : 0)
                     .frame(width: 14)
 
@@ -595,12 +595,12 @@ private final class HunGitBranchMonitorView: NSView {
 private struct HunGitProminentButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .foregroundStyle(.white)
+            .foregroundStyle(AppTheme.primaryText)
             .padding(.horizontal, 10)
             .frame(height: 26)
             .background(
                 HunRoundedShape()
-                    .fill(AppTheme.accent.opacity(configuration.isPressed ? 0.72 : 0.92))
+                    .fill(AppTheme.primaryFill.opacity(configuration.isPressed ? 0.72 : 0.92))
             )
     }
 }

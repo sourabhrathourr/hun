@@ -216,7 +216,7 @@ function DarkCode({ children }: { children: ReactNode }) {
 function MenuSection() {
   const points: { title: string; body: ReactNode }[] = [
     { title: "Open it", body: "Click a port and it opens in your browser." },
-    { title: "Start or stop it", body: "Run or stop any project right from its row." },
+    { title: "Flip a switch", body: "Each project has its own switch. On runs it, off stops it." },
     { title: "Focus or Multitask", body: "One project at a time, or as many as you like." },
     { title: "Close it, they keep running", body: "Closing the window doesn’t stop anything. Your servers run until you stop them." },
   ];

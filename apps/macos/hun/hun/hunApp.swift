@@ -15,6 +15,8 @@ struct hunApp: App {
     @State private var license: HunLicenseManager
 
     init() {
+        HunOnboarding.checkForReinstall()
+        HunFonts.register()
         let store = HunStore(navigationDefaults: .standard, startAutomatically: false)
         let license = HunLicenseManager()
         _store = State(initialValue: store)
@@ -26,6 +28,9 @@ struct hunApp: App {
             HunStatusItemController.install(store: store, license: license)
             license.startMonitoring()
         }
+        #if DEBUG
+        HunDebugHooks.install(store: store, license: license)
+        #endif
         DispatchQueue.global(qos: .utility).async {
             HunCLILinker.linkBundledCLI()
         }

@@ -79,7 +79,13 @@ final class HunLicenseManager {
     /// The beta license on this Mac ran out, so activation asks for a paid
     /// license. Kept across launches until a new key is activated.
     private(set) var betaEnded: Bool {
-        didSet { defaults.set(betaEnded, forKey: Self.betaEndedKey) }
+        didSet {
+            #if DEBUG
+            // A rehearsal of the welcome never writes anything.
+            if isRehearsing { return }
+            #endif
+            defaults.set(betaEnded, forKey: Self.betaEndedKey)
+        }
     }
 
     let configuration: HunLicenseConfiguration
@@ -174,12 +180,94 @@ final class HunLicenseManager {
         }
     }
 
+    #if DEBUG
+    /// Debug builds: the license as it really is, while a rehearsal of the
+    /// welcome pretends this Mac has none. Nothing stored or on Dodo changes.
+    private var rehearsalRealState: HunLicenseState?
+    private var rehearsalRealBetaEnded = false
+    var isRehearsing: Bool { rehearsalRealState != nil }
+
+    /// Pretends this Mac has no license, until a key is entered in the
+    /// welcome (any key; nothing is sent to Dodo).
+    func startRehearsal(asBeta: Bool = false) {
+        guard rehearsalRealState == nil else { return }
+        rehearsalRealState = state
+        rehearsalRealBetaEnded = betaEnded
+        errorMessage = nil
+        betaEnded = asBeta
+        state = .needsActivation
+    }
+
+    /// Puts the real license back.
+    func endRehearsal() {
+        guard let real = rehearsalRealState else { return }
+        rehearsalRealState = nil
+        betaEnded = rehearsalRealBetaEnded
+        state = real
+    }
+
+    /// Test keys for a rehearsal: each gives the message Hun shows for that
+    /// failure in real life. Any other text unlocks.
+    static let rehearsalKeys: [(key: String, outcome: String)] = [
+        ("HUN-TEST-INVALID", "a key that isn't valid"),
+        ("HUN-TEST-LIMIT", "a key already on 3 Macs"),
+        ("HUN-TEST-EXPIRED", "an expired key"),
+        ("HUN-TEST-REVOKED", "a refunded or disabled key"),
+        ("HUN-TEST-WRONG", "a key for another product"),
+        ("HUN-TEST-OFFLINE", "no internet connection"),
+        ("HUN-TEST-DOWN", "the license service is down"),
+    ]
+
+    private static func rehearsalFailure(for key: String) -> Error? {
+        switch key.uppercased() {
+        case "HUN-TEST-INVALID": return HunLicenseError.rejected(statusCode: 404, providerMessage: nil)
+        case "HUN-TEST-LIMIT": return HunLicenseError.rejected(statusCode: 403, providerMessage: "activation limit reached")
+        case "HUN-TEST-EXPIRED": return HunLicenseError.rejected(statusCode: 422, providerMessage: "license key expired")
+        case "HUN-TEST-REVOKED": return HunLicenseError.rejected(statusCode: 422, providerMessage: "license key disabled")
+        case "HUN-TEST-WRONG": return HunLicenseError.wrongProduct
+        case "HUN-TEST-OFFLINE": return URLError(.notConnectedToInternet)
+        case "HUN-TEST-DOWN": return HunLicenseError.rejected(statusCode: 503, providerMessage: nil)
+        default: return nil
+        }
+    }
+
+    private func finishRehearsalActivation(key: String) async {
+        state = .activating
+        errorMessage = nil
+        try? await Task.sleep(for: .milliseconds(1200))
+        if let failure = Self.rehearsalFailure(for: key) {
+            errorMessage = HunLicenseUserMessage.activation(for: failure)
+            state = .needsActivation
+            return
+        }
+        let real = rehearsalRealState
+        rehearsalRealState = nil
+        betaEnded = rehearsalRealBetaEnded
+        if case .active = real, let real {
+            state = real
+        } else {
+            state = .active(HunLicenseSession(
+                productID: "rehearsal",
+                productName: "Hun",
+                lastValidatedAt: now(),
+                isOffline: false
+            ))
+        }
+    }
+    #endif
+
     func activate(_ licenseKey: String) async {
         let trimmedKey = licenseKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedKey.isEmpty else {
             errorMessage = "Enter the license key from your purchase email."
             return
         }
+        #if DEBUG
+        if isRehearsing {
+            await finishRehearsalActivation(key: trimmedKey)
+            return
+        }
+        #endif
 
         state = .activating
         errorMessage = nil

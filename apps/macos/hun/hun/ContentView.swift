@@ -274,7 +274,22 @@ struct ContentView: View {
                     onStopService: { service in store.stop(service, in: project) },
                     onRemoveService: { service in store.remove(service, from: project) },
                     onStopHolderAndRun: { service in store.stopHolderAndRun(service, in: project) },
-                    isServiceBusy: { service in store.serviceAction(for: service, in: project) != nil }
+                    isServiceBusy: { service in store.serviceAction(for: service, in: project) != nil },
+                    agentChat: store.agentChat(for: project.path),
+                    agent: store.availableAgent?.kind,
+                    onAskAgent: { request in store.sendAgentMessage(request, for: project) },
+                    onStopAgent: { store.cancelAgent(for: project.path) },
+                    onUndoAgentChange: { id in store.undoAgentChange(id, for: project) },
+                    onNewAgentConversation: { store.clearAgentChat(for: project.path) },
+                    queuedAgentMessages: store.agentQueues[project.path] ?? [],
+                    onSteerAgent: { text in store.steerAgent(text, for: project) },
+                    onRemoveQueuedAgentMessage: { id in store.removeQueuedAgentMessage(id, for: project.path) },
+                    onSendQueuedAgentMessageNow: { id in store.sendQueuedAgentMessageNow(id, for: project) },
+                    onCheckForAgent: { Task { await store.recheckAgent() } },
+                    paneTab: Binding(
+                        get: { store.paneTabs[project.path] ?? .logs },
+                        set: { store.paneTabs[project.path] = $0 }
+                    )
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -754,7 +769,7 @@ private struct ModeMenuButton: View {
         .fixedSize()
         .disabled(store.isChangingMode)
         .onHover { hovering = $0 }
-        .help(mode.helpText)
+        .accessibilityHint(mode.helpText)
     }
 }
 
@@ -810,7 +825,7 @@ struct HunSearchField: View {
                         .foregroundStyle(AppTheme.textTertiary)
                 }
                 .buttonStyle(.plain)
-                .help("Clear search")
+                .accessibilityHint("Clear search")
             }
         }
         .padding(.horizontal, 10)
@@ -931,7 +946,7 @@ struct HunSidebarUpdateCard: View {
             }
             .buttonStyle(.plain)
             .onHover { hoveringChanges = $0 }
-            .help("View what's new in Hun \(version)")
+            .accessibilityHint("View what's new in Hun \(version)")
 
             Spacer(minLength: 6)
 
@@ -951,7 +966,7 @@ struct HunSidebarUpdateCard: View {
             }
             .buttonStyle(.plain)
             .onHover { hoveringUpdate = $0 }
-            .help("Update to Hun \(version)")
+            .accessibilityHint("Update to Hun \(version)")
             .accessibilityLabel("Update to Hun \(version)")
             .accessibilityHint("Downloads and installs Hun \(version)")
         }
@@ -1021,7 +1036,7 @@ private struct UnmanagedProcessRow: View {
         )
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .help(Text(verbatim: "pid \(process.pid) · \(process.cwd)"))
+        .accessibilityHint(Text(verbatim: "pid \(process.pid) · \(process.cwd)"))
         .contextMenu {
             if let url {
                 Button("Open \(url.absoluteString)") { NSWorkspace.shared.open(url) }
@@ -1092,7 +1107,8 @@ private struct SidebarProjectRow: View {
                     size: 17,
                     cornerRadius: 4,
                     emphasized: selected,
-                    status: project.status
+                    status: project.status,
+                    badgeRim: selected ? AppTheme.selectedFill : AppTheme.sidebar
                 )
 
                 Text(project.name)
@@ -1101,6 +1117,11 @@ private struct SidebarProjectRow: View {
                     .lineLimit(1)
 
                 Spacer(minLength: 0)
+
+                if isLive && runningMarker == .activity {
+                    HunActivityBars(color: liveColor)
+                        .padding(.trailing, 2)
+                }
             }
             .padding(.leading, SidebarMetrics.rowPadding + SidebarMetrics.nestedIndent)
             .padding(.trailing, SidebarMetrics.rowPadding)
@@ -1109,11 +1130,18 @@ private struct SidebarProjectRow: View {
                 HunRoundedShape()
                     .fill(rowBackground)
             )
+            .overlay(alignment: .leading) {
+                if runningMarker == .bar && isLive {
+                    HunRunningBar(color: liveColor)
+                        .padding(.leading, SidebarMetrics.nestedIndent - 3)
+                        .transition(.opacity)
+                }
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help("\(project.name)\n\(project.path)")
+        .accessibilityHint("\(project.name)\n\(project.path)")
         .contextMenu {
             Button("Reveal in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: project.path)])
@@ -1131,10 +1159,28 @@ private struct SidebarProjectRow: View {
         }
     }
 
+    @AppStorage(HunRunningMarker.key) private var runningMarkerName = HunRunningMarker.defaultValue.rawValue
+    private var runningMarker: HunRunningMarker {
+        HunRunningMarker(rawValue: runningMarkerName) ?? .defaultValue
+    }
+
+    /// Running, starting or crashed: the row carries a marker and a bright name.
+    private var isLive: Bool { project.status != .stopped }
+
+    private var liveColor: Color {
+        switch project.status {
+        case .starting: return AppTheme.warning
+        case .crashed: return AppTheme.danger
+        default: return AppTheme.liveMarker
+        }
+    }
+
+
+
+    /// Running projects read brighter; stopped ones step back.
     private var textColor: Color {
-        if selected { return AppTheme.textPrimary }
-        if hovering { return AppTheme.textPrimary }
-        return AppTheme.textSecondary
+        if selected || hovering { return AppTheme.textPrimary }
+        return isLive ? AppTheme.textPrimary : AppTheme.textTertiary
     }
 
     private var rowBackground: Color {
@@ -1215,7 +1261,7 @@ private struct DevBuildBadge: View {
                 HunRoundedShape()
                     .stroke(AppTheme.accent.opacity(0.42), lineWidth: 1)
             }
-            .help("Development build · isolated daemon and data")
+            .accessibilityHint("Development build · isolated daemon and data")
     }
 }
 
@@ -1234,7 +1280,7 @@ private struct ModeSelector: View {
             HunRoundedShape()
                 .fill(AppTheme.searchField)
         )
-        .help(mode.helpText)
+        .accessibilityHint(mode.helpText)
         .disabled(isPending)
     }
 
@@ -1485,7 +1531,7 @@ struct ToolbarIconButton: View {
         .buttonStyle(.plain)
         .disabled(isDisabled)
         .onHover { hovering = $0 }
-        .help(helpText ?? "")
+        .accessibilityHint(helpText ?? "")
     }
 
     private var iconColor: Color {
@@ -1533,6 +1579,28 @@ private struct ProjectDetailView: View {
     let onRemoveService: (HunService) -> Void
     let onStopHolderAndRun: (HunService) -> Void
     let isServiceBusy: (HunService) -> Bool
+    /// This project's setup conversation with the coding agent.
+    let agentChat: HunAgentChat?
+    /// The agent on this Mac that can be asked for changes, if any.
+    let agent: HunAgentKind?
+    let onAskAgent: (String) -> Void
+    let onStopAgent: () -> Void
+    let onUndoAgentChange: (UUID) -> Void
+    let onNewAgentConversation: () -> Void
+    let queuedAgentMessages: [HunQueuedMessage]
+    let onSteerAgent: (String) -> Void
+    let onRemoveQueuedAgentMessage: (UUID) -> Void
+    let onSendQueuedAgentMessageNow: (UUID) -> Void
+    let onCheckForAgent: () -> Void
+    @Binding var paneTab: HunPaneTab
+
+    /// A new project's first setup takes over the services and logs.
+    private var isFirstSetupRunning: Bool {
+        agentChat?.isFirstSetupRunning == true
+    }
+
+    /// The agent to talk to: the one on this Mac, or the one this chat used.
+    private var chatAgent: HunAgentKind? { agent ?? agentChat?.agent }
 
     private var selectedService: HunService? {
         project.services.first { $0.id == selectedServiceID }
@@ -1554,13 +1622,24 @@ private struct ProjectDetailView: View {
                 onOpenConfig: onOpenConfig,
                 onChooseLogo: onChooseLogo,
                 onClearLogo: onClearLogo,
-                onCopyAgentPrompt: onCopyAgentPrompt
+                onCopyAgentPrompt: onCopyAgentPrompt,
+                agent: chatAgent,
+                isAgentWorking: agentChat?.isWorking == true,
+                isSetupOpen: paneTab == .setup,
+                onToggleSetup: {
+                    withAnimation(.easeOut(duration: 0.15)) { paneTab = paneTab == .setup ? .logs : .setup }
+                }
             )
 
             if !roundedPanels {
                 Rectangle().fill(AppTheme.divider).frame(height: 1)
             }
 
+            Group {
+            if isFirstSetupRunning, let agentChat, let first = agentChat.messages.first {
+                HunAgentSetupView(projectName: project.name, agent: agentChat.agent, message: first, onCancel: onStopAgent)
+                    .transition(.opacity)
+            } else {
             HunResizableWorkspaceSplit(
                 preferredWidth: $servicesPanelWidth,
                 accessibilityLabel: "Resize services panel"
@@ -1581,6 +1660,23 @@ private struct ProjectDetailView: View {
                 )
                 .background(AppTheme.appBackground)
             } detail: {
+                if paneTab == .setup {
+                    HunAgentChatView(
+                        projectName: project.name,
+                        agent: chatAgent,
+                        chat: agentChat,
+                        queued: queuedAgentMessages,
+                        tab: $paneTab,
+                        onSend: onAskAgent,
+                        onSteer: onSteerAgent,
+                        onRemoveQueued: onRemoveQueuedAgentMessage,
+                        onSendQueuedNow: onSendQueuedAgentMessageNow,
+                        onStop: onStopAgent,
+                        onUndo: onUndoAgentChange,
+                        onNewConversation: onNewAgentConversation,
+                        onCheckForAgent: onCheckForAgent
+                    )
+                } else {
                 LogsPanelView(
                     selectedService: selectedService,
                     scope: $selectedLogScope,
@@ -1589,7 +1685,13 @@ private struct ProjectDetailView: View {
                     onRestartService: onRestartService,
                     onClearLogs: onClearLogs
                 )
+                }
             }
+            .transition(.opacity)
+            }
+            }
+            .animation(.easeOut(duration: 0.3), value: isFirstSetupRunning)
+
             // Only services and logs form the rounded card; the header above
             // sits on the window body.
             .hunRoundedShell(roundedPanels, leadingInset: HunLayout.shellInset, topInset: 0)
@@ -1613,6 +1715,11 @@ private struct ProjectHeaderView: View {
     let onChooseLogo: () -> Void
     let onClearLogo: () -> Void
     let onCopyAgentPrompt: () -> Void
+    /// The coding agent that can change this setup, if there is one.
+    var agent: HunAgentKind? = nil
+    var isAgentWorking = false
+    var isSetupOpen = false
+    var onToggleSetup: () -> Void = {}
     @State private var isSavingProfile = false
     @State private var newProfileName = ""
 
@@ -1682,7 +1789,7 @@ private struct ProjectHeaderView: View {
                         .foregroundStyle(AppTheme.textPrimary)
                         .lineLimit(1)
                         .truncationMode(.tail)
-                        .help(project.name)
+                        .accessibilityHint(project.name)
                 }
 
                 // When the line doesn't fit, the path is dropped and the
@@ -1730,6 +1837,9 @@ private struct ProjectHeaderView: View {
                     isDisabled: pendingAction != nil,
                     action: onRestart
                 )
+                if let agent {
+                    HunSetupButton(agent: agent, isWorking: isAgentWorking, isOpen: isSetupOpen, action: onToggleSetup)
+                }
                 ProjectMoreMenu(
                     canResetLogo: project.iconIsCustom,
                     canSaveProfile: !runningServices.isEmpty,
@@ -1900,7 +2010,7 @@ private struct ProfileMenu: View {
         .disabled(isDisabled)
         .opacity(isDisabled && !isSwitching ? 0.55 : 1)
         .onHover { hovering = $0 }
-        .help(helpText)
+        .accessibilityHint(helpText)
         .accessibilityLabel("Profile: \(project.profile ?? "All services")")
     }
 
@@ -1979,7 +2089,7 @@ private struct ProjectMoreMenu: View {
         .menuIndicator(.hidden)
         .buttonStyle(.plain)
         .fixedSize()
-        .help(copiedPrompt ? "Agent prompt copied" : "More actions")
+        .accessibilityHint(copiedPrompt ? "Agent prompt copied" : "More actions")
     }
 }
 
@@ -2030,7 +2140,7 @@ struct ActionButton: View {
 
     private var textColor: Color {
         switch style {
-        case .primary: return .white
+        case .primary: return AppTheme.primaryText
         case .secondary: return AppTheme.textPrimary
         case .danger: return hovering ? AppTheme.danger : AppTheme.textSecondary
         }
@@ -2038,7 +2148,7 @@ struct ActionButton: View {
 
     private var background: Color {
         switch style {
-        case .primary: return AppTheme.accent.opacity(hovering ? 1.0 : 0.92)
+        case .primary: return AppTheme.primaryFill.opacity(hovering ? 1.0 : 0.92)
         case .secondary: return hovering ? AppTheme.hover : AppTheme.buttonFill
         case .danger: return hovering ? AppTheme.danger.opacity(0.12) : AppTheme.buttonFill
         }
@@ -2046,7 +2156,7 @@ struct ActionButton: View {
 
     private var border: Color {
         switch style {
-        case .primary: return Color.white.opacity(0.10)
+        case .primary: return AppTheme.primaryBorder
         case .secondary: return AppTheme.divider
         case .danger: return hovering ? AppTheme.danger.opacity(0.4) : AppTheme.divider
         }
@@ -2101,7 +2211,7 @@ private struct ServicesPanelView: View {
                 Group {
                     if hiddenCount > 0 {
                         Text(verbatim: "\(services.count - hiddenCount) of \(services.count)")
-                            .help("\(hiddenCount) not in \(profileName ?? "this profile") are hidden. Show them in Settings › Appearance.")
+                            .accessibilityHint("\(hiddenCount) not in \(profileName ?? "this profile") are hidden. Show them in Settings › Appearance.")
                     } else {
                         Text(verbatim: "\(services.count)")
                     }
@@ -2134,6 +2244,7 @@ private struct ServicesPanelView: View {
                 )
             }
             .hunScrollStyle()
+
         }
         .onAppear(perform: selectVisibleService)
         .onChange(of: selectedID) { _, _ in selectVisibleService() }
@@ -2261,7 +2372,7 @@ private struct ServiceRowView: View {
                             .padding(.horizontal, 5)
                             .frame(height: 15)
                             .background(HunRoundedShape().fill(AppTheme.selection))
-                            .help(service.externalSourceText + ". Restart to run it in Hun with logs.")
+                            .accessibilityHint(service.externalSourceText + ". Restart to run it in Hun with logs.")
                     }
                     Spacer(minLength: 8)
                     portView
@@ -2279,7 +2390,7 @@ private struct ServiceRowView: View {
                         Text(verbatim: "\(service.pid)")
                             .font(.system(size: 10.5, design: .monospaced))
                             .foregroundStyle(AppTheme.textTertiary)
-                            .help("Process ID")
+                            .accessibilityHint("Process ID")
                     }
                 }
 
@@ -2312,7 +2423,7 @@ private struct ServiceRowView: View {
         .onTapGesture(perform: onTap)
         .accessibilityAddTraits(.isButton)
         .onHover { hovering = $0 }
-        .help(helpText)
+        .accessibilityHint(helpText)
         .contextMenu {
             if let url = service.browserURL {
                 Button("Open \(url.absoluteString)") {
@@ -2370,7 +2481,7 @@ private struct ServiceRowView: View {
                     .underline(hovering)
             }
             .buttonStyle(.plain)
-            .help("Open \(url.absoluteString)")
+            .accessibilityHint("Open \(url.absoluteString)")
         } else if service.port > 0 {
             Text(service.portText)
                 .font(.system(size: 11, design: .monospaced))
@@ -2502,7 +2613,7 @@ private struct LogSearchField: View {
     }
 }
 
-private enum LogsToolbarMetrics {
+enum LogsToolbarMetrics {
     static let controlHeight: CGFloat = 26
 }
 
@@ -2611,7 +2722,7 @@ private struct LogsToolbarIconButton: View {
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.45)
         .onHover { hovering = $0 }
-        .help(showingConfirm ? "Copied" : helpText)
+        .accessibilityHint(showingConfirm ? "Copied" : helpText)
     }
 
     @ViewBuilder
@@ -2771,7 +2882,7 @@ private struct LiveTailButton: View {
                         .foregroundStyle(AppTheme.textTertiary)
                     Text("\(newCount) new")
                         .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundStyle(AppTheme.accent)
+                        .foregroundStyle(AppTheme.accentText)
                         .monospacedDigit()
                         .contentTransition(.numericText())
                 }
@@ -2793,7 +2904,7 @@ private struct LiveTailButton: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.15), value: hovering)
-        .help("Resume following the latest logs (jump to bottom)")
+        .accessibilityHint("Resume following the latest logs (jump to bottom)")
     }
 }
 
@@ -3228,7 +3339,7 @@ private struct EmptyStateView: View {
 // MARK: - Log text view (custom drawing for the live-edge marker)
 
 /// `NSTextView` subclass that paints two extras BENEATH the text:
-///   1. A subtle row-wide purple wash behind the most recent log line.
+///   1. A subtle row-wide wash behind the most recent log line.
 ///   2. A small filled triangle in the leading inset margin pointing at it.
 ///
 /// Both are drawn in textView coordinates outside the text flow, so every
@@ -3239,7 +3350,7 @@ final class LogsTextViewKit: NSTextView {
         didSet { needsDisplay = true }
     }
 
-    var liveEdgeBackground: NSColor = NSColor(AppTheme.accent).withAlphaComponent(0.13)
+    var liveEdgeBackground: NSColor = AppTheme.liveLogRow
     var liveEdgeArrowColor: NSColor = NSColor(AppTheme.accent)
 
     /// Called by `super.draw(_:)` BEFORE glyphs are drawn — wash goes here so
@@ -3288,6 +3399,56 @@ final class LogsTextViewKit: NSTextView {
         path.close()
         liveEdgeArrowColor.setFill()
         path.fill()
+    }
+
+    // MARK: ⌘-click a URL to open it
+
+    private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+
+    /// The http(s) URL under a point in the view, if any.
+    private func url(at point: NSPoint) -> URL? {
+        guard let layoutManager, let textContainer else { return nil }
+        let location = NSPoint(x: point.x - textContainerOrigin.x, y: point.y - textContainerOrigin.y)
+        var fraction: CGFloat = 0
+        let index = layoutManager.characterIndex(for: location, in: textContainer, fractionOfDistanceBetweenInsertionPoints: &fraction)
+        let text = string as NSString
+        guard index < text.length else { return nil }
+        let line = text.lineRange(for: NSRange(location: index, length: 0))
+        let matches = Self.linkDetector?.matches(in: string, range: line) ?? []
+        guard let match = matches.first(where: { NSLocationInRange(index, $0.range) }),
+              let url = match.url, ["http", "https"].contains(url.scheme?.lowercased() ?? "")
+        else { return nil }
+        return url
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.command),
+           let url = url(at: convert(event.locationInWindow, from: nil)) {
+            NSWorkspace.shared.open(url)
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    /// A pointing hand over a URL while ⌘ is held.
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        updateLinkCursor(event)
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        super.flagsChanged(with: event)
+        updateLinkCursor(event)
+    }
+
+    private func updateLinkCursor(_ event: NSEvent) {
+        guard let window else { return }
+        let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        if event.modifierFlags.contains(.command), bounds.contains(point), url(at: point) != nil {
+            NSCursor.pointingHand.set()
+        } else if bounds.contains(point) {
+            NSCursor.iBeam.set()
+        }
     }
 
     private func lastLineRect() -> NSRect? {

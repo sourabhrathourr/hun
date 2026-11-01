@@ -70,6 +70,9 @@ func Load() (*State, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			// A new install runs projects side by side. Existing state
+			// keeps its mode, and state from before modes stays Focus.
+			s.Mode = "multitask"
 			return s, nil
 		}
 		return nil, fmt.Errorf("reading state: %w", err)

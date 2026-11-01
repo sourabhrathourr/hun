@@ -133,19 +133,51 @@ nonisolated enum AppTheme {
         darkOpacity: 0.96
     )
 
-    // Purple remains Hun's only action/brand accent in both appearances.
-    static let accent = color(
-        light: 0x5E6AD2,
-        darkRed: 0.369,
-        darkGreen: 0.416,
-        darkBlue: 0.824
-    )
+    // Terracotta is Hun's one action/brand accent: bright in light mode, a
+    // deeper rust in dark mode, where a bright fill glares on near-black.
+    static let accent = color(light: 0xC24A1F, dark: 0xA84B2A)
+    /// A primary button: solid terracotta with white text in light mode; in
+    /// dark mode a faint rust wash with lifted rust text and edge.
+    static let primaryFill = color(light: 0xC24A1F, dark: 0xA84B2A, darkOpacity: 0.2)
+    static let primaryText = Color(nsColor: NSColor(name: nil) { appearance in
+        isDark(appearance) ? lifted(0xA84B2A, by: 0.35) : .white
+    })
+    static let primaryBorder = color(light: 0xFFFFFF, dark: 0xA84B2A, lightOpacity: 0.1, darkOpacity: 0.4)
+    /// The accent as text or an icon: lifted in dark mode so rust reads on near-black.
+    static let accentText = Color(nsColor: NSColor(name: nil) { appearance in
+        isDark(appearance) ? lifted(0xA84B2A, by: 0.25) : srgbColor(hex: 0xC24A1F, opacity: 1)
+    })
+    /// The newest log line's wash: the accent in light mode, a neutral band
+    /// in dark mode (a rust tint turns brown on near-black).
+    static let liveLogRow = NSColor(name: nil) { appearance in
+        isDark(appearance)
+            ? NSColor.white.withAlphaComponent(0.06)
+            : srgbColor(hex: 0xC24A1F, opacity: 0.13)
+    }
+
+    private static func isDark(_ appearance: NSAppearance) -> Bool {
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+    }
+
+    /// A colour mixed toward white.
+    private static func lifted(_ hex: UInt32, by amount: CGFloat) -> NSColor {
+        let c = srgbColor(hex: hex, opacity: 1)
+        return NSColor(
+            srgbRed: c.redComponent + (1 - c.redComponent) * amount,
+            green: c.greenComponent + (1 - c.greenComponent) * amount,
+            blue: c.blueComponent + (1 - c.blueComponent) * amount,
+            alpha: 1
+        )
+    }
     static let success = color(
         light: 0x27833F,
         darkRed: 0.34,
         darkGreen: 0.78,
         darkBlue: 0.45
     )
+    /// The sidebar's running marker: the success green in light mode, a
+    /// deeper, quieter green in dark mode (as on the menu bar's switches).
+    static let liveMarker = color(light: 0x27833F, dark: 0x2A8C50)
     static let warning = color(
         light: 0xA76418,
         darkRed: 0.95,
@@ -162,25 +194,25 @@ nonisolated enum AppTheme {
     static let brand = textPrimary
 
     // The commit control was intentionally neutral in the original dark UI.
-    // In light mode it joins Hun's purple primary-action language.
+    // In light mode it joins Hun's terracotta primary-action language.
     static let commitPrimaryText = color(
         light: 0xFFFFFF,
         dark: 0xFFFFFF,
         darkOpacity: 0.92
     )
     static let commitPrimaryFill = color(
-        light: 0x5E6AD2,
+        light: 0xC24A1F,
         dark: 0xFFFFFF,
         lightOpacity: 0.92,
         darkOpacity: 0.075
     )
     static let commitPrimaryFillHover = color(
-        light: 0x5E6AD2,
+        light: 0xC24A1F,
         dark: 0xFFFFFF,
         darkOpacity: 0.10
     )
     static let commitPrimaryFillPressed = color(
-        light: 0x5E6AD2,
+        light: 0xC24A1F,
         dark: 0xFFFFFF,
         lightOpacity: 0.78,
         darkOpacity: 0.12
@@ -355,13 +387,13 @@ struct HunRoundedShape: InsettableShape {
 
 
 /// Hun's light-mode palette, picked in Settings › Appearance. Every light
-/// colour above is written in Graphite; Clay swaps them for its own. Dark
-/// mode is always Graphite.
+/// colour above is written in Graphite; Clay, the default, swaps them for
+/// its own. Dark mode is the same in both.
 nonisolated enum HunPalette: String, CaseIterable, Identifiable {
-    /// The original: neutral greys with an indigo accent.
-    case graphite
     /// The website's: warm paper and ink with a terracotta accent.
     case clay
+    /// Neutral greys, with the terracotta accent.
+    case graphite
 
     static let key = "hun.appearance.palette"
 
@@ -384,7 +416,7 @@ nonisolated enum HunPalette: String, CaseIterable, Identifiable {
     /// Read on every colour resolve, so it's kept in memory, not looked up.
     /// Set it through `select(_:)`; tests set it directly to pin a palette.
     nonisolated(unsafe) static var current: HunPalette =
-        UserDefaults.standard.string(forKey: key).flatMap(HunPalette.init) ?? .graphite
+        UserDefaults.standard.string(forKey: key).flatMap(HunPalette.init) ?? .clay
 
     static func select(_ palette: HunPalette) {
         current = palette
@@ -393,8 +425,8 @@ nonisolated enum HunPalette: String, CaseIterable, Identifiable {
 
     /// Graphite light colour → Clay light colour.
     private static let clayLight: [UInt32: UInt32] = [
-        0xF7F7F2: 0xF5F0E6, // app background, menu, dialog → paper
-        0xF2F2EC: 0xECE5D7, // sidebar, mode selector → a shade deeper than paper
+        0xF7F7F2: 0xFBF8F3, // app background, menu, dialog → a step lighter than the website's paper
+        0xF2F2EC: 0xF5F0E6, // sidebar, mode selector → the website's paper
         0xFFFFFF: 0xFFFCF6, // raised: chips, buttons, fields, tabs → cream
         0x181816: 0x1F1B16, // hairlines, hover and selection tints → ink
         0x232321: 0x1F1B16, // primary text → ink
@@ -402,7 +434,6 @@ nonisolated enum HunPalette: String, CaseIterable, Identifiable {
         0x8B8B84: 0x8A8174, // tertiary text
         0x4D4D49: 0x4F483F, // log text
         0x92928B: 0x938A7D, // log timestamps
-        0x5E6AD2: 0xC24A1F, // accent → persimmon
         0x27833F: 0x3E7B4F, // running green
         0x1A1A18: 0x1F1B16, // update button fill → ink
     ]
@@ -410,5 +441,6 @@ nonisolated enum HunPalette: String, CaseIterable, Identifiable {
     static func light(_ hex: UInt32) -> UInt32 {
         current == .clay ? clayLight[hex] ?? hex : hex
     }
+
 
 }
