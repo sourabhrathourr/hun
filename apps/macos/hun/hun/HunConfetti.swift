@@ -53,13 +53,14 @@ private final class HunConfettiView: NSView {
         var age: CGFloat = 0
     }
 
-    private static let colors: [NSColor] = [0xF94860, 0xE153F3, 0x0099FE, 0xF8CF00, 0x2DCE6A].map { hex in
-        NSColor(
-            srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
-            green: CGFloat((hex >> 8) & 0xFF) / 255,
-            blue: CGFloat(hex & 0xFF) / 255,
-            alpha: 1
-        )
+    private static let colorHexes: [UInt32] = [0xF94860, 0xE153F3, 0x0099FE, 0xF8CF00, 0x2DCE6A]
+    private static let colors: [NSColor] = colorHexes.map(color(hex:))
+
+    private static func color(hex: UInt32) -> NSColor {
+        let red = CGFloat((hex >> 16) & 0xFF) / 255
+        let green = CGFloat((hex >> 8) & 0xFF) / 255
+        let blue = CGFloat(hex & 0xFF) / 255
+        return NSColor(srgbRed: red, green: green, blue: blue, alpha: 1)
     }
 
     // Tuned against a recording: with this drag and gravity the fastest
