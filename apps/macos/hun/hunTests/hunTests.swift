@@ -47,9 +47,12 @@ struct hunTests {
         #expect(abs(lightActive.green - 1) < 0.0001)
         #expect(abs(lightActive.blue - 1) < 0.0001)
         #expect(abs(lightActive.alpha - 1) < 0.0001)
-        #expect(abs(lightBackground.red - 242.0 / 255.0) < 0.0001)
-        #expect(abs(lightBackground.green - 242.0 / 255.0) < 0.0001)
-        #expect(abs(lightBackground.blue - 236.0 / 255.0) < 0.0001)
+        // The light track is a faint ink tint (as dark mode's is a faint
+        // white one), so it shows on any surface and the white tab stands out.
+        #expect(abs(lightBackground.red - 0x18 / 255.0) < 0.0001)
+        #expect(abs(lightBackground.green - 0x18 / 255.0) < 0.0001)
+        #expect(abs(lightBackground.blue - 0x16 / 255.0) < 0.0001)
+        #expect(abs(lightBackground.alpha - 0.055) < 0.0001)
         #expect(abs(darkActive.alpha - 0.055) < 0.0001)
         #expect(abs(darkBackground.alpha - 0.035) < 0.0001)
     }
