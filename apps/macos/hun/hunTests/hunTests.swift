@@ -13,6 +13,8 @@ private enum ThemeTestError: Error {
 @MainActor
 struct hunTests {
     @Test func appThemeUsesCreamCanvasInLightMode() throws {
+        // These are Graphite's values; don't inherit the palette saved on this Mac.
+        HunPalette.current = .graphite
         let color = try themeComponents(AppTheme.appBackground, appearance: .aqua)
         let sidebar = try themeComponents(AppTheme.sidebar, appearance: .aqua)
 
@@ -38,6 +40,8 @@ struct hunTests {
     }
 
     @Test func modeSelectorsUseWhiteActiveTabsInLightModeWithoutChangingDarkMode() throws {
+        // These are Graphite's values; don't inherit the palette saved on this Mac.
+        HunPalette.current = .graphite
         let lightActive = try themeComponents(AppTheme.modeSelectorActive, appearance: .aqua)
         let lightBackground = try themeComponents(AppTheme.modeSelectorBackground, appearance: .aqua)
         let darkActive = try themeComponents(AppTheme.modeSelectorActive, appearance: .darkAqua)
