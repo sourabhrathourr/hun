@@ -1,0 +1,50 @@
+---
+title: License and updates
+description: Activate Hun, move it between Macs, use it offline and install updates.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Hun is a one-time purchase of $9. One license key works on up to 3 Macs, and updates are included.
+
+## Activate
+
+The first time you open Hun, it asks for a key on **Activate Hun**:
+
+1. Paste the key from your purchase email into **License key**.
+2. Click **Activate Hun**.
+
+Hun stores the key in your Keychain. If you don't have a key yet, click **Buy Hun · $9**.
+
+Until Hun is activated, the menu bar panel says **Hun needs a license**, with **Open Hun** to get to the activation screen.
+
+## Move Hun to another Mac
+
+A key that's already on 3 Macs can't be activated on a fourth. To move it:
+
+1. On a Mac you no longer use, open **Settings › License**.
+2. Click **Deactivate…**, then **Deactivate**. Hun asks for the key again before it can be used on that Mac.
+3. Activate on the new Mac.
+
+If you try a key that's on as many Macs as it allows, Hun says: "This key is already active on as many Macs as it allows. Deactivate Hun on one of them and try again."
+
+## Offline use
+
+Hun checks your license with the license server when it opens, every 6 hours, and when your Mac wakes. If it can't reach the server, Hun keeps working for 72 hours after the last successful check. **Settings › License** shows **Offline grace period** while that's the case, and **Last verified** says when the last check succeeded.
+
+After 72 hours without a successful check, Hun shows **Could not verify your license**. Connect to the internet and click **Try again**.
+
+<Callout>
+If the server says the key is no longer valid, Hun asks for a key again, with the message "This license is no longer valid."
+</Callout>
+
+## Updates
+
+Hun checks for updates in the background. When a new version is ready, a line appears at the bottom of the sidebar, such as **Hun 0.4.4 is ready**.
+
+- Click the version to see what's new in the changelog.
+- Click the download arrow next to it to install the update.
+
+To check yourself, choose **Check for Updates…** from the app menu.
+
+Updates are signed and installed with Sparkle. The `hun` command on your PATH points into the app, so it updates with it.

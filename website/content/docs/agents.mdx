@@ -1,0 +1,79 @@
+---
+title: Agents
+description: Have Claude Code, Codex and Cursor start dev servers through Hun so you can see them, their logs and their ports.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Coding agents start dev servers all the time: to test a change, reproduce a bug or check a page. When they do it through Hun, those servers show up in the menu bar and the window with their logs, on ports that don't clash with your other projects, and you can stop them with one click.
+
+## Why start servers through Hun
+
+When an agent runs `npm run dev` itself, the server's output stays in the agent's session, it may take a port another project needs, and it keeps running after the agent is done. Hun still notices it: it appears as **outside Hun**, or under **Running elsewhere**. But you only get its logs if Hun started it.
+
+With Hun, the agent runs `hun run orbit` and:
+
+- Services start in dependency order, on free ports.
+- Logs land in the Hun window, where you and the agent can both read them.
+- The agent checks `hun status` first, so it doesn't start a second copy of something already running.
+
+## The Hun skill
+
+Hun installs an agent skill that tells agents how to use it. Each time the app opens, it copies the skill to:
+
+| Agent | Folder |
+| --- | --- |
+| Claude Code | `~/.claude/skills/hun` |
+| Codex | `~/.codex/skills/hun` |
+| Cursor | `~/.cursor/skills/hun` |
+| Other agents that read shared skills | `~/.agents/skills/hun` |
+
+Hun replaces its own skill to keep it current. If a different skill named `hun` already lives in one of those folders, Hun leaves it and reports an error.
+
+The skill tells agents to:
+
+- Start every dev server, worker and database in a project with a `.hun.yml` through `hun run`, never with `npm run dev`, `docker compose up` or similar.
+- Check `hun status` first, and look there instead of killing processes when a port is taken.
+- Use `hun restart`, `hun stop`, `hun logs` and `hun tail` with `project:service` targets.
+- Add a missing service to `.hun.yml` rather than starting it by hand.
+- Set up a `.hun.yml` when a project has none: one service per thing that runs, the commands the project already uses, `$PORT` for fixed ports, then `hun validate .` and `hun add . -y`.
+- Suggest profiles when a project has more than three or so services.
+- Use `/Applications/hun.app/Contents/Resources/hun` if `hun` isn't on the PATH, without installing anything or editing shell files.
+
+## Copy Agent Prompt
+
+For agents that don't load skills, or to start a setup by hand, open a project and choose **…** › **Copy Agent Prompt** in the header. When you add a project, **Improve with AI** in the review sheet copies the same prompt. Paste it into your agent. For `orbit` it looks like this:
+
+```text
+Use the Hun skill to set up .hun.yml for this project.
+
+- name: orbit
+- path: /Users/you/code/orbit
+- config: /Users/you/code/orbit/.hun.yml
+
+If your agent can't load skills, read the Hun skill from one of these:
+- /Users/you/.agents/skills/hun/SKILL.md
+- /Users/you/.codex/skills/hun/SKILL.md
+- /Users/you/.cursor/skills/hun/SKILL.md
+- /Users/you/.claude/skills/hun/SKILL.md
+- /Applications/hun.app/Contents/Resources/hun-skill/SKILL.md
+
+Keep it quick: use the commands the project already uses, change only what's wrong if a .hun.yml exists, run `hun validate .`, and tell me in a few lines what you set up. If there are more than three or so services, suggest profiles for what I usually run together.
+```
+
+## What to ask your agent
+
+Ask in plain words. A few examples, with what the agent runs:
+
+| You ask | The agent runs |
+| --- | --- |
+| "Set up Hun for this repo." | Writes `.hun.yml`, then `hun validate .` and `hun add . -y` |
+| "Start the API and check its logs for errors." | `hun status`, `hun run orbit -p api`, `hun logs orbit:server` |
+| "Restart the worker, I changed its config." | `hun restart orbit:worker` |
+| "I usually only need the frontend and the API. Make a profile." | Adds `profiles:` to `.hun.yml` and runs `hun validate .` |
+| "We need Redis for the cache." | Adds a `redis` service to `.hun.yml` and starts it with Hun |
+| "Stop everything for this project." | `hun stop orbit` |
+
+<Callout>
+`hun run` always uses Multitask mode, so an agent's `hun run` doesn't stop your other projects. See [Focus and Multitask](/docs/focus-and-multitask).
+</Callout>

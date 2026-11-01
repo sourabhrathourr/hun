@@ -1,0 +1,310 @@
+---
+title: CLI reference
+description: Every hun command, its flags and what it prints.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+The `hun` command controls the same daemon as the app, so anything you start from a terminal shows up in the menu bar and the window, and the other way round. Commands that need the daemon start it if it isn't running.
+
+Commands that act on a service take a `project:service` target, such as `orbit:server`. `project` is the `name` in `.hun.yml`.
+
+<Callout>
+If your shell can't find `hun`, use the copy inside the app: `/Applications/hun.app/Contents/Resources/hun`. See [Install](/docs/install#the-hun-command).
+</Callout>
+
+## Run and stop
+
+### `hun run`
+
+Starts a project, a profile or one service in [Multitask mode](/docs/focus-and-multitask#multitask), next to whatever is already running.
+
+```bash
+hun run <project>[:<service>] [-p <profile>]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `-p`, `--profile` | Profile from `.hun.yml` to run, or `all`. Defaults to the last one run. Can't be combined with `:service`. |
+
+```bash
+hun run orbit
+hun run orbit -p api
+hun run orbit:server
+```
+
+```text
+✓ Started orbit in parallel
+✓ Running orbit · api in parallel
+✓ Started orbit:server in parallel
+```
+
+Starting one service also starts what it depends on. Running a profile on a running project starts and stops only the difference.
+
+### `hun switch`
+
+Switches to a project in [Focus mode](/docs/focus-and-multitask#focus): stops every other project, then starts this one on its own ports.
+
+```bash
+hun switch <project> [-p <profile>] [-m <note>]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `-p`, `--profile` | Profile from `.hun.yml` to run, or `all`. Defaults to the last one run. |
+| `-m`, `--message` | A note to save for the project you're leaving. Hun shows it when you switch back. |
+
+```bash
+hun switch orbit -m "halfway through the billing migration"
+```
+
+```text
+Previous session:
+  Branch: main
+  Note: fixing the signup form
+
+✓ Switched to orbit
+```
+
+**Previous session** appears when Hun has a branch or note saved for the project you switch to.
+
+### `hun stop`
+
+Stops a project, one service, or everything.
+
+```bash
+hun stop <project>[:<service>]
+hun stop --all
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--all` | Stop every running project. |
+
+```text
+✓ Stopped orbit
+✓ Stopped orbit:worker
+All projects stopped.
+```
+
+Stopping a project also stops instances of its services that were started outside Hun.
+
+### `hun restart`
+
+Restarts a project or one service.
+
+```bash
+hun restart <project>[:<service>]
+```
+
+```text
+✓ Restarted orbit
+✓ Restarted orbit:server
+```
+
+A project restarts with its last profile, in the current mode. A service running outside Hun is stopped and started again under Hun, so its logs appear in Hun.
+
+## See what's running
+
+### `hun status`
+
+Shows running projects and their services. A ✓ means the service is ready.
+
+```bash
+hun status
+```
+
+```text
+● orbit
+  app                  ✓ :3000  running
+  postgres             ✓ :5432  running
+  server               ✓ :8000  running
+  worker               ✓        running
+```
+
+A service that something else started shows `running (outside hun)`. With nothing running, it prints `No running projects.`
+
+### `hun ports`
+
+Shows the port of every running service.
+
+```bash
+hun ports
+```
+
+```text
+orbit
+  app                  localhost:3000
+  postgres             localhost:5432
+  server               localhost:8000
+```
+
+When a project runs on fallback ports in Multitask, its name is followed by how far the ports moved, such as `orbit (+1)`.
+
+### `hun open`
+
+Opens a running service in your browser.
+
+```bash
+hun open [service]
+```
+
+```text
+Opening orbit:app at http://localhost:3000
+```
+
+Without a service name, it opens the first running service that has a port.
+
+## Logs
+
+### `hun logs`
+
+Prints a service's recent output, for piping or reading.
+
+```bash
+hun logs <project>:<service> [-n <lines>]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `-n`, `--lines` | Number of lines to show. Default `500`. |
+
+```text
+[14:02:11] INFO:     Uvicorn running on http://127.0.0.1:8000
+[14:02:11] INFO:     Application startup complete.
+```
+
+### `hun tail`
+
+Follows a service's output as it arrives. Press Ctrl+C to stop.
+
+```bash
+hun tail <project>:<service>
+```
+
+```text
+Streaming logs for orbit:server (Ctrl+C to stop)
+
+[14:02:11] INFO:     Uvicorn running on http://127.0.0.1:8000
+```
+
+## Projects
+
+### `hun init`
+
+Creates a `.hun.yml` in the current folder from what Hun detects there (`package.json`, Docker Compose files, `go.mod`, Python project files), then registers the project. It asks before writing.
+
+```bash
+hun init
+```
+
+```text
+✓ Created .hun.yml
+✓ Registered project: orbit
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--name` | Project name. Defaults to the folder name. |
+| `--profile` | How to treat services that exist both in Docker Compose and as local commands: `local`, `compose` or `hybrid` (local app services, Compose for infrastructure). Default `hybrid`. |
+| `-y`, `--yes` | Accept what Hun detects without asking. |
+| `--no-register` | Write `.hun.yml` without registering the project. |
+| `--reconfigure` | Generate a new `.hun.yml` even if one exists. The old one is saved as `.hun.yml.bak.<timestamp>`. |
+
+If the folder already has a `.hun.yml`, `hun init` keeps it and registers the project, unless you agree to replace it.
+
+### `hun add`
+
+Registers a folder that already has a `.hun.yml`.
+
+```bash
+hun add <path> [-y]
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `-y`, `--yes` | Register without asking. |
+
+```text
+✓ Registered project: orbit (/Users/you/code/orbit)
+```
+
+If the folder is already registered, it prints `Project orbit already registered.`
+
+### `hun remove`
+
+Stops a project's services and unregisters it. Its files are not touched.
+
+```bash
+hun remove <project>
+```
+
+```text
+✓ Removed project: orbit
+```
+
+### `hun list`
+
+Lists registered projects and their folders. ● marks running ones.
+
+```bash
+hun list
+```
+
+```text
+  atlas                /Users/you/code/atlas
+● orbit                /Users/you/code/orbit
+```
+
+### `hun validate`
+
+Checks a `.hun.yml` without running anything. Pass a folder or a file; the default is the current folder.
+
+```bash
+hun validate [path]
+```
+
+```text
+✓ .hun.yml valid (project: orbit, services: 4)
+```
+
+When something is wrong, it prints the problem, such as `service "worker": depends_on references unknown service "redis"`.
+
+## Diagnostics
+
+### `hun doctor`
+
+Checks Hun's folder, the daemon, the state file, every registered project's `.hun.yml`, the logs folder, the global config, and whether a newer release exists.
+
+```bash
+hun doctor
+```
+
+```text
+hun.sh doctor (version: v0.4.3)
+
+  ✓ hun directory             /Users/you/.hun
+  ✓ daemon                    running and responsive
+  ✓ state file                2 projects registered
+  ✓ project atlas             config valid
+  ✓ project orbit             config valid
+  ✓ logs directory            /Users/you/.hun/logs
+  ✓ global config             ports.default_offset=1
+  ✓ version check             up to date (v0.4.3)
+
+All checks passed!
+```
+
+A failed check shows ✗ and the reason, and the summary says `Some checks failed. See above for details.`
+
+### `hun version`
+
+Prints the CLI version and commit.
+
+```bash
+hun version
+```
+
+```text
+hun.sh v0.4.3 (commit: 505af08)
+```

@@ -1,5 +1,33 @@
 [
   {
+    "version": "0.4.4",
+    "date": "2026-11-01",
+    "title": "Clay, a warm palette for light mode",
+    "summary": "Choose a warmer look for light mode, and find your way around it more easily.",
+    "groups": [
+      {
+        "title": "New",
+        "changes": [
+          "Settings › Appearance has a Light palette option: Graphite, Hun's original look, or Clay, warm paper and ink with a terracotta accent. Dark mode stays as it is."
+        ]
+      },
+      {
+        "title": "Improved",
+        "changes": [
+          "In light mode, search fields and the selected option in controls like Service/All stand out from the background.",
+          "Opening Hun no longer puts the cursor in the sidebar search. Press ⌘P when you want it."
+        ]
+      },
+      {
+        "title": "Fixes",
+        "changes": [
+          "File pickers and other system controls in Hun use your macOS accent colour instead of green.",
+          "Settings no longer says a key has two activations. It works on up to 3 Macs."
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.4.3",
     "date": "2026-10-25",
     "title": "hun in your terminal, and quieter Docker starts",

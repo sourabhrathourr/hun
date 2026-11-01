@@ -56,14 +56,19 @@ nonisolated enum AppTheme {
         dark: 0xFFFFFF,
         darkOpacity: 0.04
     )
+    // Fields and selector tracks are a faint ink tint in light mode, as they're
+    // a faint white tint in dark: they show on every surface they sit on (the
+    // sidebar, the window, a card) and the white active segment stands out.
     static let searchField = color(
-        light: 0xFFFFFF,
+        light: 0x181816,
         dark: 0xFFFFFF,
+        lightOpacity: 0.045,
         darkOpacity: 0.035
     )
     static let modeSelectorBackground = color(
-        light: 0xF2F2EC,
+        light: 0x181816,
         dark: 0xFFFFFF,
+        lightOpacity: 0.055,
         darkOpacity: 0.035
     )
     /// Selected rows and cards share the search field's fill.
@@ -211,7 +216,7 @@ nonisolated enum AppTheme {
         NSColor(name: nil) { appearance in
             let usesDarkPalette = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
             return srgbColor(
-                hex: usesDarkPalette ? dark : light,
+                hex: usesDarkPalette ? dark : HunPalette.light(light),
                 opacity: usesDarkPalette ? darkOpacity : lightOpacity
             )
         }
@@ -235,7 +240,7 @@ nonisolated enum AppTheme {
                     alpha: darkOpacity
                 )
             }
-            return srgbColor(hex: light, opacity: lightOpacity)
+            return srgbColor(hex: HunPalette.light(light), opacity: lightOpacity)
         }
     }
 
@@ -346,4 +351,63 @@ struct HunRoundedShape: InsettableShape {
         shape.insetAmount += amount
         return shape
     }
+}
+
+
+/// Hun's light-mode palette, picked in Settings › Appearance. Every light
+/// colour above is written in Graphite; Clay swaps them for its own. Dark
+/// mode is always Graphite.
+nonisolated enum HunPalette: String, CaseIterable, Identifiable {
+    /// The original: neutral greys with an indigo accent.
+    case graphite
+    /// The website's: warm paper and ink with a terracotta accent.
+    case clay
+
+    static let key = "hun.appearance.palette"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .graphite: return "Graphite"
+        case .clay: return "Clay"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .graphite: return "pencil.tip"
+        case .clay: return "sun.horizon"
+        }
+    }
+
+    /// Read on every colour resolve, so it's kept in memory, not looked up.
+    nonisolated(unsafe) private(set) static var current: HunPalette =
+        UserDefaults.standard.string(forKey: key).flatMap(HunPalette.init) ?? .graphite
+
+    static func select(_ palette: HunPalette) {
+        current = palette
+        UserDefaults.standard.set(palette.rawValue, forKey: key)
+    }
+
+    /// Graphite light colour → Clay light colour.
+    private static let clayLight: [UInt32: UInt32] = [
+        0xF7F7F2: 0xF5F0E6, // app background, menu, dialog → paper
+        0xF2F2EC: 0xECE5D7, // sidebar, mode selector → a shade deeper than paper
+        0xFFFFFF: 0xFFFCF6, // raised: chips, buttons, fields, tabs → cream
+        0x181816: 0x1F1B16, // hairlines, hover and selection tints → ink
+        0x232321: 0x1F1B16, // primary text → ink
+        0x62625D: 0x4F483F, // secondary text
+        0x8B8B84: 0x8A8174, // tertiary text
+        0x4D4D49: 0x4F483F, // log text
+        0x92928B: 0x938A7D, // log timestamps
+        0x5E6AD2: 0xC24A1F, // accent → persimmon
+        0x27833F: 0x3E7B4F, // running green
+        0x1A1A18: 0x1F1B16, // update button fill → ink
+    ]
+
+    static func light(_ hex: UInt32) -> UInt32 {
+        current == .clay ? clayLight[hex] ?? hex : hex
+    }
+
 }

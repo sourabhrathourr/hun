@@ -1,52 +1,54 @@
 ---
-title: Introduction
-description: Why context switching is the enemy, and how hun defeats it.
+title: Hun documentation
+description: Run your local dev servers, workers and databases from one Mac app, one CLI and one config file.
 ---
 
-<img
-  src="https://res.cloudinary.com/djvbs5a8x/image/upload/v1771356053/hun-og_2x_xoflgq.png"
-  alt="hun.sh banner"
-  className="rounded-lg border border-white/10"
-/>
+import { Card, Cards } from 'fumadocs-ui/components/card';
 
-Welcome to **hun**.
+Hun is a Mac app that runs your project's dev servers, workers and databases from a `.hun.yml` file in the project. It starts them in dependency order on free ports, keeps their logs, and shows what's running from your menu bar. The `hun` command and your coding agents control the same services, so everything ends up in one place.
 
-If you are a developer in 2026, your brain is probably doing way more work than it should.
+<Cards>
+  <Card title="Install" href="/docs/install">
+    Download the app, paste your license key and get the `hun` command.
+  </Card>
+  <Card title="Quick start" href="/docs/getting-started">
+    Add your first project and run it.
+  </Card>
+  <Card title="Menu bar" href="/docs/menu-bar">
+    See what's running, and run, stop or switch projects.
+  </Card>
+  <Card title="The Hun window" href="/docs/window">
+    Services, logs, branches and a terminal for each project.
+  </Card>
+  <Card title="Agents" href="/docs/agents">
+    Let Claude Code, Codex or Cursor start servers through Hun.
+  </Card>
+  <Card title=".hun.yml reference" href="/docs/hun-yml">
+    Every field, with its type, default and behaviour.
+  </Card>
+  <Card title="CLI reference" href="/docs/cli">
+    Every `hun` command, with flags and sample output.
+  </Card>
+  <Card title="Troubleshooting" href="/docs/troubleshooting">
+    Fixes for ports, Docker, the license and stuck services.
+  </Card>
+</Cards>
 
-You are working on `Project A`. A notification pops up. You need to fix a critical bug in `Project B`.
-So you:
-1.  Stop the dev server for `Project A`.
-2.  Stop the database container.
-3.  Maybe kill a Redis instance you forgot about.
-4.  Navigate to `Project B`.
-5.  Start the database.
-6.  Start the backend.
-7.  Start the frontend.
-8.  Waiter... where is the log for the backend?
+## How Hun works
 
-By the time you are ready to write code, you have lost your flow. The "context switch" tax is real, and you pay it every single day.
+Hun has three parts:
 
-## The "Project First" Philosophy
+- **The app.** A menu bar item and a main window. It shows your projects and their services, and sends your clicks to the daemon.
+- **The daemon.** A background process that starts and stops your services, picks their ports and keeps their logs. Closing the window doesn't stop anything; the daemon keeps your services running.
+- **The `hun` CLI.** The app comes with it and puts it on your PATH. Every command talks to the same daemon, and starts it if it isn't running.
 
-**hun** changes the unit of operation from "process" to "project".
+The daemon keeps its files in `~/.hun`:
 
-It doesn't just run commands. It understands that your backend, frontend, database, and message queue are all part of *one thing*. When you want to work on that thing, you shouldn't have to assemble it manually every time.
+| Path | What it holds |
+| --- | --- |
+| `~/.hun/daemon.sock` | The socket the app and the CLI use to talk to the daemon |
+| `~/.hun/state.json` | Registered projects, what's running and each project's last profile |
+| `~/.hun/logs/` | Service logs, one file per service |
+| `~/.hun/config.yml` | Optional global settings, see [global config](/docs/hun-yml#global-config) |
 
-With hun:
--   **Global Command Center.** Run `hun` from anywhere to manage all your projects.
--   **Switching is instant.** Press `p`, pick a project, and the environment spins up instantly.
--   **The TUI is King.** A lightning-fast dashboard for all your running services. No more alt-tabbing between 5 terminal windows.
--   **Logs are civilized.** Logs are captured, categorized, and queryable from a unified interface.
--   **Ports are managed.** Need to run two projects at once? **hun** can auto-offset ports so they don't collide.
-
-## It's Not Magic, It's specific
-
-Under the hood, **hun** is a lightweight daemon that manages child processes.
-It's not a heavy container orchestrator like Kubernetes.
-It's not a generic terminal multiplexer like tmux.
-
-It is a tool built specifically for the local development lifecycle. It sits right between your terminal and your code, handling the boring stuff so you can stay in the zone.
-
-## Ready to stop fighting your terminal?
-
-Let's get you set up.
+If the daemon restarts, it starts the projects that were running before.

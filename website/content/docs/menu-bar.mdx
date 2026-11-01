@@ -1,0 +1,49 @@
+---
+title: Menu bar
+description: See what's running and run, stop or switch projects from the Hun menu bar icon.
+---
+
+Click the Hun icon in the menu bar to see every project, start or stop one, and open a running project in the browser. The icon switches on while any project is running.
+
+## The panel
+
+The top of the panel says how many projects are running, for example **1 project running**, or **Nothing running**. If a project crashed, it adds the count, as in **1 project running · 1 crashed**.
+
+Below that, projects are split in two lists:
+
+- **Running**: projects that are starting, running or crashed. Each one shows its profile and how many services it runs, such as **api · 3 services**, or **Starting…** or **Crashed**.
+- **Projects**: everything else. When the list is long, a **Find a project** field appears above it.
+
+Click any row to open that project in the Hun window.
+
+## Run, stop and switch
+
+Hover a row to see its action:
+
+| Project | Button on hover |
+| --- | --- |
+| Stopped, in Focus mode | **Switch to orbit**: stops the other projects and runs this one |
+| Stopped, in Multitask mode | **Run orbit**: runs it next to what's already running |
+| Running or starting | **Stop orbit** |
+| Crashed | **Restart orbit** stays visible; **Stop orbit** appears on hover and clears the crash |
+
+While an action is in progress, the row shows a spinner in place of the button.
+
+## Port chips
+
+A running project shows a chip with the port of its first running service that has one, such as `:3000`. Click it to open `http://localhost:3000` in your browser.
+
+## Focus | Multitask
+
+The switch at the top right sets the run mode for all of Hun:
+
+- **Focus**: one project runs at a time. Switching stops the others.
+- **Multitask**: run projects in parallel.
+
+See [Focus and Multitask](/docs/focus-and-multitask) for what each mode does to ports and running projects.
+
+## Open Hun
+
+**Open Hun** at the bottom opens the main window. While Hun is the active app, ⌘D does the same. The power button next to it quits Hun.
+
+If you have no projects yet, the panel says **No projects yet**. Add one from the window with **Add project**.

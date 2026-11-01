@@ -1,0 +1,60 @@
+---
+title: Docker
+description: How Hun starts Docker Desktop for services that need it, stops containers cleanly and reacts when Docker stops.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Services that run through Docker, such as a database in Docker Compose, work like any other service in Hun. Hun starts Docker Desktop when one of them needs it, and stops them if Docker stops answering.
+
+## Which services use Docker
+
+Hun treats a service as a Docker service when its command runs `docker` or `docker-compose`, including after `&&`, `;` or a prefix such as `env` or `sudo`:
+
+```yaml title=".hun.yml"
+services:
+  postgres:
+    cmd: docker compose up postgres
+    port: 5432
+```
+
+Give each Compose service its own Hun service, such as `docker compose up postgres` and `docker compose up redis`. Then `depends_on` can point at exactly what a service needs, and each one has its own logs.
+
+## Docker Desktop starts on its own
+
+When a Docker service starts and Docker isn't running, Hun starts Docker Desktop in the background, without bringing it to the front, and waits up to 90 seconds for it. The service's log shows:
+
+```text
+Docker isn't running; starting it in the background...
+Docker is ready.
+```
+
+Then the service starts as usual. If Docker isn't ready within 90 seconds, the service doesn't start and its log says why.
+
+## Stopping Docker services
+
+Stopping a Compose service gives Docker up to 15 seconds to stop the container, instead of the usual 5. After the command exits, Hun also stops any container it left running, so a stopped service doesn't keep its port.
+
+## When Docker stops answering
+
+While a Docker service runs, Hun checks Docker every 10 seconds. If Docker misses two checks in a row, Hun stops every running Docker service and marks it crashed, with this line in their logs:
+
+```text
+[hun] Docker stopped responding, so this service was stopped. Start Docker, then restart it.
+```
+
+Start Docker again, then click **Restart** on the service or the project.
+
+## Containers started outside Hun
+
+If a Compose container for one of your services is already running, for example from Docker Desktop or a terminal, the service shows as running with an **outside Hun** label. When you start or restart the service, Hun runs its `docker compose up` command, which attaches to the running container instead of creating a new one. Its log says:
+
+```text
+[hun] attaching to the container that is already running
+```
+
+From then on the container's logs stream into Hun.
+
+<Callout>
+Hun finds `docker` on your PATH, in the usual Homebrew folders and inside Docker Desktop's app bundle, so a fresh Docker Desktop install works without changing your shell.
+</Callout>

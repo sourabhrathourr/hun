@@ -1,0 +1,114 @@
+---
+title: Ports
+description: How Hun picks a port for each service, passes it to your command and handles ports that are already taken.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Hun gives every service with a `port` its own free port, passes it to your command, and tells you what's in the way when a port is taken.
+
+## How a service gets its port
+
+For each service with a `port` in `.hun.yml`, Hun:
+
+1. Reserves the port, so no other Hun service can take it, even while yours is still starting.
+2. Sets the `PORT` environment variable to it when it starts your command.
+3. Shows the port in the window, the menu bar and `hun status`.
+
+In [Focus mode](/docs/focus-and-multitask#focus) the service gets exactly the port in `.hun.yml`. In [Multitask mode](/docs/focus-and-multitask#multitask) it gets that port when it's free, and the next free one above it when it isn't.
+
+## Use `$PORT` in your command
+
+Many dev servers read `PORT` on their own. For one that takes its port as a flag, write `$PORT` in the command. Commands run through your shell, so the variable is expanded:
+
+```yaml title=".hun.yml"
+services:
+  app:
+    cmd: npm run dev -- --port $PORT
+    port: 3000
+```
+
+With `$PORT`, Hun can move the service when 3000 is busy. With a fixed `--port 3000`, it can't.
+
+## `port_env`
+
+If your app reads its port from a different variable, name it in `port_env`. Hun sets both `PORT` and that variable:
+
+```yaml title=".hun.yml"
+services:
+  server:
+    cmd: uv run server
+    port: 8000
+    port_env: API_PORT
+```
+
+`PORT` and the `port_env` variable win over a variable of the same name in `env`.
+
+## Services without a port
+
+A service without `port` gets no `PORT` variable. If it starts listening anyway, Hun reads the address it prints, such as `http://localhost:5173`, checks that the service really listens there, and shows that port. The log shows:
+
+```text
+[hun] detected runtime port 5173 (base 5173, offset 0)
+```
+
+## When a service binds a different port
+
+If a service with a `port` listens somewhere else, for example because its command ignores `PORT`:
+
+- In Multitask, Hun checks the new port and uses it.
+- In Focus, Hun stops the service and marks it crashed, with a line like this in its log:
+
+```text
+[hun] configured port 3000 but service bound 3001; stopping service
+```
+
+Make the command use `$PORT`, or set `port` to the port it really uses.
+
+## Port conflicts
+
+In Focus mode, a service needs its own port. If something else holds it, the service row says what:
+
+```text
+Port 3000 held by node · ~/scratch/demo
+```
+
+Click **Stop it & run** to stop that process and start the service. If you started the project and it failed on a port, the error banner at the top of the window shows the same holder with **Stop it & retry**.
+
+From the CLI, the error names the holder:
+
+```text
+Error: starting service app: port 3000 is held by node (pid 48120) in ~/scratch/demo
+```
+
+A few things Hun handles on its own:
+
+- In Focus, a port held by a leftover instance of another Hun project is freed without asking.
+- Hun won't stop a process that isn't running from a folder, such as a system service. Stop it yourself, or change the port in `.hun.yml`.
+- In Multitask, a taken port isn't a conflict. The service moves to the next free port.
+
+## Running elsewhere
+
+Hun watches for dev servers that are listening on a port but weren't started by Hun. It shows them in two places:
+
+- **In the project.** If the server belongs to one of your services (it uses the service's port, runs from its folder, or is its Docker Compose container), the service shows as running with an **outside Hun** label. Hun can stop it, and **Restart** moves it under Hun so its logs appear.
+- **Under Running elsewhere** in the sidebar, for servers that don't match a service. Each row shows the command, port and folder, or the project name with **not in .hun.yml**.
+
+Hover a **Running elsewhere** row to open it in the browser or stop it. For a server outside your projects, right-click it and choose **Add Project to Hun…** to add the git repository it runs from.
+
+Hun lists servers that run inside one of your projects or scanned folders. It leaves out shells, editors, coding agents and ports the system assigns.
+
+## Changing the step
+
+In Multitask, Hun tries the next port up by default. To jump by a larger step, set `ports.default_offset` in `~/.hun/config.yml`:
+
+```yaml title="~/.hun/config.yml"
+ports:
+  default_offset: 10
+```
+
+With this, a service that wants 3000 tries 3010, then 3020.
+
+<Callout>
+`hun ports` lists the port of every running service. See the [CLI reference](/docs/cli#hun-ports).
+</Callout>

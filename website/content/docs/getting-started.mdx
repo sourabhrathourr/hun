@@ -1,87 +1,125 @@
 ---
-title: Getting Started
-description: Your first 5 minutes with hun.
+title: Quick start
+description: Add your first project to Hun, run it and open it in the browser.
 ---
 
 import { Step, Steps } from 'fumadocs-ui/components/steps';
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
-Let's take `hun` for a spin.
-We will onboard a project, open the TUI, and run through the core workflow.
+In this guide you add a project, run all its services with one click and open it in the browser. The examples use a project called `orbit` with four services: a web app, an API server, a background worker and Postgres.
 
 <Steps>
 
 <Step>
-### Run Onboarding
+### Add the project
 
-Start from anywhere and run:
+A project is a folder with a `.hun.yml` file that lists its services. Hun can write that file for you, or your coding agent can.
 
-```bash
-hun onboard
+<Tabs items={['In the app', 'With your agent', 'In the terminal']}>
+<Tab value="In the app">
+
+1. In the Hun window, click **Add project** at the top of the sidebar, or press ⌘N.
+2. Choose the project folder.
+3. Hun reads `package.json`, Docker Compose files, `go.mod` and Python project files, and writes a `.hun.yml`. If the folder already has one, Hun keeps it.
+4. Check the file in **Review generated .hun.yml**:
+   - **Accept** adds the project to Hun.
+   - **Open in editor** lets you change the file first. Hun checks it as you type.
+   - **Improve with AI** copies a prompt for your coding agent to refine the file.
+   - **Discard** deletes the generated file and adds nothing.
+
+</Tab>
+<Tab value="With your agent">
+
+Ask your agent in the project folder:
+
+```text
+Set up Hun for this project.
 ```
 
-Choose your project path in the wizard.
-If `.hun.yml` is missing, **hun** detects services and creates it.
-It then registers the project and can open the TUI directly.
+Hun installs a skill for Claude Code, Codex and Cursor that tells the agent how to write `.hun.yml`, check it with `hun validate .` and register it with `hun add . -y`. See [Agents](/docs/agents).
 
-</Step>
+</Tab>
+<Tab value="In the terminal">
 
-<Step>
-### Open the TUI
-
-Run `hun` from anywhere. This opens your global **Command Center**.
+Run this in the project folder:
 
 ```bash
-hun
+hun init
 ```
 
-You will see the TUI.
-If your project isn't running yet, press `p` to open the **Project Picker**.
-Type `my-cool-project` and hit Enter.
+Hun detects your services, asks before writing `.hun.yml`, then registers the project:
 
-**hun** will now start your project in **Focus Mode**.
--   **Services are starting**: Watch them go from `STARTING` to `RUNNING` in real-time.
--   **Logs are live**: Select any service to see its output immediately.
+```text
+✓ Created .hun.yml
+✓ Registered project: orbit
+```
 
-**This is your new home.** You don't need to juggle multiple tabs anymore.
+</Tab>
+</Tabs>
 
+For `orbit`, the finished file looks like this:
+
+```yaml title=".hun.yml"
+name: orbit
+
+services:
+  app:
+    cmd: npm run dev
+    port: 3000
+  server:
+    cmd: uv run server
+    port: 8000
+    depends_on: [postgres]
+  worker:
+    cmd: uv run worker
+    depends_on: [postgres]
+  postgres:
+    cmd: docker compose up postgres
+    port: 5432
+```
+
+The [.hun.yml reference](/docs/hun-yml) covers every field.
 </Step>
 
 <Step>
-### View Logs
+### Run it
 
-Navigate with `↑` / `↓` keys.
-Press `Enter` on a service to expand its logs.
+Select **orbit** in the sidebar and click **Switch** in the project header. In Multitask mode the same button says **Run**. The difference is explained in [Focus and Multitask](/docs/focus-and-multitask).
 
-Press `Esc` to go back to the list.
+Hun starts `postgres` first, because `server` and `worker` depend on it, then the rest. Each service with a `port` gets it in the `PORT` environment variable.
 
-</Step>
-
-<Step>
-### Restart a Service
-
-Did you change a config file? Need to bounce the API?
-Just hover over the service and press `r`.
-
-</Step>
-
-<Step>
-### Quit TUI (Keep Running)
-
-When you are done looking at logs, just press `q`.
-**Your project keeps running in the background.**
-
-You can close your terminal, open a new one, and run `hun` again. Everything will be exactly where you left it.
-
-</Step>
-
-<Step>
-### Stop Everything
-
-When you are actually done for the day:
+From a terminal, the same thing is:
 
 ```bash
-hun stop
+hun switch orbit
 ```
-
 </Step>
+
+<Step>
+### Watch it in the menu bar
+
+Click the Hun icon in the menu bar. **orbit** is listed under **Running**, with how many services it runs. Hover the row to stop it. Click the row to open it in the Hun window.
+</Step>
+
+<Step>
+### Open it in the browser
+
+The `:3000` chip on the **orbit** row opens `http://localhost:3000`. In the window, click a service's port to open it, or run:
+
+```bash
+hun open app
+```
+</Step>
+
 </Steps>
+
+<Callout title="Projects under your code folders are found for you">
+Hun looks for `.hun.yml` files under `~/side-projects`, `~/projects`, `~/dev` and `~/work`, and adds the projects it finds. To scan other folders, set `scan_dirs` in the [global config](/docs/hun-yml#global-config).
+</Callout>
+
+## Next
+
+- Run only part of a project with [profiles](/docs/profiles).
+- Learn what each part of the window does in [The Hun window](/docs/window).
+- Let your agent start servers through Hun in [Agents](/docs/agents).

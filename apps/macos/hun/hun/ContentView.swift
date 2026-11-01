@@ -6,7 +6,7 @@ struct ContentView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var sidebarSearch = ""
     @State private var logSearch = ""
-    @State private var sidebarDocked = true
+    @State private var sidebarDocked: Bool
     @State private var sidebarRevealed = false
     @State private var sidebarRevealShowTask: Task<Void, Never>?
     @State private var sidebarRevealHideTask: Task<Void, Never>?
@@ -16,9 +16,15 @@ struct ContentView: View {
     @State private var terminalController = HunTerminalController()
     @State private var branchSwitcher = HunBranchModel()
     @FocusState private var sidebarSearchFocused: Bool
+    @State private var openingFocusCleared = false
     @AppStorage(HunLayout.roundedPanelsKey) private var roundedPanels = HunLayout.roundedPanelsDefault
     @AppStorage(HunSidebarMetrics.preferenceKey) private var sidebarWidthPreference = HunSidebarMetrics.defaultWidth
     private var sidebarWidth: CGFloat { HunSidebarMetrics.clamp(sidebarWidthPreference) }
+
+    /// `sidebarDocked: false` opens the window with the sidebar collapsed.
+    init(sidebarDocked: Bool = true) {
+        _sidebarDocked = State(initialValue: sidebarDocked)
+    }
 
     /// With the rounded layout the sidebar tone frames the window and the
     /// main pane sits on it as a rounded card.
@@ -111,6 +117,18 @@ struct ContentView: View {
         )
         .task {
             await store.refresh(force: true)
+        }
+        // AppKit gives a new window's first text field the keyboard, which
+        // put the cursor in the sidebar search every time Hun opened. Clear it
+        // once, when the window first becomes key; ⌘P still focuses it.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
+            guard !openingFocusCleared, let window = note.object as? NSWindow else { return }
+            openingFocusCleared = true
+            DispatchQueue.main.async {
+                guard let editor = window.firstResponder as? NSTextView, editor.isFieldEditor else { return }
+                sidebarSearchFocused = false
+                window.makeFirstResponder(nil)
+            }
         }
         .onChange(of: store.selectedProjectID) { _, projectID in
             settingsSection = nil

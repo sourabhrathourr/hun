@@ -12,3 +12,5 @@ services:
 detect:
     version: v2
     profile: hybrid
+profiles:
+    website: [hun]
