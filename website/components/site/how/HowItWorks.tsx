@@ -109,7 +109,7 @@ function Steps() {
       </li>
       <li className="hw2-s3">
         <Caption n={3} title="See it, stop it">
-          Hun’s switch in your menu bar turns on and lists orbit with its port. One click opens it, another stops it.
+          Hun’s switch in your menu bar turns on, and so does orbit’s. Click a port to open it; flip the switch to stop it.
         </Caption>
         <figure className="hw2-fig" aria-label="Hun's menu bar panel listing orbit as running, with port 3000 and a Stop button under the pointer.">
           <div aria-hidden>
@@ -258,8 +258,8 @@ export const css = `
 @media (prefers-reduced-motion: reduce) { .tw-caret.blink { animation: none; } }
 
 /* The menu bar corner. */
-.mg { position: relative; --mg-bg: #F7F7F2; --mg-divider: rgba(24,24,22,.07); --mg-dividerStrong: rgba(24,24,22,.12); --mg-rowHover: rgba(24,24,22,.035);
-  --mg-text1: #232321; --mg-text2: #62625D; --mg-text3: #8B8B84; --mg-danger: #B84040; }
+.mg { position: relative; --mg-bg: #FBF8F3; --mg-divider: rgba(31,27,22,.07); --mg-dividerStrong: rgba(31,27,22,.12); --mg-rowHover: rgba(31,27,22,.05);
+  --mg-text1: #1F1B16; --mg-text2: #4F483F; --mg-text3: #8A8174; --mg-danger: #B84040; --mg-success: #3E7B4F; --mg-ink: #2B2622; }
 .mg-tray { position: relative; overflow: hidden; transform-origin: 0 0; isolation: isolate; background-color: var(--tray);
   background-image: var(--bg-menu, url(/site/bg/scene-menu.jpg)); background-size: cover; background-position: 70% 0; }
 .mg-bar { position: absolute; inset: 0 0 auto 0; display: flex; align-items: center; justify-content: flex-end; padding: 0 22px 0 6px;
@@ -267,9 +267,11 @@ export const css = `
   box-shadow: inset 0 -.5px 0 rgba(0,0,0,.12); font-size: 13px; line-height: 16px; color: rgba(0,0,0,.85); z-index: 2; }
 .mg-item { height: 22px; display: flex; align-items: center; padding: 0 7px; }
 .mg-item svg { display: block; }
-.mg-panel { position: absolute; top: 29px; right: 8px; width: 340px; border-radius: 12px; overflow: hidden; background: var(--mg-bg); color: var(--mg-text1);
-  box-shadow: inset 0 0 0 1px var(--mg-dividerStrong), 0 0 0 .5px rgba(0,0,0,.06), 0 10px 32px rgba(0,0,0,.16), 0 2px 6px rgba(0,0,0,.06);
-  -webkit-font-smoothing: subpixel-antialiased; }
+.mg-panel { position: absolute; top: 29px; right: 8px; width: 340px; border-radius: 26px; overflow: hidden; color: var(--mg-text1);
+  background: #E9DCC6 url(/site/bg/pricing-hero.jpg) 35% 45% / cover;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.12), 0 0 0 .5px rgba(0,0,0,.06), 0 14px 40px rgba(0,0,0,.2), 0 2px 6px rgba(0,0,0,.06);
+  -webkit-font-smoothing: antialiased; }
+.mg-sill { margin: 10px; border-radius: 16px; overflow: hidden; background: rgba(251,248,243,.95); box-shadow: inset 0 0 0 1px var(--mg-divider); }
 .mg-seg { background: #fff; }
 .mg-chip { color: var(--mg-text2); background: #fff; }
 .mg .hw-spin { animation: mg-spin 1s steps(8) infinite; }

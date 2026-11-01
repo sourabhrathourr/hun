@@ -91,7 +91,7 @@ export const hr = (h: number) => Math.min(12, h * 0.3);
 export const stroke = (c: string) => `0 0 0 .5px ${c}, inset 0 0 0 .5px ${c}`;
 
 const css = `
-.hw { --hw-appBg: #F7F7F2; --hw-sidebar: #F2F2EC; --hw-white: #FFFFFF; --hw-divider: rgba(24,24,22,.07); --hw-dividerStrong: rgba(24,24,22,.12); --hw-hover: rgba(24,24,22,.035); --hw-rowHover: rgba(24,24,22,.01925); --hw-floatingBorder: rgba(24,24,22,.09); --hw-floatingShadow: rgba(24,24,22,.10); --hw-text1: #232321; --hw-text2: #62625D; --hw-text3: #8B8B84; --hw-logText: #4D4D49; --hw-logTime: #92928B; --hw-accent: #5E6AD2; --hw-success: #27833F; --hw-warning: #A76418; --hw-danger: #B84040; --hw-menuBg: rgba(250,250,248,.94); --hw-pill: rgba(250,250,247,.82); --hw-sel: #F2F2EC; }
+.hw { --hw-appBg: #FBF8F3; --hw-sidebar: #F5F0E6; --hw-white: #FFFCF6; --hw-divider: rgba(31,27,22,.07); --hw-dividerStrong: rgba(31,27,22,.12); --hw-hover: rgba(31,27,22,.035); --hw-rowHover: rgba(31,27,22,.01925); --hw-floatingBorder: rgba(31,27,22,.09); --hw-floatingShadow: rgba(31,27,22,.10); --hw-text1: #1F1B16; --hw-text2: #4F483F; --hw-text3: #8A8174; --hw-logText: #4F483F; --hw-logTime: #938A7D; --hw-accent: #C24A1F; --hw-success: #3E7B4F; --hw-warning: #A76418; --hw-danger: #B84040; --hw-menuBg: rgba(251,248,243,.94); --hw-pill: rgba(251,248,243,.82); --hw-sel: #F5F0E6; }
 .hw { -webkit-font-smoothing: subpixel-antialiased; font-synthesis: none; text-rendering: optimizeLegibility; }
 .hw *, .hw *::before, .hw *::after { box-sizing: border-box; }
 .hw button { all: unset; box-sizing: border-box; cursor: default; }
@@ -109,7 +109,7 @@ const css = `
 .hw .mode:hover { background: ${T.rowHover} !important; color: ${T.text1} !important; }
 .hw .ab-secondary:hover { background: ${T.hover} !important; }
 .hw .ab-danger:hover { background: rgba(184,64,64,.12) !important; box-shadow: ${"0 0 0 .5px rgba(184,64,64,.4), inset 0 0 0 .5px rgba(184,64,64,.4)"} !important; color: ${T.danger} !important; }
-.hw .ab-primary { background: rgba(94,106,210,.92); }
+.hw .ab-primary { background: rgba(194,74,31,.92); }
 .hw .ab-primary:hover { background: ${T.accent}; }
 .hw .ab:disabled { pointer-events: none; }
 .hw .chip:hover { background: ${T.hover} !important; box-shadow: 0 0 0 .5px rgba(139,139,132,.32), inset 0 0 0 .5px rgba(139,139,132,.32) !important; }
@@ -119,7 +119,7 @@ const css = `
 .hw .lb:hover { background: ${T.hover} !important; color: ${T.text1} !important; }
 .hw .lb:disabled { opacity: .45; pointer-events: none; }
 .hw .press:active { opacity: .78; }
-.hw button:focus-visible, .hw [role=button]:focus-visible { outline: 2px solid rgba(94,106,210,.55); outline-offset: 1px; }
+.hw button:focus-visible, .hw [role=button]:focus-visible { outline: 2px solid rgba(194,74,31,.55); outline-offset: 1px; }
 .hw .lt:hover { border-color: var(--hw-dividerStrong); transform: scale(1.03); }
 .hw .mi:hover { background: #2F6FEB; color: #fff; }
 .hw .mi:hover .mi-k { color: rgba(255,255,255,.8); }
@@ -1337,7 +1337,7 @@ function LogsTail({ lines, showService, query }: { lines: LogLine[]; showService
             }}
           >
             {i === lines.length - 1 && (
-              <span aria-hidden style={{ position: "absolute", left: oneLine ? -14 : -22, right: oneLine ? -14 : -22, top: -0.5, bottom: 0.5, background: "rgba(94,106,210,.13)" }} />
+              <span aria-hidden style={{ position: "absolute", left: oneLine ? -14 : -22, right: oneLine ? -14 : -22, top: -0.5, bottom: 0.5, background: "rgba(194,74,31,.13)" }} />
             )}
             <span style={{ position: "relative", fontSize: 11, lineHeight: "11px", letterSpacing: MLS[11], color: T.logTime }}>{l.time.padEnd(13, " ") + "  "}</span>
             {showService && (
