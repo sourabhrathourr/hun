@@ -1,12 +1,10 @@
 import { source } from "@/lib/source";
-import {
-  DocsPage,
-  DocsBody,
-  DocsTitle,
-  DocsDescription,
-} from "fumadocs-ui/layouts/docs/page";
+import { DocsPage, DocsBody } from "fumadocs-ui/layouts/docs/page";
 import { notFound } from "next/navigation";
+import { findNeighbour } from "fumadocs-core/page-tree";
 import { getMDXComponents } from "@/mdx-components";
+import { DocsBanner, DocsPager } from "@/components/docs/docs-page-parts";
+import { DocsPageHeader } from "@/components/docs/docs-header";
 import type { Metadata } from "next";
 
 export default async function Page(props: {
@@ -17,12 +15,32 @@ export default async function Page(props: {
   if (!page) notFound();
 
   const { body: Mdx, toc, title, description } = page.data;
+  const tree = source.getPageTree();
+  const { previous, next } = findNeighbour(tree, page.url);
+  const slug = (params.slug ?? []).join("/");
+
+  // The home page keeps the same grid as every other page (TOC column
+  // included), so moving between them doesn't shift the frame.
+  if (slug === "") {
+    return (
+      <DocsPage
+        toc={toc}
+        className="docs-home"
+        breadcrumb={{ enabled: false }}
+        footer={{ component: <DocsPager previous={previous} next={next} /> }}
+      >
+        <DocsBanner title={title} description={description} start={next} />
+        <DocsBody className="docs-prose">
+          <Mdx components={getMDXComponents()} />
+        </DocsBody>
+      </DocsPage>
+    );
+  }
 
   return (
-    <DocsPage toc={toc}>
-      <DocsTitle>{title}</DocsTitle>
-      <DocsDescription>{description}</DocsDescription>
-      <DocsBody>
+    <DocsPage toc={toc} breadcrumb={{ enabled: false }} footer={{ component: <DocsPager previous={previous} next={next} /> }}>
+      <DocsPageHeader slug={slug} title={title} description={description} />
+      <DocsBody className="docs-prose">
         <Mdx components={getMDXComponents()} />
       </DocsBody>
     </DocsPage>
@@ -42,10 +60,8 @@ export async function generateMetadata(props: {
 
   const description = page.data.description ?? "The hun.sh documentation.";
 
-  const ogUrl = new URL("https://hun.sh/api/og");
-  ogUrl.searchParams.set("type", "docs");
-  ogUrl.searchParams.set("title", page.data.title);
-  ogUrl.searchParams.set("description", description);
+  const slug = (params.slug ?? []).join("/");
+  const ogUrl = `/og/docs/${slug ? `${slug}/` : ""}image.png`;
 
   return {
     title: page.data.title,
@@ -56,7 +72,7 @@ export async function generateMetadata(props: {
       url: `/docs/${(params.slug ?? []).join("/")}`,
       images: [
         {
-          url: ogUrl.toString(),
+          url: ogUrl,
           width: 1200,
           height: 630,
           alt: page.data.title,
@@ -67,7 +83,7 @@ export async function generateMetadata(props: {
       card: "summary_large_image",
       title: page.data.title,
       description: description,
-      images: [ogUrl.toString()],
+      images: [ogUrl],
     },
   };
 }

@@ -1,0 +1,86 @@
+---
+title: Profiles
+description: Run only the services you need with named sets of services in .hun.yml.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+A profile is a named set of services that run together, such as the frontend alone, or the API and its worker. Pick a profile and Hun runs those services and the services they depend on, and nothing else.
+
+## Define profiles
+
+Add a `profiles` section to `.hun.yml`. List the services you work on; their `depends_on` services come along without being listed.
+
+```yaml title=".hun.yml"
+name: orbit
+
+services:
+  app:
+    cmd: npm run dev
+    port: 3000
+  server:
+    cmd: uv run server
+    port: 8000
+    depends_on: [postgres]
+  worker:
+    cmd: uv run worker
+    depends_on: [postgres]
+  postgres:
+    cmd: docker compose up postgres
+    port: 5432
+
+profiles:
+  ui: [app]
+  api: [server, worker]   # postgres starts too: both depend on it
+```
+
+- `ui` runs `app`.
+- `api` runs `server`, `worker` and `postgres`.
+- **All services**, or `all` in the CLI, runs everything. It's built in, so you can't name a profile `all`. To give it another name, write `everything: all`.
+
+The rules Hun checks: profile names can't be empty, repeated or `all`, each profile lists at least one service, and every service it lists exists.
+
+## Pick a profile
+
+**In the window**, use the profile menu in the project header. It shows the current profile, or **All services**.
+
+- If the project is running, Hun switches to the new profile and changes only the difference. Services in both profiles keep running, the ones you no longer need stop, and the missing ones start.
+- If the project is stopped, the choice becomes the profile it runs next time. Nothing starts.
+
+The profile menu appears once `.hun.yml` has at least one profile. In the menu bar, a running project shows its profile next to the service count, as in **api · 3 services**.
+
+**In the terminal**, add `-p` to `hun run` or `hun switch`:
+
+```bash
+hun run orbit -p api
+```
+
+```text
+✓ Running orbit · api in parallel
+```
+
+On a running project this switches profiles the same way, starting and stopping only the difference.
+
+## Hun remembers the last profile
+
+Hun remembers the profile each project last ran. **Run**, **Switch**, **Restart**, `hun run orbit` and `hun switch orbit` use it when you don't name one. `-p all` runs every service and clears it. If you delete the remembered profile from `.hun.yml`, the project runs every service.
+
+## Save running services as a profile
+
+Start the services you want, then choose **Save Running Services as Profile…** from the profile menu or the **…** menu in the project header. Name the profile and click **Save**.
+
+Hun adds it to the `profiles` section of `.hun.yml`, replaces a profile with the same name, and leaves comments elsewhere in the file alone. The new profile becomes the one the project runs next. Names can use letters, numbers, `-` and `_`.
+
+**…** works even before the file has any profiles, so it's the quickest way to create the first one.
+
+## Edit profiles
+
+Choose **Edit Profiles in .hun.yml** from the profile menu to open the file in Hun's editor. Hun checks the profiles as you type and won't save a file it can't run.
+
+## Services outside the profile
+
+By default the **Services** list hides services the current profile doesn't run, and the count says how many are shown, such as **2 of 4**. Turn on **Settings › Appearance › Services outside the profile** to list them dimmed below the rest, under **Not in api**.
+
+<Callout>
+A service that's running always shows, even if the profile doesn't include it, for example one you started on its own or outside Hun.
+</Callout>

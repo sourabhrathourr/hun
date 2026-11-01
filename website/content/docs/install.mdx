@@ -1,84 +1,75 @@
 ---
-title: Installation
-description: One minute to install, zero minutes to maintain.
+title: Install
+description: Download Hun, move it to Applications, activate it with your license key and get the hun command.
 ---
 
-## Choose your OS
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+import { Callout } from 'fumadocs-ui/components/callout';
 
-**hun** is a single binary with zero runtime dependencies. It installs in seconds.
+You can have Hun running in a couple of minutes. You need a license key, the app, and nothing else.
 
-### macOS & Linux
+## Requirements
 
-The easiest way is via Homebrew.
+- A Mac with Apple silicon.
+- macOS 15 or later.
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/), only if your projects run services with `docker` or `docker compose`.
+- Git, only for the branch switcher.
 
-```bash
-brew tap hundotsh/tap
-brew install hun
-```
+## Install Hun
 
-Or if you prefer a direct script (auditable, of course):
+<Steps>
 
-```bash
-curl -fsSL https://hun.sh/install.sh | sh
-```
+<Step>
+### Buy a license
 
-### From Source (Go)
+Hun is a one-time purchase of $9. One key works on up to 3 Macs, and updates are included. Buy it on the [pricing page](/pricing). Your license key appears after checkout and in your purchase email.
+</Step>
 
-If you have Go installed and want to build from source:
+<Step>
+### Download the app
 
-```bash
-go install github.com/sourabhrathourr/hun@latest
-```
+Download the latest [`hun-macos-arm64.dmg`](https://github.com/sourabhrathourr/hun/releases/latest/download/hun-macos-arm64.dmg) from GitHub releases.
+</Step>
 
-## Verify Installation
+<Step>
+### Move it to Applications
 
-Once installed, verify that `hun` is in your PATH.
+Open the disk image and drag **hun** into **Applications**. Then open Hun from Applications.
 
-```bash
-hun --version
-```
+Hun has to run from `/Applications` to put the `hun` command on your PATH.
+</Step>
 
-If that prints a version number, you are good to go.
+<Step>
+### Paste your license key
 
-Then run onboarding:
+Hun opens on **Activate Hun**. Paste the key from your purchase email into **License key** and click **Activate Hun**.
 
-```bash
-hun onboard
-```
+The Hun icon appears in your menu bar, and the main window opens.
+</Step>
 
-This gives you a quick TUI-first setup flow and registers your first project.
+</Steps>
 
-### Note on Shell Integration
+## The `hun` command
 
-**hun** does *not* require any shell plugins, aliases, or weird `.rc` file modifications. It just works as a standard CLI tool.
+When Hun starts from `/Applications`, it links the `hun` command that ships inside the app into the first of these folders it can write to:
 
-However, many users like to alias `h` to `hun` because they use it so much.
+1. `/usr/local/bin`
+2. `/opt/homebrew/bin`
+3. `~/.local/bin` (created if needed)
 
-```bash
-# Optional: Add to basic shell config
-alias h=hun
-```
+Hun keeps that link pointing at the current app after every update. If one of those folders already has a `hun` that didn't come from the app, Hun leaves it alone.
 
-## Upgrade
-
-Keep your `hun` fresh.
-
-### Homebrew
+Open a new terminal and check:
 
 ```bash
-brew upgrade hun
+which hun
+hun version
 ```
 
-### Script
+<Callout title="hun: command not found?">
+If Hun linked into `~/.local/bin`, that folder may not be on your PATH. You can always run the copy inside the app: `/Applications/hun.app/Contents/Resources/hun`. See [troubleshooting](/docs/troubleshooting#hun-command-not-found).
+</Callout>
 
-Just run the install script again. It detects existing installations and updates the binary.
+## Next
 
-```bash
-curl -fsSL https://hun.sh/install.sh | sh
-```
-
-### Go
-
-```bash
-go install github.com/sourabhrathourr/hun@latest
-```
+Add your first project in the [quick start](/docs/getting-started).

@@ -1,0 +1,236 @@
+---
+title: .hun.yml reference
+description: Every field in a project's .hun.yml file and in Hun's global config, with types, defaults and behaviour.
+---
+
+Each project has a `.hun.yml` in its root folder. It names the project and lists the services that run during development. Commit it, so everyone on the project gets the same setup.
+
+## Full example
+
+```yaml title=".hun.yml"
+name: orbit
+
+services:
+  app:
+    cmd: npm run dev
+    port: 3000
+  server:
+    cmd: uv run server
+    cwd: ./api
+    port: 8000
+    port_env: API_PORT
+    ready: "Application startup complete"
+    env:
+      LOG_LEVEL: debug
+    depends_on: [postgres]
+  worker:
+    cmd: uv run worker
+    cwd: ./api
+    depends_on: [postgres]
+    restart: on_failure
+  postgres:
+    cmd: docker compose up postgres
+    port: 5432
+
+profiles:
+  ui: [app]
+  api: [server, worker]
+
+hooks:
+  pre_start: ./scripts/check-env.sh
+  post_stop: ./scripts/cleanup.sh
+
+logs:
+  max_size: 20MB
+  max_files: 5
+  retention: 14d
+```
+
+Check a file any time with `hun validate`. Hun ignores keys it doesn't know, so a typo such as `depend_on` is skipped without an error.
+
+## Project fields
+
+### `name`
+
+**Type:** string. **Required.**
+
+The project's name. You use it in commands, such as `hun run orbit`, and Hun shows it everywhere. If another registered folder already uses the name, Hun registers this one under a different key based on its location and tells you which.
+
+```yaml
+name: orbit
+```
+
+### `services`
+
+**Type:** map of service name to [service](#service-fields). **Required**, at least one service.
+
+Each key is the service's name, used in `project:service` targets such as `hun logs orbit:server`.
+
+### `profiles`
+
+**Type:** map of profile name to a list of service names, or to `all`. **Default:** none.
+
+Named sets of services to run together. A profile runs the services it lists and everything they depend on. Profiles appear in the app in the order you write them.
+
+```yaml
+profiles:
+  ui: [app]
+  api: [server, worker]
+  everything: all
+```
+
+Hun rejects a profile with an empty name, the name `all`, a repeated name, no services, or a service that doesn't exist. See [Profiles](/docs/profiles).
+
+### `hooks`
+
+**Type:** map. **Default:** none.
+
+Shell commands that run in the project folder.
+
+| Field | When it runs |
+| --- | --- |
+| `pre_start` | Before Hun starts the first service of a stopped project. If it fails, nothing starts and the error says `pre_start hook failed`. |
+| `post_stop` | After Hun stops the project. Errors are ignored. |
+
+```yaml
+hooks:
+  pre_start: ./scripts/check-env.sh
+  post_stop: ./scripts/cleanup.sh
+```
+
+Hooks get `HUN_HOOK=1` in their environment. A hook can't start or stop projects with the `hun` CLI.
+
+### `logs`
+
+**Type:** map. **Default:** `max_size: 10MB`, `max_files: 3`, `retention: 7d`.
+
+How Hun rotates each service's log file in `~/.hun/logs/<project>/<service>.log`.
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `max_size` | string | `10MB` | Size at which a log file rotates. Accepts `MB`, `M` or `GB`. |
+| `max_files` | integer | `3` | How many rotated files to keep. |
+| `retention` | string | `7d` | How long to keep rotated files, in days (`14d`). |
+
+The daemon also keeps the last 10,000 lines of each service in memory, for the window and `hun logs`. Those lines are cleared when the service restarts or the project stops; the files on disk keep their history.
+
+### `detect`
+
+**Type:** map. Written by `hun init`.
+
+Records how `hun init` generated the file. `profile` is one of `local`, `compose` or `hybrid`; any other value is an error. You don't need to edit it.
+
+```yaml
+detect:
+  version: v2
+  profile: hybrid
+```
+
+## Service fields
+
+### `cmd`
+
+**Type:** string. **Required.**
+
+The command that starts the service. Hun runs it with your shell (`$SHELL -c`), so `&&`, pipes and variables such as `$PORT` work. Hun adds common tool folders to `PATH` for it, including Homebrew, nvm, Volta, mise, asdf, Bun, Deno, Cargo, Go, pyenv, rbenv and Docker Desktop.
+
+```yaml
+cmd: npm run dev -- --port $PORT
+```
+
+### `cwd`
+
+**Type:** string. **Default:** the project folder.
+
+The folder to run `cmd` in, relative to the project folder.
+
+```yaml
+cwd: ./api
+```
+
+### `port`
+
+**Type:** integer. **Default:** none.
+
+The port the service listens on. Hun reserves it, sets `PORT` to it, and shows it in the app. In Focus mode the service must get exactly this port; in Multitask it moves to the next free port when this one is taken. See [Ports](/docs/ports).
+
+```yaml
+port: 3000
+```
+
+A service without `port` gets no `PORT` variable. If it listens anyway, Hun detects the port from its output.
+
+### `port_env`
+
+**Type:** string. **Default:** none.
+
+Another variable to set to the service's port, for apps that don't read `PORT`. Hun sets both.
+
+```yaml
+port: 8000
+port_env: API_PORT
+```
+
+### `env`
+
+**Type:** map of string to string. **Default:** none.
+
+Extra environment variables for the service. `PORT` and the `port_env` variable take priority over the same names here. Don't put secrets in `.hun.yml`.
+
+```yaml
+env:
+  NODE_ENV: development
+  LOG_LEVEL: debug
+```
+
+### `depends_on`
+
+**Type:** list of service names. **Default:** none.
+
+Services that start before this one. Starting a service, from the app or with `hun run orbit:server`, starts its dependencies first. Hun rejects unknown names and cycles.
+
+```yaml
+depends_on: [postgres]
+```
+
+### `ready`
+
+**Type:** string. **Default:** none.
+
+Text the service prints once it's up. Hun looks for it in each line of output, as plain text, not a pattern. Until it appears, the service shows a ring instead of a solid dot, `hun status` leaves out its ✓, and services that depend on it wait. They wait at most 30 seconds, then start anyway.
+
+Without `ready`, Hun counts a service as ready one second after it starts.
+
+```yaml
+ready: "Application startup complete"
+```
+
+### `restart`
+
+**Type:** string, `on_failure` or empty. **Default:** empty.
+
+With `on_failure`, Hun restarts the service one second after it crashes, as long as its port is free. A service that exits on its own without an error, or that you stop, isn't restarted.
+
+```yaml
+restart: on_failure
+```
+
+## Global config
+
+`~/.hun/config.yml` holds settings for all of Hun. It's optional. **Settings › About › Global config** reveals it in Finder.
+
+```yaml title="~/.hun/config.yml"
+scan_dirs:
+  - ~/code
+  - ~/work/clients
+
+ports:
+  default_offset: 1
+```
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `scan_dirs` | list of folders | `~/side-projects`, `~/projects`, `~/dev`, `~/work` | Folders Hun searches for `.hun.yml` files. Projects it finds are added automatically. Setting this replaces the defaults. |
+| `ports.default_offset` | integer | `1` | In Multitask, how far Hun steps to find the next free port. |
+
+Hun skips hidden folders, such as `.git` and `.venv`, while it searches. If you remove a found project from Hun, it stays removed.

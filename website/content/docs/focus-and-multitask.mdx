@@ -1,0 +1,55 @@
+---
+title: Focus and Multitask
+description: Choose between running one project at a time on its own ports, or several projects side by side.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+Hun has two run modes. **Focus** runs one project at a time, on the ports in its `.hun.yml`. **Multitask** runs several projects side by side and moves a service to the next free port when its own is taken.
+
+Switch modes with the **Focus | Multitask** switch in the menu bar panel, or the mode menu at the bottom of the window's sidebar. The mode applies to all of Hun.
+
+## Focus
+
+Use Focus when you work on one project at a time. In Focus mode the start button says **Switch**.
+
+When you switch to a project, Hun:
+
+1. Stops every other running project. That includes services of your other Hun projects that were started outside Hun, such as a dev server you ran in a terminal.
+2. Waits for the ports in the project's `.hun.yml` to free up.
+3. Starts the project on exactly those ports.
+
+If a port is still held by something that isn't one of your projects, the service doesn't start. Hun names what holds the port and offers to stop it. See [port conflicts](/docs/ports#port-conflicts).
+
+Turning on Focus while several projects run keeps one: the project selected in the window, otherwise the last one you started. The others stop. If the one that stays was on fallback ports, Hun moves it back to its own ports.
+
+From a terminal:
+
+```bash
+hun switch orbit
+```
+
+## Multitask
+
+Use Multitask to run two projects at once, for example a client and the API it talks to. In Multitask mode the start button says **Run**, and starting a project leaves the others running.
+
+If a service's port is taken, Hun tries the next port up until it finds a free one, and passes that port in `PORT`. For example, if `orbit`'s `app` wants 3000 and another project already uses it, `app` gets 3001.
+
+From a terminal:
+
+```bash
+hun run orbit
+```
+
+<Callout>
+`hun run` always starts in Multitask and `hun switch` always uses Focus. Hun's mode follows the last one you used.
+</Callout>
+
+## Which to pick
+
+| You want to | Use |
+| --- | --- |
+| Work on one project, with its usual URLs | Focus |
+| Be sure nothing from another project is still running | Focus |
+| Run two projects that talk to each other | Multitask |
+| Keep a shared service running while you switch between apps | Multitask |

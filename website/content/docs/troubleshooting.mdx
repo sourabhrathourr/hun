@@ -1,37 +1,143 @@
 ---
 title: Troubleshooting
-description: When things go wrong.
+description: Fixes for taken ports, Docker, the hun command, the license and services that won't start.
 ---
 
-## Common Issues
+import { Callout } from 'fumadocs-ui/components/callout';
 
-### "Service Starting..." forever
-Check the `ready` configuration in `.hun.yml`.
-If you set `ready: "Server started"`, **hun** greps the logs for that exact string.
-If your server actually prints `Server is running`, **hun** will never switch from `STARTING` to `RUNNING`.
+Start with `hun doctor`. It checks the daemon, your projects' `.hun.yml` files and Hun's folders, and points at what's wrong. See the [CLI reference](/docs/cli#hun-doctor).
 
-**Fix:** Update `.hun.yml` or remove the `ready` check.
+## A port is held by another process
 
-### "Address already in use"
-This usually happens if:
-1.  You have a stray process running outside of **hun**.
-2.  Two services in the same project try to use the same port.
-3.  The service ignores its selected Multitask fallback port and does not provide its own available fallback.
+In Focus mode, a service needs the exact port in `.hun.yml`. When something else holds it, the service shows **Port 3000 held by …**, or starting fails with:
 
-**Fix**:
-1.  `hun stop --all`
-2.  `lsof -i :3000` (check for stray processes)
-3.  `kill -9 <PID>`
+```text
+port 3000 is held by node (pid 48120) in ~/scratch/demo
+```
 
-### Daemon won't start
-Check `~/.hun/logs/daemon.log`.
-Ensure permissions on `~/.hun/daemon.sock` are correct (your user should own it).
+Fix it one of these ways:
 
-## Reporting Bugs
+- Click **Stop it & run** on the service, or **Stop it & retry** in the error banner, to stop the holder and start the service.
+- Switch to **Multitask**, where the service moves to the next free port.
+- Change `port` in `.hun.yml`.
 
-Please open an issue on GitHub with:
-1.  Your OS (macOS/Linux)
-2.  `hun --version`
-3.  Relevant logs from `~/.hun/logs/`
+Hun won't stop a process that isn't running from a folder, such as a system service. You'll see `won't stop …: it isn't running from a project folder`. Stop it yourself or use another port.
 
-We appreciate it!
+## A service stops right after it starts
+
+If the log ends with a line like this, the service listened on a different port from the one Hun gave it:
+
+```text
+[hun] configured port 3000 but service bound 3001; stopping service
+```
+
+This happens in Focus mode when the command ignores `PORT`. Pass it on, for example `npm run dev -- --port $PORT`, or set `port` to the port the service really uses. See [Ports](/docs/ports#use-port-in-your-command).
+
+## A service won't start
+
+When Hun can't start a service, the last line of its log says why:
+
+```text
+[hun] could not start: …
+```
+
+Common causes:
+
+- **Command not found.** When the app starts the daemon, services get your login shell's environment. Hun also adds the usual tool folders (Homebrew, nvm, Volta, mise, asdf, Bun, Cargo, Go, pyenv and others). If you installed a tool somewhere else, or changed your shell config after the daemon started, restart the daemon from **Settings › Daemon › Restart daemon**, or use the tool's full path in `cmd`.
+- **`pre_start hook failed`.** The project's `pre_start` hook exited with an error. Run it yourself in the project folder to see why.
+- **Wrong `cwd`.** `cwd` is relative to the project folder.
+
+## A service is stuck starting
+
+A service with `ready` shows a ring, not a solid dot, until it prints that text. If it never does:
+
+- Check the exact text in the service's logs. Hun matches it as plain text and it's case-sensitive.
+- Remove `ready` if the service doesn't print a fixed line.
+
+Services that depend on it wait at most 30 seconds, then start anyway.
+
+## Docker isn't running
+
+When a Docker service starts, Hun starts Docker Desktop and waits up to 90 seconds. If the log says:
+
+```text
+[hun] could not start: Docker was started, but it did not become ready within 1m30s: …
+```
+
+open Docker Desktop, wait until it's running, then click **Restart**. If it says `starting Docker:` instead, Docker Desktop isn't installed or couldn't open. Install it from [docker.com](https://www.docker.com/products/docker-desktop/).
+
+If Docker crashes or quits while services use it, Hun stops them and their logs say:
+
+```text
+[hun] Docker stopped responding, so this service was stopped. Start Docker, then restart it.
+```
+
+See [Docker](/docs/docker).
+
+## `hun`: command not found
+
+The app puts `hun` in `/usr/local/bin`, `/opt/homebrew/bin` or `~/.local/bin`, but only when Hun runs from `/Applications`.
+
+1. Make sure **hun** is in `/Applications`, then quit and reopen it.
+2. If the link is in `~/.local/bin`, add that folder to your PATH. For zsh, add this line to `~/.zshrc` and open a new terminal:
+
+   ```bash
+   export PATH="$HOME/.local/bin:$PATH"
+   ```
+
+3. You can always run the copy inside the app:
+
+   ```bash
+   /Applications/hun.app/Contents/Resources/hun status
+   ```
+
+Agents get the same advice from the [Hun skill](/docs/agents#the-hun-skill).
+
+## `hun` runs an older version
+
+If one of those folders already had a `hun` that didn't come from the app, for example from Homebrew, Hun leaves it there, and your shell may run it instead. Check:
+
+```bash
+which hun
+hun version
+```
+
+If `which hun` doesn't point into `/Applications/hun.app`, remove the other copy (`brew uninstall hun` if it came from Homebrew), then quit and reopen Hun to create the link.
+
+<Callout type="warn">
+Keep only one `hun`. A `hun` from another release can restart the daemon to match itself, which also restarts your running services.
+</Callout>
+
+## The license can't be validated
+
+| Message | What to do |
+| --- | --- |
+| **Could not verify your license**: "Hun could not validate your license. Check your connection and try again." | Hun hasn't reached the license server for over 72 hours. Connect to the internet and click **Try again**. |
+| "This key is already active on as many Macs as it allows." | Deactivate Hun on a Mac you no longer use in **Settings › License**, then try again. See [License and updates](/docs/license-and-updates#move-hun-to-another-mac). |
+| "That license key isn't valid. Check the key and try again." | Copy the key again from your purchase email, without extra spaces or characters. |
+| "This key is not for Hun." | The key belongs to another product. Use the key from your Hun purchase. |
+| "Couldn't connect to the license service. Check your internet connection and try again." | Check your connection, VPN or firewall, then try again. |
+
+## A project doesn't show up
+
+- Hun finds projects on its own only under `~/side-projects`, `~/projects`, `~/dev` and `~/work`, or the folders in [`scan_dirs`](/docs/hun-yml#global-config). For any other folder, use **Add project** or `hun add . -y`.
+- A `.hun.yml` with an error isn't picked up. Run `hun validate` in the folder to see the problem.
+- If you removed the project from Hun earlier, add it again with **Add project**.
+
+If a project shows "No .hun.yml in this folder. It may be on another branch.", the file isn't on the current branch. Switch to a branch that has it.
+
+## No logs for a service
+
+A service marked **outside Hun** was started by something else, so its output went there. Click **Restart in Hun** in the logs panel to run it under Hun and capture its logs.
+
+## Hun stops responding
+
+Open **Settings › Daemon**. If the status isn't **Healthy**, click **Restart**. Your running services restart with the daemon.
+
+## Report a bug
+
+Include:
+
+- **Settings › About › Diagnostics › Copy**, which has the app and daemon versions, process and socket.
+- The output of `hun doctor`.
+- The service's log from `~/.hun/logs/<project>/<service>.log`, if a service is involved.

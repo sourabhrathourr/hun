@@ -1,0 +1,101 @@
+---
+title: The Hun window
+description: Manage a project's services, logs, branch and terminal from the main Hun window.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+
+The Hun window is where you run a project, read its logs, switch its branch and open a terminal in it. Open it from the menu bar with **Open Hun**, or press ⌘D while Hun is active.
+
+## Sidebar
+
+- **Search** filters projects by name or path.
+- **Add project** (⌘N) adds a folder. See the [quick start](/docs/getting-started).
+- Projects are grouped by the folder they live in. Click a group name to collapse it.
+- **Running elsewhere** lists dev servers that Hun didn't start. See [Ports](/docs/ports#running-elsewhere).
+- At the bottom, the mode menu switches between **Focus** and **Multitask**, and the gear opens **Settings** (⌘,).
+
+Right-click a project for **Reveal in Finder** and **Remove from Hun…**. Removing stops the project's services and stops listing it. The folder and its `.hun.yml` are not touched, and you can add it again any time.
+
+## Project header
+
+The header shows the project's name and a line with:
+
+- Its status: **Running**, **Stopped**, **Crashed** or **Starting…**.
+- Its git branch. Click it to open the [branch switcher](#branch-switcher).
+- Its folder.
+
+If `.hun.yml` has a problem, the error appears under that line.
+
+On the right:
+
+- **The profile menu**, when `.hun.yml` has profiles. See [Profiles](/docs/profiles).
+- **Switch** (in Focus mode) or **Run** (in Multitask mode) starts the project. While it runs, this button is **Stop**.
+- **Restart** stops and starts every service in the current profile.
+- **…** holds **Edit .hun.yml**, **Save Running Services as Profile…**, **Choose Logo…**, **Reset Logo** and **Copy Agent Prompt**.
+
+**Edit .hun.yml** opens the file in Hun's editor. Hun checks the file as you type and shows **Valid** or the problem. Press ⌘S or click **Save**; Hun won't save a file it can't run.
+
+## Services
+
+The **Services** list shows each service with its command, process ID and port.
+
+- A solid dot means the service is ready. A ring means it's still starting.
+- **crashed** or **starting** appears next to the name when the service needs attention.
+- **outside Hun** means the service is running, but something else started it, such as a terminal or an agent. Restart it to run it in Hun with logs.
+- Click the port of a running service to open it in the browser.
+- **Port 3000 held by …** with **Stop it & run** appears when another process holds the service's port. See [Ports](/docs/ports#port-conflicts).
+
+Click a service to show its logs. Right-click it for **Run**, **Restart**, **Stop**, **Edit .hun.yml** and **Remove from Hun**, which deletes the service from `.hun.yml`.
+
+### Crashed services
+
+When a service exits on its own with an error, it shows as **crashed**, and the project shows **Crashed** in the header and the menu bar. Click **Restart** to try again, or **Stop** to clear it. If Hun couldn't start the service at all, the reason is the last line of its log, starting with `[hun] could not start:`.
+
+To have Hun restart a service after it crashes, set [`restart: on_failure`](/docs/hun-yml#restart).
+
+## Logs
+
+The logs panel shows the selected service's output as it arrives.
+
+- **Search logs** filters the lines shown.
+- The copy button copies every visible line.
+- The trash button clears the logs on screen. The log files on disk keep their history.
+- **Service | All** switches between the selected service and every service in the project.
+
+Scroll up to pause. **Live tail** brings you back to the newest lines and shows how many arrived meanwhile.
+
+If a service was started outside Hun, its output went to whatever started it. Click **Restart in Hun** to run it under Hun and capture its logs.
+
+## Terminal
+
+Press ⌘J, or choose **View › Toggle Terminal**, to open a terminal under the project. Each project has its own shell, which starts in the project folder with your login shell's environment. Drag the top edge to resize it.
+
+- ⌘K (**Clear Terminal**) clears it.
+- ⌘J again hides it. Switch projects while it's open to get that project's shell.
+- If the shell exits, the arrow button starts a new one.
+
+## Branch switcher
+
+Click the branch in the project header to switch branches without leaving Hun.
+
+- Type to filter local and remote branches. Use the arrow keys and Return to pick one.
+- Type a name that doesn't exist and choose **Create branch** to create it.
+- **Fetch** checks the remote for new branches and commits without changing your files.
+
+If you have uncommitted changes, Hun offers **Stash & switch**. It stashes them, untracked files included, and you can bring them back later with `git stash pop`. Hun won't switch while a merge, rebase or conflict is in progress.
+
+## Settings
+
+Click the gear at the bottom of the sidebar, or press ⌘,.
+
+| Section | What's there |
+| --- | --- |
+| **Appearance** | **Theme** (System, Light or Dark), **Services outside the profile** and **Refined layout** |
+| **Daemon** | Status, version, process ID and socket of the background daemon, and **Restart daemon** |
+| **License** | Your plan, its status, when it was last verified, and **Deactivate…** for this Mac |
+| **About** | App and daemon versions, **Diagnostics** to copy for a bug report, and shortcuts to the Hun folder, global config, state file and logs |
+
+<Callout>
+**Restart daemon** restarts your running services with it. Try it if Hun stops responding.
+</Callout>

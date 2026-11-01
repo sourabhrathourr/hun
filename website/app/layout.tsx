@@ -1,58 +1,44 @@
-import { GeistSans } from "geist/font/sans";
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
+
+const title = "Hun · Always know what's running, and on which port";
+const description =
+  "A menu bar app for the dev servers on your Mac. Your agents start them through Hun, and you see every one, with its port and its logs.";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://hun.sh"),
-  title: {
-    default: "Hun — a native macOS workspace for local development",
-    template: "%s",
-  },
-  description:
-    "Switch projects, run services, inspect Git changes, use project terminals, and follow logs from one native macOS workspace.",
+  title: { default: title, template: "%s" },
+  description,
   openGraph: {
     type: "website",
     locale: "en_US",
     url: "https://hun.sh",
-    siteName: "hun.sh",
-    title: "Hun — a native macOS workspace for local development",
-    description:
-      "Projects, services, Git, terminals, and logs in one native macOS workspace.",
-    images: [{ url: "/api/og/macos", width: 1200, height: 630 }],
+    siteName: "Hun",
+    title,
+    description,
   },
   twitter: {
     card: "summary_large_image",
-    title: "Hun — a native macOS workspace for local development",
-    description:
-      "Projects, services, Git, terminals, and logs in one native macOS workspace.",
-    images: ["/api/og/macos"],
+    title,
+    description,
   },
-  robots: {
-    index: true,
-    follow: true,
-  },
-  other: {
-    "theme-color": "#0a0a0a",
-    "color-scheme": "dark",
-  },
+  robots: { index: true, follow: true },
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+// The whole site is warm paper: Safari tints its bars from this.
+export const viewport: Viewport = {
+  themeColor: "#F5F0E6",
+  colorScheme: "light",
+};
+
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html
-      lang="en"
-      className="dark"
-      style={{ colorScheme: "dark" }}
-      suppressHydrationWarning
-    >
+    <html lang="en" style={{ colorScheme: "light", background: "#F5F0E6" }} suppressHydrationWarning>
       <head>
-        <link rel="icon" type="image/png" href="/hun-app-icon.png" />
+        <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+        <link rel="apple-touch-icon" href="/hun-app-icon.png" />
       </head>
-      <body className={`${GeistSans.className} antialiased`}>{children}</body>
+      <body className="antialiased">{children}</body>
     </html>
   );
 }
