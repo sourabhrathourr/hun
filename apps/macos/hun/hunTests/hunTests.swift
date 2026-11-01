@@ -2373,3 +2373,304 @@ private extension HunDaemonProject {
         )
     }
 }
+
+// MARK: - Website renders (opt-in)
+
+/// Draws the real menu bar panel and window with sample projects into PNGs
+/// for the website. Runs only when HUN_RENDER_DIR is set, e.g.
+/// `TEST_RUNNER_HUN_RENDER_DIR=/tmp/renders xcodebuild test ...`.
+@MainActor
+@Suite(.enabled(if: ProcessInfo.processInfo.environment["HUN_RENDER_DIR"] != nil))
+struct HunWebsiteRenders {
+    private var outDir: URL {
+        URL(fileURLWithPath: ProcessInfo.processInfo.environment["HUN_RENDER_DIR"] ?? NSTemporaryDirectory())
+    }
+
+    private struct Svc {
+        let name: String, cmd: String, port: Int, pid: Int
+        var running = true
+        var docker = false
+        var json: String {
+            let runtime = docker ? #","runtime":"docker""# : ""
+            return """
+            {"id":"\(name)","name":"\(name)","cmd":"\(cmd)","pid":\(running ? pid : 0),"port":\(port),\
+            "status":"\(running ? "running" : "stopped")","running":\(running),"ready":\(running)\(runtime)}
+            """
+        }
+    }
+
+    private func project(
+        _ name: String, running: Bool, active: Bool = false, extra: String = "", _ services: [Svc]
+    ) -> String {
+        let home = NSHomeDirectory()
+        return """
+        {"id":"\(name)","name":"\(name)","path":"\(home)/code/\(name)","icon_custom":false,\
+        "status":"\(running ? "running" : "stopped")","is_active":\(active),"branch":"main",\(extra)\
+        "services":[\(services.map(\.json).joined(separator: ","))]}
+        """
+    }
+
+    private func snapshot(_ projects: [String], active: String) throws -> HunDaemonSnapshot {
+        let json = """
+        {"protocol":2,"mode":"multitask","active_project":"\(active)","scan_dirs":[],"warnings":[],\
+        "projects":[\(projects.joined(separator: ","))]}
+        """
+        return try JSONDecoder().decode(HunDaemonSnapshot.self, from: Data(json.utf8))
+    }
+
+    private var everyday: [String] {
+        [
+            project("orbit", running: true, active: true, [
+                Svc(name: "app", cmd: "npm run dev", port: 3000, pid: 48211),
+                Svc(name: "server", cmd: "uv run server", port: 8000, pid: 48190),
+                Svc(name: "worker", cmd: "uv run worker", port: 0, pid: 48195),
+                Svc(name: "postgres", cmd: "docker compose up postgres", port: 5432, pid: 48177, docker: true),
+            ]),
+            project("docs", running: true, [Svc(name: "site", cmd: "npm run dev", port: 3001, pid: 51022)]),
+            project("blog", running: false, [Svc(name: "web", cmd: "npm run dev", port: 3000, pid: 0, running: false)]),
+            project("mobile-api", running: false, [
+                Svc(name: "api", cmd: "go run ./cmd/api", port: 8080, pid: 0, running: false),
+            ]),
+        ]
+    }
+
+    private var dockerStack: [String] {
+        [
+            project("atlas", running: true, active: true, [
+                Svc(name: "web", cmd: "npm run dev", port: 3000, pid: 61204),
+                Svc(name: "api", cmd: "docker compose up api", port: 8000, pid: 61180, docker: true),
+                Svc(name: "worker", cmd: "docker compose up worker", port: 0, pid: 61183, docker: true),
+                Svc(name: "postgres", cmd: "docker compose up postgres", port: 5432, pid: 61171, docker: true),
+                Svc(name: "redis", cmd: "docker compose up redis", port: 6379, pid: 61174, docker: true),
+            ]),
+            project("blog", running: false, [Svc(name: "web", cmd: "npm run dev", port: 3000, pid: 0, running: false)]),
+            project("docs", running: false, [Svc(name: "site", cmd: "npm run dev", port: 3000, pid: 0, running: false)]),
+        ]
+    }
+
+    /// shop running just its "api" profile: the backend and what it needs.
+    private var profileStack: [String] {
+        let profiles = #""profile":"api","profiles":[{"name":"ui","services":["app"],"resolved":["app"]},"#
+            + #"{"name":"api","services":["server","worker"],"resolved":["server","worker","postgres"]}],"#
+        return [
+            project("orbit", running: true, active: true, extra: profiles, [
+                Svc(name: "app", cmd: "npm run dev", port: 3000, pid: 0, running: false),
+                Svc(name: "server", cmd: "uv run server", port: 8000, pid: 52310),
+                Svc(name: "worker", cmd: "uv run worker", port: 0, pid: 52314),
+                Svc(name: "postgres", cmd: "docker compose up postgres", port: 5432, pid: 52302, docker: true),
+            ]),
+            project("docs", running: false, [Svc(name: "site", cmd: "npm run dev", port: 3000, pid: 0, running: false)]),
+            project("blog", running: false, [Svc(name: "web", cmd: "npm run dev", port: 3000, pid: 0, running: false)]),
+            project("mobile-api", running: false, [
+                Svc(name: "api", cmd: "go run ./cmd/api", port: 8080, pid: 0, running: false),
+            ]),
+        ]
+    }
+
+    private var serverLogs: [HunLogLine] {
+        lines("orbit", "server", [
+            ("10:02:11.208", "INFO:     Uvicorn running on 127.0.0.1:8000"),
+            ("10:02:11.211", "INFO:     Started reloader process [52310]"),
+            ("10:02:12.480", "INFO:     Started server process [52318]"),
+            ("10:02:12.733", "INFO:     Application startup complete."),
+            ("10:03:40.019", "INFO:     GET /health 200 OK"),
+            ("10:04:02.556", "INFO:     GET /v1/cart 200 OK"),
+            ("10:04:02.871", "INFO:     POST /v1/cart/items 201 Created"),
+            ("10:04:19.330", "INFO:     GET /v1/orders/1042 200 OK"),
+            ("10:05:44.902", "WARNING:  api/orders.py changed, reloading"),
+            ("10:05:45.617", "INFO:     Started server process [52342]"),
+            ("10:05:45.870", "INFO:     Application startup complete."),
+            ("10:06:03.115", "INFO:     GET /v1/orders/1042 200 OK"),
+            ("10:06:21.448", "INFO:     GET /v1/cart 200 OK"),
+            ("10:06:39.902", "INFO:     POST /v1/checkout 200 OK"),
+        ])
+    }
+
+    private func lines(_ project: String, _ service: String, _ entries: [(String, String)]) -> [HunLogLine] {
+        entries.map { time, text in
+            HunLogLine(HunDaemonLogLine(
+                timestamp: "2026-11-01T\(time)Z", service: service, project: project, text: text, isErr: false
+            ))
+        }
+    }
+
+    private var appLogs: [HunLogLine] {
+        lines("orbit", "app", [
+            ("09:12:04.118", "> orbit-app@1.4.0 dev"),
+            ("09:12:04.119", "> next dev --port 3000"),
+            ("09:12:05.602", "   ▲ Next.js 15.2.4"),
+            ("09:12:05.603", "   - Local:        http://localhost:3000"),
+            ("09:12:05.931", " ✓ Starting..."),
+            ("09:12:07.284", " ✓ Ready in 1681ms"),
+            ("09:14:21.502", " ○ Compiling / ..."),
+            ("09:14:23.017", " ✓ Compiled / in 1.5s (812 modules)"),
+            ("09:14:23.240", " GET / 200 in 1738ms"),
+            ("09:14:30.884", " ○ Compiling /dashboard ..."),
+            ("09:14:31.902", " ✓ Compiled /dashboard in 1018ms (904 modules)"),
+            ("09:14:32.115", " GET /dashboard 200 in 1131ms"),
+            ("09:14:32.406", " GET /api/projects 200 in 42ms"),
+            ("09:15:02.771", " GET /dashboard 200 in 38ms"),
+            ("09:15:03.012", " POST /api/tasks 201 in 64ms"),
+            ("09:15:09.448", " GET /projects/42 200 in 51ms"),
+            ("09:15:12.903", " GET /api/projects/42 200 in 88ms"),
+            ("09:15:21.336", " POST /api/invites 200 in 214ms"),
+            ("09:15:21.590", " GET /projects/42/tasks 200 in 47ms"),
+            ("09:16:02.118", " ○ Compiling /projects/[id] ..."),
+            ("09:16:03.007", " ✓ Compiled /projects/[id] in 889ms (931 modules)"),
+            ("09:16:03.214", " GET /projects/7 200 in 1096ms"),
+            ("09:16:03.488", " GET /api/projects/7 200 in 31ms"),
+            ("09:16:40.751", " GET / 200 in 29ms"),
+        ])
+    }
+
+    /// Short lines for the phone render, so the narrow log column doesn't wrap.
+    private var phoneLogs: [HunLogLine] {
+        lines("orbit", "app", [
+            ("09:12:04.119", "> next dev --port 3000"),
+            ("09:12:05.602", "  ▲ Next.js 15.2.4"),
+            ("09:12:07.284", " ✓ Ready in 1681ms"),
+            ("09:14:23.017", " ✓ Compiled / in 1.5s"),
+            ("09:14:23.240", " GET / 200 in 1738ms"),
+            ("09:14:31.902", " ✓ Compiled /dashboard"),
+            ("09:14:32.115", " GET /dashboard 200 in 113ms"),
+            ("09:14:32.406", " GET /api/projects 200 in 42ms"),
+            ("09:15:02.771", " GET /dashboard 200 in 38ms"),
+            ("09:15:03.012", " POST /api/tasks 201 in 64ms"),
+            ("09:15:09.448", " GET /projects/42 200 in 51ms"),
+            ("09:15:12.903", " GET /api/projects/42 200"),
+            ("09:15:21.336", " POST /api/invites 200"),
+            ("09:15:21.590", " GET /projects/42/tasks 200"),
+            ("09:16:03.214", " GET /projects/7 200 in 96ms"),
+            ("09:16:03.488", " GET /api/projects/7 200"),
+            ("09:16:40.751", " GET / 200 in 29ms"),
+        ])
+    }
+
+    private var apiLogs: [HunLogLine] {
+        lines("atlas", "api", [
+            ("08:41:02.211", " Container atlas-redis-1  Running"),
+            ("08:41:02.214", " Container atlas-postgres-1  Running"),
+            ("08:41:02.390", " Container atlas-api-1  Started"),
+            ("08:41:02.402", "Attaching to api-1"),
+            ("08:41:04.117", "api-1  | Running migrations... done"),
+            ("08:41:05.631", "api-1  | Uvicorn running on http://0.0.0.0:8000"),
+            ("08:41:05.702", "api-1  | Started reloader process [1]"),
+            ("08:41:06.954", "api-1  | Application startup complete."),
+            ("08:43:18.330", "api-1  | GET /v1/projects 200 OK"),
+            ("08:43:18.512", "api-1  | GET /v1/projects/42/tasks 200 OK"),
+            ("08:43:41.097", "api-1  | POST /v1/tasks 201 Created"),
+            ("08:43:41.260", "api-1  | GET /v1/projects/42/tasks 200 OK"),
+            ("08:44:02.415", "api-1  | GET /v1/me 200 OK"),
+            ("08:44:09.771", "api-1  | PATCH /v1/tasks/318 200 OK"),
+            ("08:44:10.026", "api-1  | GET /v1/projects/42/tasks 200 OK"),
+            ("08:44:31.552", "api-1  | POST /v1/comments 201 Created"),
+            ("08:44:31.804", "api-1  | GET /v1/tasks/318 200 OK"),
+            ("08:45:02.140", "api-1  | GET /v1/projects 200 OK"),
+            ("08:45:02.377", "api-1  | GET /v1/projects/7/tasks 200 OK"),
+            ("08:45:18.912", "api-1  | DELETE /v1/tasks/290 204 No Content"),
+            ("08:45:19.105", "api-1  | GET /v1/projects/7/tasks 200 OK"),
+        ])
+    }
+
+    private func png(_ view: NSView, name: String, scale: CGFloat = 2) throws {
+        view.layoutSubtreeIfNeeded()
+        view.displayIfNeeded()
+        let bounds = view.bounds
+        let rep = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: Int(bounds.width * scale), pixelsHigh: Int(bounds.height * scale),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        rep.size = bounds.size
+        view.cacheDisplay(in: bounds, to: rep)
+        let data = try #require(rep.representation(using: .png, properties: [:]))
+        try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+        try data.write(to: outDir.appendingPathComponent("\(name).png"))
+    }
+
+    private func store(_ projects: [String], select project: String) async throws -> HunStore {
+        let client = MockDaemonClient()
+        client.nextSnapshot = try snapshot(projects, active: project)
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false)
+        await store.refresh(force: true)
+        store.selectProject(project)
+        return store
+    }
+
+    private func settle(_ ms: Int = 700) async throws {
+        try await Task.sleep(for: .milliseconds(ms))
+    }
+
+    private func renderWindow(
+        _ store: HunStore, service: String, logs: [HunLogLine], size: CGSize,
+        appearance: NSAppearance, name: String, sidebar: Bool = true, servicesWidth: Double? = nil
+    ) async throws {
+        // The split is a saved preference shared with the real app: set it for
+        // this render only, and put the user's own value back afterwards.
+        let key = HunWorkspacePanelPreference.servicesWidth
+        let saved = UserDefaults.standard.object(forKey: key)
+        if let servicesWidth { UserDefaults.standard.set(servicesWidth, forKey: key) }
+        defer {
+            if servicesWidth != nil {
+                if let saved { UserDefaults.standard.set(saved, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+            }
+        }
+        store.selectedServiceID = service
+        let rect = NSRect(origin: .zero, size: size)
+        let window = NSWindow(
+            contentRect: rect,
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            backing: .buffered, defer: false
+        )
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.appearance = appearance
+        let host = NSHostingView(rootView: AnyView(ContentView(sidebarDocked: sidebar).environment(store).environment(HunUpdater())))
+        host.frame = rect
+        window.contentView = host
+        window.setFrame(window.frameRect(forContentRect: rect), display: false)
+        try await settle(900)
+        store.logFeed.replace(with: logs)
+        try await settle(900)
+        try png(try #require(host.superview), name: name)
+    }
+
+    @Test(arguments: [("light", NSAppearance.Name.aqua), ("dark", NSAppearance.Name.darkAqua)])
+    func renderMenuAndWindows(theme: String, appearanceName: NSAppearance.Name) async throws {
+        let appearance = try #require(NSAppearance(named: appearanceName))
+        NSApp.appearance = appearance
+
+        let menuStore = try await store(everyday, select: "orbit")
+        let menu = NSHostingView(rootView: AnyView(
+            MenuBarView().environment(menuStore).frame(width: 340).fixedSize(horizontal: false, vertical: true)
+        ))
+        menu.appearance = appearance
+        menu.frame = NSRect(origin: .zero, size: CGSize(width: 340, height: menu.fittingSize.height))
+        let menuWindow = NSWindow(contentRect: menu.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        menuWindow.appearance = appearance
+        menuWindow.contentView = menu
+        try await settle()
+        try png(menu, name: "menu-\(theme)")
+
+        // Sized to the page's layout, so each point is exactly two pixels.
+        try await renderWindow(
+            try await store(everyday, select: "orbit"), service: "app", logs: appLogs,
+            size: CGSize(width: 1056, height: 660), appearance: appearance, name: "window-\(theme)"
+        )
+        // Phone-sized windows with the sidebar collapsed, for the site's small screens.
+        try await renderWindow(
+            try await store(everyday, select: "orbit"), service: "app", logs: phoneLogs,
+            size: CGSize(width: 680, height: 500), appearance: appearance,
+            name: "window-phone-\(theme)", sidebar: false, servicesWidth: 228
+        )
+        try await renderWindow(
+            try await store(dockerStack, select: "atlas"), service: "api", logs: apiLogs,
+            size: CGSize(width: 1056, height: 660), appearance: appearance, name: "window-docker-\(theme)"
+        )
+        try await renderWindow(
+            try await store(profileStack, select: "orbit"), service: "server", logs: serverLogs,
+            size: CGSize(width: 1056, height: 660), appearance: appearance, name: "window-profile-\(theme)"
+        )
+    }
+}

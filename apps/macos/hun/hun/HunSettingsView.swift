@@ -224,6 +224,9 @@ struct HunSettingsPage: View {
 private struct HunAppearanceSettings: View {
     @AppStorage(HunLayout.roundedPanelsKey) private var roundedPanels = HunLayout.roundedPanelsDefault
     @AppStorage(HunTheme.key) private var theme = HunTheme.system.rawValue
+    @AppStorage(HunPalette.key) private var palette = HunPalette.graphite.rawValue
+    /// The palette only applies to light mode, so it's offered only there.
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage(HunServicesDisplay.showOutsideProfileKey)
     private var showsOutsideProfile = HunServicesDisplay.showOutsideProfileDefault
 
@@ -240,6 +243,24 @@ private struct HunAppearanceSettings: View {
                         }
                     )
                 )
+            }
+            if colorScheme == .light {
+                SettingsRow(
+                    title: "Light palette",
+                    detail: "Graphite is crisp and neutral, with an indigo accent. Clay is warm paper and soft ink, with a terracotta accent."
+                ) {
+                    SettingsSegmented(
+                        options: HunPalette.allCases.map { ($0.rawValue, $0.title, $0.icon) },
+                        selection: Binding(
+                            get: { palette },
+                            set: { newValue in
+                                palette = newValue
+                                HunPalette.select(HunPalette(rawValue: newValue) ?? .graphite)
+                                hunApp.redrawColors()
+                            }
+                        )
+                    )
+                }
             }
             SettingsRow(
                 title: "Services outside the profile",
@@ -365,7 +386,7 @@ private struct HunLicenseSettings: View {
                     SettingsValue(session.lastValidatedAt.formatted(.relative(presentation: .named)))
                 }
             }
-            SettingsRow(title: "This Mac", detail: "Deactivating frees one of your two activations.") {
+            SettingsRow(title: "This Mac", detail: "Deactivating frees this Mac’s activation, so you can use the key on another Mac.") {
                 ActionButton(
                     title: "Deactivate…",
                     systemImage: "minus.circle",

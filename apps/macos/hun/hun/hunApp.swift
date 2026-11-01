@@ -56,6 +56,27 @@ struct hunApp: App {
         }
     }
 
+    /// Colours resolve per appearance, so a palette change only shows once
+    /// the appearance changes. This steps every window to dark and straight
+    /// back, laying each out at both steps so SwiftUI resolves its colours
+    /// again, all inside one Core Animation transaction: only the final state
+    /// reaches the screen, so there's no dark frame. (A step to high contrast
+    /// doesn't make SwiftUI re-resolve, and stepping across run loop turns
+    /// either doesn't either or shows the dark frame.)
+    static func redrawColors() {
+        let saved = NSApp.appearance
+        let current = saved ?? NSApp.effectiveAppearance
+        let dark = current.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let views = NSApp.windows.compactMap(\.contentView)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        NSApp.appearance = NSAppearance(named: dark ? .aqua : .darkAqua)
+        views.forEach { $0.layoutSubtreeIfNeeded() }
+        NSApp.appearance = saved
+        views.forEach { $0.layoutSubtreeIfNeeded() }
+        CATransaction.commit()
+    }
+
     static func openDashboard() {
         NSApp.activate(ignoringOtherApps: true)
         for window in NSApp.windows where window.canBecomeKey && window.isRestorable {
