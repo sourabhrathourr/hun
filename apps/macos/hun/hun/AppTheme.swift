@@ -382,7 +382,8 @@ nonisolated enum HunPalette: String, CaseIterable, Identifiable {
     }
 
     /// Read on every colour resolve, so it's kept in memory, not looked up.
-    nonisolated(unsafe) private(set) static var current: HunPalette =
+    /// Set it through `select(_:)`; tests set it directly to pin a palette.
+    nonisolated(unsafe) static var current: HunPalette =
         UserDefaults.standard.string(forKey: key).flatMap(HunPalette.init) ?? .graphite
 
     static func select(_ palette: HunPalette) {
