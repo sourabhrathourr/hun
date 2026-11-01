@@ -132,8 +132,8 @@ export default function TermsPage() {
           title: "Contact",
           body: (
             <p>
-              Questions about these terms can be submitted through{" "}
-              <a href="https://github.com/sourabhrathourr/hun/issues">Hun support on GitHub</a>.
+              Questions about these terms can be sent to{" "}
+              <a href="mailto:rathoursourabh5@gmail.com">rathoursourabh5@gmail.com</a>.
             </p>
           ),
         },

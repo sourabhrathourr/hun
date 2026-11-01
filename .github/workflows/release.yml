@@ -12,6 +12,12 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  # Release files are published to this public, downloads-only repo; the
+  # source repo is private. hun.sh/download, /appcast.xml and /releases point
+  # here (website/lib/releases.ts).
+  RELEASES_REPO: hundotsh/hun-releases
+
 jobs:
   authorize:
     runs-on: ubuntu-latest
@@ -171,7 +177,7 @@ jobs:
           fi
 
           latest_release="$(
-            gh api "repos/$GITHUB_REPOSITORY/releases/latest" 2>/dev/null || true
+            gh api "repos/$RELEASES_REPO/releases/latest" 2>/dev/null || true
           )"
           appcast_url="$(
             jq -r '
@@ -309,20 +315,27 @@ jobs:
             exit 1
           fi
 
+      - name: Validate releases repo access
+        run: |
+          if [[ -z "${{ secrets.RELEASES_REPO_TOKEN }}" ]]; then
+            echo "RELEASES_REPO_TOKEN is missing; it must be able to write releases in $RELEASES_REPO."
+            exit 1
+          fi
+
       - name: Create draft GitHub Release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
-            --repo "$GITHUB_REPOSITORY" \
-            --verify-tag \
+            --repo "$RELEASES_REPO" \
+            --target main \
             --draft \
             --title "hun $GITHUB_REF_NAME" \
             --notes-file release-notes.md
 
       - name: Upload and verify every release asset
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
         run: |
           assets=(release-macos/*)
           if [[ -d release-cli ]]; then
@@ -333,12 +346,12 @@ jobs:
 
           gh release upload "$GITHUB_REF_NAME" \
             "${assets[@]}" \
-            --repo "$GITHUB_REPOSITORY"
+            --repo "$RELEASES_REPO"
 
           expected_count="${#assets[@]}"
           uploaded_count="$(
             gh release view "$GITHUB_REF_NAME" \
-              --repo "$GITHUB_REPOSITORY" \
+              --repo "$RELEASES_REPO" \
               --json assets \
               --jq '.assets | length'
           )"
@@ -346,10 +359,10 @@ jobs:
 
       - name: Publish complete GitHub Release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
         run: |
           gh release edit "$GITHUB_REF_NAME" \
-            --repo "$GITHUB_REPOSITORY" \
+            --repo "$RELEASES_REPO" \
             --draft=false
 
       - name: Update Homebrew formula
@@ -358,7 +371,7 @@ jobs:
           bash ./scripts/update-homebrew-formula.sh \
             --version "$GITHUB_REF_NAME" \
             --checksums "release-cli/checksums.txt" \
-            --source-repo "$GITHUB_REPOSITORY" \
+            --source-repo "$RELEASES_REPO" \
             --tap-repo "hundotsh/homebrew-tap"
         env:
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}

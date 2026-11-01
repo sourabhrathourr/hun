@@ -1,13 +1,6 @@
-import { NextResponse } from "next/server";
+import { redirectTo, releaseFileURL } from "@/lib/releases";
 
-const latestAppcast =
-  "https://github.com/sourabhrathourr/hun/releases/latest/download/appcast.xml";
-
+/** The Sparkle feed every installed Hun checks. Its download links point back at hun.sh/releases. */
 export function GET() {
-  return NextResponse.redirect(latestAppcast, {
-    status: 307,
-    headers: {
-      "Cache-Control": "public, max-age=300, stale-while-revalidate=3600",
-    },
-  });
+  return redirectTo(releaseFileURL("latest", "appcast.xml")!);
 }

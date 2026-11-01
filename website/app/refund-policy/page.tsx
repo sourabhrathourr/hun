@@ -55,9 +55,7 @@ export default function RefundPolicyPage() {
           body: (
             <p>
               To ask for a refund, email <a href="mailto:rathoursourabh5@gmail.com">rathoursourabh5@gmail.com</a> with the
-              payment ID from your receipt. For other product questions, use{" "}
-              <a href="https://github.com/sourabhrathourr/hun/issues">Hun support on GitHub</a>. Do not include a full
-              license key, payment-card number, identity document, or other sensitive information in a public issue.
+              payment ID from your receipt. Product questions go to the same address.
             </p>
           ),
         },
