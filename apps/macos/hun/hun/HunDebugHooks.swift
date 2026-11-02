@@ -116,6 +116,10 @@ enum HunDebugHooks {
                 store.run(service, in: project)
             }
         })
+        // Pretends this Mac's license was just deactivated (nothing real changes).
+        observers.append(center.addObserver(forName: .init("sh.hun.debug.loseLicense"), object: nil, queue: .main) { _ in
+            Task { @MainActor in license.startRehearsal() }
+        })
         observers.append(center.addObserver(forName: .init("sh.hun.debug.finishOnboarding"), object: nil, queue: .main) { _ in
             UserDefaults.standard.set(true, forKey: HunOnboarding.completedKey)
             Task { @MainActor in

@@ -1712,27 +1712,6 @@ struct hunTests {
         #expect(resizedHeight == 456)
     }
 
-    @Test func activationButtonOwnsTheFirstClickInsteadOfMovingTheWindow() {
-        let button = HunFirstMouseButtonView()
-
-        #expect(button.mouseDownCanMoveWindow == false)
-        #expect(button.acceptsFirstMouse(for: nil))
-    }
-
-    @Test func activationButtonShowsValidationProgressInline() {
-        let button = HunFirstMouseButtonView()
-        button.attributedTitle = NSAttributedString(string: "Activate Hun")
-
-        button.setLoading(true)
-
-        #expect(button.isLoading)
-        #expect(button.attributedTitle.string.isEmpty)
-
-        button.setLoading(false)
-
-        #expect(!button.isLoading)
-    }
-
     @Test func sleekScrollbarsOverlayContentWithoutChangingItsWidth() throws {
         let scrollView = HunStyledScrollView(
             frame: NSRect(x: 0, y: 0, width: 240, height: 180)

@@ -79,6 +79,24 @@ enum HunOnboarding {
         return "\(number.uint64Value):\(version)"
     }
 
+    /// Decodes every step's photo (both appearances) in the background, so a
+    /// step never waits on its photo while something else is busy.
+    @MainActor
+    static func preloadPhotos() {
+        let names = Step.allCases.map(\.background)
+        Task.detached(priority: .utility) {
+            for name in names {
+                for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+                    NSAppearance(named: appearance)?.performAsCurrentDrawingAppearance {
+                        guard let image = NSImage(named: name) else { return }
+                        var rect = CGRect(origin: .zero, size: image.size)
+                        _ = image.cgImage(forProposedRect: &rect, context: nil, hints: nil)?.dataProvider?.data
+                    }
+                }
+            }
+        }
+    }
+
     /// In light mode the welcome is always Clay: its photos are warm paper
     /// and sunlight. Not saved, so the person's own palette comes back when
     /// the welcome ends. (Dark mode is the same in both palettes.)
@@ -159,6 +177,7 @@ struct HunOnboardingView: View {
         .background(WindowChromeConfigurator())
         .onAppear {
             HunOnboarding.holdClay()
+            HunOnboarding.preloadPhotos()
             // Once the window is on screen, blur everything behind it.
             DispatchQueue.main.async { HunOnboardingBackdrop.show(step: step) }
             music.start()
@@ -807,7 +826,10 @@ private struct HunLicenseStep: View {
                     .disabled(isActivating)
                     .onChange(of: key) { _, _ in dismissedError = license.errorMessage }
 
-                if showsError, let error = license.errorMessage {
+                if case let .unavailable(message) = license.state {
+                    // A license that couldn't be checked (offline too long).
+                    HunInlineNote(text: message, tone: .problem)
+                } else if showsError, let error = license.errorMessage {
                     HunInlineNote(text: error, tone: .problem)
                         .transition(.opacity.combined(with: .offset(y: -3)))
                 } else if foundOnClipboard {
@@ -851,9 +873,12 @@ private struct HunLicenseStep: View {
             focused = true
             pickUpClipboardKey()
         }
-        // Coming back from the browser after buying.
+        // Coming back from the browser after buying (or back online).
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             pickUpClipboardKey()
+            if case .unavailable = license.state {
+                Task { await license.retryValidation() }
+            }
         }
         .onChange(of: license.isLicensed) { _, licensed in
             if licensed { onContinue() }
@@ -963,7 +988,9 @@ private struct HunAgentStep: View {
         try? await Task.sleep(for: .milliseconds(650))
         withAnimation(.easeOut(duration: 0.2)) { checked = 1 }
 
-        skillInstalled = (try? HunAgentSkillInstaller.installBundledSkillGlobally()) != nil
+        skillInstalled = await Task.detached(priority: .userInitiated) {
+            (try? HunAgentSkillInstaller.installBundledSkillGlobally()) != nil
+        }.value
         try? await Task.sleep(for: .milliseconds(550))
         withAnimation(.easeOut(duration: 0.2)) { checked = 2 }
 

@@ -1,5 +1,26 @@
 [
   {
+    "version": "0.5.1",
+    "date": "2026-11-02",
+    "title": "A smoother unlock",
+    "summary": "Unlocking Hun no longer stalls the screen, and the welcome is now the only way in.",
+    "groups": [
+      {
+        "title": "Improved",
+        "changes": [
+          "Without an active license, after deactivating a Mac or when a beta key ends, Hun opens the welcome and you unlock it there. The old activation screen is gone."
+        ]
+      },
+      {
+        "title": "Fixes",
+        "changes": [
+          "Unlocking Hun no longer freezes the screen for a moment. The confetti now runs on the graphics chip, and setup work happens in the background.",
+          "The welcome's photos are ready before each step appears, so none shows up late."
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.5.0",
     "date": "2026-11-02",
     "title": "A welcome, your agent, and a new menu bar",

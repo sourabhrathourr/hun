@@ -753,13 +753,20 @@ final class HunStore {
         reviewConfigEditor = target
     }
 
+    /// Copies files, so it runs off the main thread.
     private func installAgentSkillIfPossible() {
-        do {
-            _ = try HunAgentSkillInstaller.installBundledSkillGlobally()
-        } catch HunAgentSkillInstallError.missingBundledSkill {
-            return
-        } catch {
-            lastError = error.localizedDescription
+        Task {
+            let failure: String? = await Task.detached(priority: .utility) {
+                do {
+                    _ = try HunAgentSkillInstaller.installBundledSkillGlobally()
+                    return nil
+                } catch HunAgentSkillInstallError.missingBundledSkill {
+                    return nil
+                } catch {
+                    return error.localizedDescription
+                }
+            }.value
+            if let failure { lastError = failure }
         }
     }
 
