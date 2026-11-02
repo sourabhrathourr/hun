@@ -826,7 +826,10 @@ private struct HunLicenseStep: View {
                     .disabled(isActivating)
                     .onChange(of: key) { _, _ in dismissedError = license.errorMessage }
 
-                if showsError, let error = license.errorMessage {
+                if case let .unavailable(message) = license.state {
+                    // A license that couldn't be checked (offline too long).
+                    HunInlineNote(text: message, tone: .problem)
+                } else if showsError, let error = license.errorMessage {
                     HunInlineNote(text: error, tone: .problem)
                         .transition(.opacity.combined(with: .offset(y: -3)))
                 } else if foundOnClipboard {
@@ -870,9 +873,12 @@ private struct HunLicenseStep: View {
             focused = true
             pickUpClipboardKey()
         }
-        // Coming back from the browser after buying.
+        // Coming back from the browser after buying (or back online).
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             pickUpClipboardKey()
+            if case .unavailable = license.state {
+                Task { await license.retryValidation() }
+            }
         }
         .onChange(of: license.isLicensed) { _, licensed in
             if licensed { onContinue() }
