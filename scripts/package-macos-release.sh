@@ -371,7 +371,7 @@ if [ "$GENERATE_APPCAST" -eq 1 ]; then
   node "$ROOT/scripts/render-macos-release-notes.mjs" "$VERSION" "$RELEASE_NOTES"
 
   APPCAST_ARGUMENTS=(
-    --download-url-prefix "https://github.com/sourabhrathourr/hun/releases/download/v$VERSION/"
+    --download-url-prefix "${HUN_DOWNLOAD_URL_PREFIX:-https://hun.sh/releases/v$VERSION/}"
     --embed-release-notes
     --full-release-notes-url "https://hun.sh/changelog"
     --link "https://hun.sh/changelog#v$VERSION"

@@ -5,7 +5,7 @@ terminals, viewing logs, and managing Git workflows.
 
 ![Hun for macOS](website/public/macos-image.png)
 
-[Download for Apple silicon](https://github.com/sourabhrathourr/hun/releases/latest/download/hun-macos-arm64.dmg)
+[Download for Apple silicon](https://hun.sh/download)
 · [Website](https://hun.sh)
 · [Changelog](https://hun.sh/changelog)
 
@@ -26,7 +26,7 @@ terminals, viewing logs, and managing Git workflows.
 
 Hun currently supports Apple silicon Macs running macOS 15 or later.
 
-1. [Download the latest DMG](https://github.com/sourabhrathourr/hun/releases/latest/download/hun-macos-arm64.dmg).
+1. [Download the latest DMG](https://hun.sh/download).
 2. Drag **hun** into **Applications**.
 3. Open Hun from Applications.
 
@@ -97,9 +97,6 @@ the TUI, scripting, or a non-macOS workflow:
 # Homebrew
 brew tap hundotsh/tap
 brew install hun
-
-# Or install with Go
-go install github.com/sourabhrathourr/hun@latest
 
 # Or use the CLI installer
 curl -fsSL https://hun.sh/install.sh | sh

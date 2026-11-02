@@ -148,7 +148,7 @@ func fetchLatestReleaseTag(timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/sourabhrathourr/hun/releases/latest", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/hundotsh/hun-releases/releases/latest", nil)
 	if err != nil {
 		return "", err
 	}
