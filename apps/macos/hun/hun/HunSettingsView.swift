@@ -1,9 +1,11 @@
 import AppKit
+import ServiceManagement
 import SwiftUI
 
 /// Settings live in the main window: the sidebar lists these sections and the
 /// card shows the selected one.
 enum HunSettingsSection: String, CaseIterable, Identifiable {
+    case general
     case appearance
     case daemon
     case license
@@ -13,6 +15,7 @@ enum HunSettingsSection: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .general: return "General"
         case .appearance: return "Appearance"
         case .daemon: return "Daemon"
         case .license: return "License"
@@ -22,6 +25,7 @@ enum HunSettingsSection: String, CaseIterable, Identifiable {
 
     var subtitle: String {
         switch self {
+        case .general: return "How Hun starts, and where it lives on your Mac."
         case .appearance: return "How Hun looks: its theme and layout."
         case .daemon: return "The background process that runs your services."
         case .license: return "Your plan and this Mac's activation."
@@ -31,6 +35,7 @@ enum HunSettingsSection: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
+        case .general: return "gearshape"
         case .appearance: return "circle.lefthalf.filled"
         case .daemon: return "server.rack"
         case .license: return "key"
@@ -184,6 +189,7 @@ struct HunSettingsPage: View {
 
                 Group {
                     switch section {
+                    case .general: HunGeneralSettings()
                     case .appearance: HunAppearanceSettings()
                     case .daemon: HunDaemonSettings()
                     case .license: HunLicenseSettings(onDeactivated: onClose)
@@ -221,6 +227,70 @@ struct HunSettingsPage: View {
 
 // MARK: - Sections
 
+private struct HunGeneralSettings: View {
+    @AppStorage(HunAppBehavior.hideDockKey) private var hidesDock = false
+    @State private var loginStatus = HunAppBehavior.loginStatus
+    @State private var loginError: String?
+
+    private var opensAtLogin: Bool { loginStatus == .enabled || loginStatus == .requiresApproval }
+
+    var body: some View {
+        SettingsGroup {
+            SettingsRow(
+                title: "Open at login",
+                detail: loginDetail,
+                isFirst: true
+            ) {
+                Toggle("Open at login", isOn: Binding(
+                    get: { opensAtLogin },
+                    set: { on in
+                        loginError = HunAppBehavior.setOpensAtLogin(on)
+                        loginStatus = HunAppBehavior.loginStatus
+                    }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .tint(AppTheme.textSecondary)
+            }
+            if loginStatus == .requiresApproval {
+                SettingsRow(
+                    title: "Waiting for your OK",
+                    detail: "macOS asks you to allow Hun in System Settings › General › Login Items."
+                ) {
+                    Button("Open Login Items") { SMAppService.openSystemSettingsLoginItems() }
+                        .controlSize(.small)
+                }
+            }
+            SettingsRow(
+                title: "Hide Dock icon when windows are closed",
+                detail: "Hun keeps running in the menu bar. Its Dock icon comes back when you open the dashboard."
+            ) {
+                Toggle("Hide Dock icon when windows are closed", isOn: Binding(
+                    get: { hidesDock },
+                    set: { on in
+                        hidesDock = on
+                        HunAppBehavior.applyDockSetting()
+                    }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .tint(AppTheme.textSecondary)
+            }
+        }
+        // The login item can be changed in System Settings too.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            loginStatus = HunAppBehavior.loginStatus
+        }
+    }
+
+    private var loginDetail: String {
+        if let loginError { return "Couldn't change it: \(loginError)" }
+        return "Start Hun when you log in, so your projects and the menu bar are ready."
+    }
+}
+
 private struct HunAppearanceSettings: View {
     @AppStorage(HunLayout.roundedPanelsKey) private var roundedPanels = HunLayout.roundedPanelsDefault
     @AppStorage(HunTheme.key) private var theme = HunTheme.system.rawValue
@@ -230,6 +300,7 @@ private struct HunAppearanceSettings: View {
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage(HunServicesDisplay.showOutsideProfileKey)
     private var showsOutsideProfile = HunServicesDisplay.showOutsideProfileDefault
+    @AppStorage(HunMenuMusic.enabledKey) private var musicEnabled = true
 
     var body: some View {
         SettingsGroup {
@@ -274,6 +345,22 @@ private struct HunAppearanceSettings: View {
             }
             Rectangle().fill(AppTheme.divider).frame(height: 1).padding(.leading, 16)
             HunVistaPicker()
+            SettingsRow(
+                title: "Menu bar music",
+                detail: "A note in the menu bar's sky plays soft music to work to; it never starts by itself. The first time, Hun downloads the music (about 33 MB)."
+            ) {
+                Toggle("Menu bar music", isOn: Binding(
+                    get: { musicEnabled },
+                    set: { on in
+                        musicEnabled = on
+                        if !on { HunMenuMusic.shared.stop() }
+                    }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .tint(AppTheme.textSecondary)
+            }
             SettingsRow(
                 title: "Services outside the profile",
                 detail: "List the services the current profile doesn't run, dimmed below the rest. When off, the services count shows how many are hidden."
@@ -493,6 +580,11 @@ private struct HunAboutSettings: View {
             SettingsGroup {
                 SettingsRow(title: "Version", isFirst: true) { SettingsValue(appVersion.version) }
                 SettingsRow(title: "Build") { SettingsValue(appVersion.build, monospaced: true) }
+                SettingsRow(title: "What's new", detail: "The highlights of this version.") {
+                    ActionButton(title: "Show", systemImage: "sparkles", style: .secondary) {
+                        HunWhatsNew.shared.showCurrent()
+                    }
+                }
                 SettingsRow(title: "Environment") { SettingsValue(HunPaths.environmentName) }
                 SettingsRow(title: "Daemon commit") {
                     SettingsValue(store.daemonInfo.map { shortCommit($0.commit) } ?? "—", monospaced: true)

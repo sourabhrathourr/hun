@@ -22,6 +22,9 @@ struct HunLicensedRootView: View {
                 .transition(.opacity)
             } else if license.isLicensed {
                 ContentView()
+                    // What's new, once, after an update.
+                    .overlay { HunWhatsNewHost() }
+                    .onAppear { HunWhatsNew.shared.checkAfterLaunch() }
                     .transition(.opacity)
             } else {
                 // Checking the license at launch: a moment, so just the canvas.

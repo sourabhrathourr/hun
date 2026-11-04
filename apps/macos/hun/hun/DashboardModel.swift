@@ -60,6 +60,16 @@ final class HunStore {
     /// Set when the last action failed because something else holds a port.
     var portConflict: HunPortConflict?
     var pendingActions: Set<HunActionKey> = []
+    /// Pending actions that have run long enough to offer force stop.
+    var stoppableActions: Set<HunActionKey> = []
+    /// Which run of each pending action is current, so a finished or
+    /// force-stopped one doesn't clear a newer one with the same key.
+    private var pendingTokens: [HunActionKey: UUID] = [:]
+    private var forceStoppedTokens: Set<UUID> = []
+    /// How long an action runs before its spinner offers force stop. Most
+    /// finish in 1-5 seconds and a cold Docker start in 5-8; later than this
+    /// it's likely stuck.
+    static let forceStopDelay: Duration = .seconds(8)
     var daemonInfo: HunDaemonInfo?
     var daemonSettingsError: String?
     var isLoadingDaemonInfo = false
@@ -978,28 +988,78 @@ final class HunStore {
 
     private func perform(key: HunActionKey? = nil, _ operation: @escaping () async throws -> Void) {
         Task {
+            let token = UUID()
             if let key {
                 pendingActions.insert(key)
+                pendingTokens[key] = token
+                stoppableActions.remove(key)
+                Task { [weak self] in
+                    try? await Task.sleep(for: Self.forceStopDelay)
+                    guard let self, self.pendingTokens[key] == token else { return }
+                    withAnimation(.easeOut(duration: 0.25)) { _ = self.stoppableActions.insert(key) }
+                }
             }
             defer {
-                if let key {
+                if let key, pendingTokens[key] == token {
                     pendingActions.remove(key)
+                    pendingTokens[key] = nil
+                    stoppableActions.remove(key)
                 }
             }
             do {
                 try await operation()
+                guard !forceStoppedTokens.contains(token) else { return }
                 lastError = nil
                 portConflict = nil
                 await refresh(force: true)
             } catch HunDaemonError.portConflict(let message, let holder) {
+                guard !forceStoppedTokens.contains(token) else { return }
                 lastError = message
                 portConflict = HunPortConflict(holder: holder, key: key, retry: operation)
                 await refresh(force: true)
             } catch {
+                // A force-stopped action ends in an error nobody needs to see.
+                guard !forceStoppedTokens.contains(token) else { return }
                 lastError = error.localizedDescription
                 portConflict = nil
             }
         }
+    }
+
+    /// Force-stops a pending action that's taking too long: its spinner goes
+    /// at once, and the daemon kills the project's (or service's) processes
+    /// without waiting behind it.
+    func forceStop(_ key: HunActionKey) {
+        guard let token = pendingTokens[key] else { return }
+        forceStoppedTokens.insert(token)
+        pendingTokens[key] = nil
+        pendingActions.remove(key)
+        stoppableActions.remove(key)
+        Task {
+            do {
+                try await client.forceStop(key.projectID, service: key.serviceID)
+                lastError = nil
+            } catch {
+                lastError = "Couldn’t force-stop: \(error.localizedDescription)"
+            }
+            await refresh(force: true)
+        }
+    }
+
+    /// Force stop for a project's pending action, once it's been long enough.
+    func forceStopAction(for project: HunProject) -> (() -> Void)? {
+        guard let kind = projectAction(for: project) else { return nil }
+        let key = HunActionKey.project(project.id, kind)
+        guard stoppableActions.contains(key) else { return nil }
+        return { [weak self] in self?.forceStop(key) }
+    }
+
+    /// Force stop for a service's pending action, once it's been long enough.
+    func forceStopAction(for service: HunService, in project: HunProject) -> (() -> Void)? {
+        guard let kind = serviceAction(for: service, in: project) else { return nil }
+        let key = HunActionKey.service(project.id, service.id, kind)
+        guard stoppableActions.contains(key) else { return nil }
+        return { [weak self] in self?.forceStop(key) }
     }
 
     private func isTransientDaemonError(_ error: Error) -> Bool {

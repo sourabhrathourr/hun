@@ -29,6 +29,9 @@ nonisolated protocol HunDaemonClientProtocol: AnyObject {
     func clearProjectIcon(_ project: String) async throws
     func stopProject(_ project: String) async throws
     func stopService(_ project: String, service: String) async throws
+    /// Stops a project, or one service, at once, without waiting behind an
+    /// action that's stuck.
+    func forceStop(_ project: String, service: String?) async throws
     func restartProject(_ project: String) async throws
     func restartService(_ project: String, service: String) async throws
     func freePort(_ port: Int) async throws
@@ -438,7 +441,7 @@ nonisolated struct HunDaemonLogLine: Decodable, Equatable {
 }
 
 nonisolated final class HunDaemonClient: HunDaemonClientProtocol, HunGitClientProtocol {
-    static let requiredProtocol = 19
+    static let requiredProtocol = 20
     private let socketPath: String
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -504,6 +507,14 @@ nonisolated final class HunDaemonClient: HunDaemonClientProtocol, HunGitClientPr
 
     func stopService(_ project: String, service: String) async throws {
         try await send(HunDaemonRequest(action: "stop_service", project: project, service: service))
+    }
+
+    func forceStop(_ project: String, service: String?) async throws {
+        // Quick by design: it never waits its turn.
+        let _: StatusPayload = try await request(
+            HunDaemonRequest(action: "force_stop", project: project, service: service),
+            timeoutNanoseconds: 10_000_000_000
+        )
     }
 
     func restartProject(_ project: String) async throws {

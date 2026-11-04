@@ -275,6 +275,8 @@ struct ContentView: View {
                     onRemoveService: { service in store.remove(service, from: project) },
                     onStopHolderAndRun: { service in store.stopHolderAndRun(service, in: project) },
                     isServiceBusy: { service in store.serviceAction(for: service, in: project) != nil },
+                    forceStop: store.forceStopAction(for: project),
+                    forceStopService: { service in store.forceStopAction(for: service, in: project) },
                     agentChat: store.agentChat(for: project.path),
                     agent: store.availableAgent?.kind,
                     onAskAgent: { request in store.sendAgentMessage(request, for: project) },
@@ -323,7 +325,7 @@ struct ContentView: View {
 
     private func openSettings() {
         if settingsSection == nil {
-            settingsSection = .appearance
+            settingsSection = .general
         }
     }
 
@@ -1579,6 +1581,9 @@ private struct ProjectDetailView: View {
     let onRemoveService: (HunService) -> Void
     let onStopHolderAndRun: (HunService) -> Void
     let isServiceBusy: (HunService) -> Bool
+    /// Force stop for the project's pending action, once it's run long enough.
+    var forceStop: (() -> Void)?
+    var forceStopService: (HunService) -> (() -> Void)? = { _ in nil }
     /// This project's setup conversation with the coding agent.
     let agentChat: HunAgentChat?
     /// The agent on this Mac that can be asked for changes, if any.
@@ -1613,6 +1618,7 @@ private struct ProjectDetailView: View {
                 onOpenBranchSwitcher: onOpenBranchSwitcher,
                 mode: mode,
                 pendingAction: pendingAction,
+                forceStop: forceStop,
                 onFocus: onFocus,
                 onRun: onRun,
                 onRunProfile: onRunProfile,
@@ -1656,7 +1662,8 @@ private struct ProjectDetailView: View {
                     onStop: onStopService,
                     onRemove: onRemoveService,
                     onStopHolderAndRun: onStopHolderAndRun,
-                    isBusy: isServiceBusy
+                    isBusy: isServiceBusy,
+                    forceStop: forceStopService
                 )
                 .background(AppTheme.appBackground)
             } detail: {
@@ -1705,6 +1712,8 @@ private struct ProjectHeaderView: View {
     let mode: HunMode
     @AppStorage(HunLayout.roundedPanelsKey) private var roundedPanels = HunLayout.roundedPanelsDefault
     let pendingAction: HunActionKind?
+    /// Force stop for the pending action, once it has run long enough.
+    var forceStop: (() -> Void)?
     let onFocus: () -> Void
     let onRun: () -> Void
     let onRunProfile: (String?) -> Void
@@ -1814,6 +1823,7 @@ private struct ProjectHeaderView: View {
                     ProfileMenu(
                         project: project,
                         isSwitching: pendingAction == .switchProfile,
+                        onForceStop: pendingAction == .switchProfile ? forceStop : nil,
                         isDisabled: pendingAction != nil,
                         canSave: !runningServices.isEmpty,
                         onRun: onRunProfile,
@@ -1827,6 +1837,7 @@ private struct ProjectHeaderView: View {
                     style: primaryAction.style,
                     isLoading: primaryAction.isLoading,
                     isDisabled: pendingAction != nil,
+                    onForceStop: primaryAction.isLoading ? forceStop : nil,
                     action: primaryAction.action
                 )
                 ActionButton(
@@ -1835,6 +1846,7 @@ private struct ProjectHeaderView: View {
                     style: .secondary,
                     isLoading: pendingAction == .restartProject,
                     isDisabled: pendingAction != nil,
+                    onForceStop: pendingAction == .restartProject ? forceStop : nil,
                     action: onRestart
                 )
                 if let agent {
@@ -1957,6 +1969,8 @@ enum ActionStyle { case primary, secondary, danger }
 private struct ProfileMenu: View {
     let project: HunProject
     let isSwitching: Bool
+    /// Force stop for a switch that's taking too long.
+    var onForceStop: (() -> Void)?
     let isDisabled: Bool
     let canSave: Bool
     let onRun: (String?) -> Void
@@ -1966,6 +1980,10 @@ private struct ProfileMenu: View {
 
     var body: some View {
         Menu {
+            if let onForceStop {
+                Button("Force Stop Switching", action: onForceStop)
+                Divider()
+            }
             Section("Profiles") {
                 option("All services", profile: nil)
                 ForEach(project.profiles, id: \.name) { profile in
@@ -1979,11 +1997,7 @@ private struct ProfileMenu: View {
         } label: {
             HStack(spacing: 6) {
                 if isSwitching {
-                    ProgressView()
-                        .progressViewStyle(.circular)
-                        .controlSize(.mini)
-                        .scaleEffect(0.62)
-                        .frame(width: 11, height: 11)
+                    HunPendingSpinner(stoppable: onForceStop != nil, size: 11)
                 } else {
                     Image(systemName: "rectangle.stack")
                         .font(.system(size: 10, weight: .semibold))
@@ -2099,18 +2113,22 @@ struct ActionButton: View {
     let style: ActionStyle
     var isLoading = false
     var isDisabled = false
+    /// While loading, once the action has run long enough: clicking the
+    /// button force-stops it. Its label and size stay as they are; only the
+    /// spinner changes, to a ring with a small square.
+    var onForceStop: (() -> Void)?
     let action: () -> Void
     @State private var hovering = false
 
+    private var offersForceStop: Bool { isLoading && onForceStop != nil }
+
     var body: some View {
-        Button(action: action) {
+        Button {
+            if offersForceStop { onForceStop?() } else { action() }
+        } label: {
             HStack(spacing: 5) {
                 if isLoading {
-                    ProgressView()
-                        .progressViewStyle(.circular)
-                        .controlSize(.mini)
-                        .scaleEffect(0.62)
-                        .frame(width: 11, height: 11)
+                    HunPendingSpinner(stoppable: offersForceStop, hovering: hovering, size: 11, tint: textColor)
                 } else {
                     Image(systemName: systemImage)
                         .font(.system(size: 10, weight: .semibold))
@@ -2133,9 +2151,13 @@ struct ActionButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(isDisabled)
-        .opacity(isDisabled && !isLoading ? 0.55 : 1)
+        .disabled(isDisabled && !offersForceStop)
+        // Clickable for force stop, but it looks as it did while waiting
+        // (SwiftUI dims a disabled button to half) until the pointer is on it.
+        .opacity(isDisabled && !isLoading ? 0.55 : (offersForceStop && !hovering ? 0.5 : 1))
+        .animation(.easeOut(duration: 0.15), value: hovering)
         .onHover { hovering = $0 }
+        .help(offersForceStop ? "Taking a while? Force stop" : "")
     }
 
     private var textColor: Color {
@@ -2179,6 +2201,7 @@ private struct ServicesPanelView: View {
     let onRemove: (HunService) -> Void
     let onStopHolderAndRun: (HunService) -> Void
     let isBusy: (HunService) -> Bool
+    var forceStop: (HunService) -> (() -> Void)? = { _ in nil }
     @AppStorage(HunServicesDisplay.showOutsideProfileKey)
     private var showsOutsideProfile = HunServicesDisplay.showOutsideProfileDefault
 
@@ -2240,7 +2263,8 @@ private struct ServicesPanelView: View {
                     onStop: onStop,
                     onRemove: onRemove,
                     onStopHolderAndRun: onStopHolderAndRun,
-                    isBusy: isBusy
+                    isBusy: isBusy,
+                    forceStop: forceStop
                 )
             }
             .hunScrollStyle()
@@ -2269,6 +2293,7 @@ private struct ServicesList: View {
     let onRemove: (HunService) -> Void
     let onStopHolderAndRun: (HunService) -> Void
     let isBusy: (HunService) -> Bool
+    var forceStop: (HunService) -> (() -> Void)? = { _ in nil }
 
     var body: some View {
         VStack(spacing: 4) {
@@ -2330,7 +2355,8 @@ private struct ServicesList: View {
             onRemove: { onRemove(service) },
             onOpenConfig: onOpenConfig,
             onStopHolderAndRun: { onStopHolderAndRun(service) },
-            busy: isBusy(service)
+            busy: isBusy(service),
+            onForceStop: forceStop(service)
         )
     }
 }
@@ -2346,6 +2372,8 @@ private struct ServiceRowView: View {
     let onOpenConfig: () -> Void
     let onStopHolderAndRun: () -> Void
     let busy: Bool
+    /// Force stop for its pending action, once it has run long enough.
+    var onForceStop: (() -> Void)?
     @State private var hovering = false
 
     var body: some View {
@@ -2469,8 +2497,18 @@ private struct ServiceRowView: View {
     @ViewBuilder
     private var portView: some View {
         if busy {
-            ProgressView()
-                .controlSize(.mini)
+            if let onForceStop {
+                Button(action: onForceStop) {
+                    HunPendingSpinner(stoppable: true, hovering: hovering, size: 12)
+                        .frame(width: 16, height: 16)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Taking a while? Force stop")
+            } else {
+                HunPendingSpinner(size: 12)
+                    .frame(width: 16, height: 16)
+            }
         } else if let url = service.browserURL {
             Button {
                 NSWorkspace.shared.open(url)

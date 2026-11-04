@@ -8,6 +8,7 @@ struct MenuBarView: View {
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage(HunMenuLook.lightVistaKey) private var lightVista = HunMenuLook.defaultLightVista.rawValue
     @AppStorage(HunMenuLook.darkVistaKey) private var darkVista = HunMenuLook.defaultDarkVista.rawValue
+    @AppStorage(HunMenuMusic.enabledKey) private var musicEnabled = true
 
     private var scene: HunMenuLook.Scene {
         colorScheme == .dark
@@ -40,7 +41,8 @@ struct MenuBarView: View {
                     // Up if any service runs; a crashed service is counted on its own.
                     running: running.filter { project in project.services.contains { $0.status == .running || $0.status == .starting } },
                     crashedCount: running.reduce(0) { $0 + $1.services.filter { $0.status == .crashed }.count },
-                    mode: store.displayedMode
+                    mode: HunMenuPreview.shared.mode ?? store.displayedMode,
+                    showsMusic: musicEnabled
                 )
                 .padding(.top, 44)
 
@@ -57,6 +59,7 @@ struct MenuBarView: View {
                                     MenuSwitchRow(
                                         project: project,
                                         pendingAction: store.projectAction(for: project),
+                                        onForceStop: store.forceStopAction(for: project),
                                         onOpen: { open(project) },
                                         onRun: { store.globalMode == .focus ? store.focus(project) : store.run(project) },
                                         onStop: { store.stop(project) },
@@ -209,45 +212,81 @@ private struct MenuSky: View {
     let running: [HunProject]
     let crashedCount: Int
     let mode: HunMode
+    /// Music is turned on in Settings: the corner switch shows.
+    var showsMusic = false
     @Environment(\.colorScheme) private var colorScheme
+    @Namespace private var sky
+
+    private var music: HunMenuMusic { .shared }
+    /// How far the corner row sits above the sky, in the strip at the top
+    /// of the panel, clear of the date.
+    static let cornerLift: CGFloat = 30
+
+    /// Words that make way for the flying hero: out at once, back in only
+    /// after it has landed, so it never passes over them.
+    static let wordsTransition = AnyTransition.asymmetric(
+        insertion: .opacity.animation(.easeOut(duration: 0.25).delay(0.42)),
+        removal: .opacity.animation(.easeOut(duration: 0.14))
+    )
+
+    /// While music plays it takes the middle of the sky.
+    private var musicPlaying: Bool { showsMusic && music.isPlaying }
 
     private var ink: Color { colorScheme == .dark ? .white : Color(red: 0x2B / 255, green: 0x26 / 255, blue: 0x22 / 255) }
 
     /// Focus runs one project at a time, so it shows which; Multitask shows how many.
     private var focused: HunProject? { mode == .focus ? running.first : nil }
 
+    /// The focused project's name (a debug preview can stand in a long one).
+    private var focusedName: String? { focused.map { HunMenuPreview.shared.focusName ?? $0.name } }
+
+    /// The widest the hero may be at rest; a longer name is cut in the middle.
+    static let heroWidth: CGFloat = 232
+
     var body: some View {
-        VStack(spacing: 0) {
-            Text(focused == nil ? Date.now.formatted(.dateTime.weekday(.wide).day().month(.wide)) : "Focused on")
-                .font(.system(size: 12.5, weight: .semibold))
-                .foregroundStyle(ink.opacity(0.7))
-            if let focused {
-                Text(focused.name)
-                    .font(.system(size: focused.name.count > 12 ? 34 : 46, weight: .semibold, design: .rounded))
-                    .foregroundStyle(ink.opacity(colorScheme == .dark ? 0.9 : 0.8))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-                    .padding(.horizontal, 24)
-                    .padding(.vertical, 8)
-                    .shadow(color: (colorScheme == .dark ? Color.black : Color.white).opacity(0.35), radius: 14)
+        ZStack {
+            if musicPlaying {
+                // The corner words come in once the hero has landed beside them.
+                VStack(spacing: 0) {
+                    musicHeader
+                    Spacer(minLength: 0)
+                }
+                .padding(.top, -Self.cornerLift)
+                .transition(Self.wordsTransition)
+                VStack(spacing: 0) {
+                    Color.clear.frame(height: 24)
+                    Spacer(minLength: 0)
+                    // A little below the middle, nearer the sill.
+                    HunSkyMusic()
+                        .offset(y: 18)
+                    Spacer(minLength: 0)
+                }
+                // The header rides up into the strip above the sky, level
+                // with the corner switch, leaving the middle to the music.
+                .padding(.top, -Self.cornerLift)
+                .transition(.asymmetric(
+                    insertion: .opacity.combined(with: .scale(scale: 0.96)).animation(.smooth(duration: 0.5).delay(0.12)),
+                    removal: .opacity.animation(.easeOut(duration: 0.18))
+                ))
             } else {
-                Text(verbatim: "\(running.count)")
-                    .font(.system(size: 88, weight: .semibold, design: .rounded))
-                    .foregroundStyle(ink.opacity(colorScheme == .dark ? 0.88 : 0.78))
-                    .shadow(color: (colorScheme == .dark ? Color.black : Color.white).opacity(0.35), radius: 14)
-                    .contentTransition(.numericText())
-                    .padding(.top, -4)
+                quiet
+                    .transition(Self.wordsTransition)
             }
-            Text(caption)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(crashedCount > 0 && running.isEmpty ? AppTheme.danger : ink.opacity(0.72))
-                .padding(.top, focused == nil ? -8 : -4)
+            hero
         }
         .padding(.horizontal, 30)
         .padding(.vertical, 14)
-        // One height in Focus and Multitask, so switching modes never
-        // resizes the panel.
+        // One height in Focus and Multitask, with or without music, so the
+        // panel never resizes; full width, so the corner switch sits in the corner.
+        .frame(maxWidth: .infinity)
         .frame(height: 170)
+        .overlay(alignment: .topTrailing) {
+            if showsMusic {
+                HunSkyMusicToggle()
+                    .padding(.top, 14 - Self.cornerLift - 1)
+                    .padding(.trailing, 12)
+            }
+        }
         // A soft glow of the page colour behind the words, so they read on
         // any vista.
         .background(
@@ -260,6 +299,99 @@ private struct MenuSky: View {
             .blur(radius: 12)
         )
         .animation(.spring(duration: 0.4), value: running.map(\.id))
+        // No bounce: the hero's size and place settle together.
+        .animation(.smooth(duration: 0.6), value: musicPlaying)
+    }
+
+    /// While music plays: what's running, small, up in the corner.
+    private var musicHeader: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            if focused != nil {
+                Text("Focused on")
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(ink.opacity(0.7))
+                heroText(size: heroSize.small)
+                    .opacity(0)
+                    .matchedGeometryEffect(id: "heroSmall", in: sky)
+            } else {
+                if !running.isEmpty {
+                    heroText(size: heroSize.small)
+                        .opacity(0)
+                        .matchedGeometryEffect(id: "heroSmall", in: sky)
+                }
+                Text(caption)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(crashedCount > 0 && running.isEmpty ? AppTheme.danger : ink.opacity(0.72))
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(height: 24)
+        .padding(.leading, -12)
+        .padding(.trailing, 24)
+        .shadow(color: (colorScheme == .dark ? Color.black : Color.white).opacity(0.35), radius: 14)
+    }
+
+    /// The count (or, in Focus, the project's name): drawn once and flown
+    /// between the middle of the sky and the corner, so its size and its
+    /// place change together and land together.
+    private var hero: some View {
+        heroText(size: heroSize.big)
+            .contentTransition(.numericText())
+            .shadow(color: (colorScheme == .dark ? Color.black : Color.white).opacity(0.35), radius: 14)
+            .scaleEffect(musicPlaying ? heroSize.small / heroSize.big : 1)
+            .matchedGeometryEffect(id: musicPlaying ? "heroSmall" : "heroBig", in: sky, properties: .position, isSource: false)
+            // With music on and nothing running, the corner has no number.
+            .opacity(musicPlaying && focused == nil && running.isEmpty ? 0 : 1)
+            .allowsHitTesting(false)
+    }
+
+    /// The hero's type size at rest and in the corner.
+    private var heroSize: (big: CGFloat, small: CGFloat) {
+        // The corner count sits a little above "running" (12.5pt), not over it.
+        guard let name = focusedName else { return (88, 15) }
+        // Long names get smaller to fit across the sky, down to 22pt; past
+        // that they're cut in the middle.
+        let nominal: CGFloat = name.count > 12 ? 34 : 46
+        let fits = Self.heroWidth / (CGFloat(max(name.count, 1)) * 0.58)
+        return (min(nominal, max(22, fits)), 13)
+    }
+
+    /// The hero's words: the count, or the focused name, cut in the middle
+    /// when it won't fit across the sky even at 22pt. Both copies (at rest
+    /// and in the corner) show the same characters.
+    private var heroWords: String {
+        guard let name = focusedName else { return "\(running.count)" }
+        let fits = Int(Self.heroWidth / (heroSize.big * 0.58))
+        guard name.count > fits, fits > 4 else { return name }
+        let head = (fits - 1 + 1) / 2
+        return String(name.prefix(head)) + "…" + String(name.suffix(fits - 1 - head))
+    }
+
+    private func heroText(size: CGFloat) -> some View {
+        Text(verbatim: heroWords)
+            .font(.system(size: size, weight: .semibold, design: .rounded))
+            .foregroundStyle(ink.opacity(focused == nil ? (colorScheme == .dark ? 0.88 : 0.78) : (colorScheme == .dark ? 0.9 : 0.8)))
+            .lineLimit(1)
+            .fixedSize()
+    }
+
+    /// The sky at rest: today's date and how many projects run, large.
+    private var quiet: some View {
+        VStack(spacing: 0) {
+            Text(focused == nil ? Date.now.formatted(.dateTime.weekday(.wide).day().month(.wide)) : "Focused on")
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(ink.opacity(0.7))
+            heroText(size: heroSize.big)
+                .opacity(0)
+                .matchedGeometryEffect(id: "heroBig", in: sky)
+                .padding(.vertical, focused == nil ? 0 : 8)
+                .padding(.top, focused == nil ? -4 : 0)
+            Text(caption)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(crashedCount > 0 && running.isEmpty ? AppTheme.danger : ink.opacity(0.72))
+                .padding(.top, focused == nil ? -8 : -4)
+        }
     }
 
     private var caption: String {
@@ -279,6 +411,8 @@ private struct MenuSky: View {
 private struct MenuSwitchRow: View {
     let project: HunProject
     let pendingAction: HunActionKind?
+    /// Force stop for the pending action, once it has run long enough.
+    var onForceStop: (() -> Void)?
     let onOpen: () -> Void
     let onRun: () -> Void
     let onStop: () -> Void
@@ -355,11 +489,12 @@ private struct MenuSwitchRow: View {
             MenuHunSwitch(
                 isOn: isOn || crashed,
                 isBusy: pendingAction != nil,
+                onForceStop: onForceStop,
                 // Dark mode: a deeper green than the bright system one.
                 tint: crashed ? AppTheme.danger : (colorScheme == .dark ? Color(red: 0x2A / 255, green: 0x8C / 255, blue: 0x50 / 255) : AppTheme.success),
-                help: isOn || crashed ? "Stop \(project.name)" : "Run \(project.name)"
+                help: onForceStop != nil ? "Taking a while? Force stop" : (isOn || crashed ? "Stop \(project.name)" : "Run \(project.name)")
             ) {
-                if isOn || crashed { onStop() } else { onRun() }
+                if let onForceStop { onForceStop() } else if isOn || crashed { onStop() } else { onRun() }
             }
         }
         .padding(.horizontal, 8)
@@ -407,6 +542,9 @@ private struct MenuPortLink: View {
 private struct MenuHunSwitch: View {
     let isOn: Bool
     let isBusy: Bool
+    /// Set once a pending action has run long enough: the knob shows the
+    /// stop mark and a click force-stops.
+    var onForceStop: (() -> Void)?
     let tint: Color
     let help: String
     let action: () -> Void
@@ -426,7 +564,7 @@ private struct MenuHunSwitch: View {
                     .padding(2)
                     .overlay {
                         if isBusy {
-                            ProgressView().controlSize(.mini).scaleEffect(0.5)
+                            HunPendingSpinner(stoppable: onForceStop != nil, hovering: hovering, size: 10, tint: Color.black.opacity(0.75))
                         }
                     }
             }
@@ -434,7 +572,7 @@ private struct MenuHunSwitch: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(isBusy)
+        .disabled(isBusy && onForceStop == nil)
         .onHover { hovering = $0 }
         .animation(.spring(duration: 0.28, bounce: 0.25), value: isOn)
         .accessibilityHint(help)

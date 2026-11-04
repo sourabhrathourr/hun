@@ -2177,6 +2177,10 @@ private final class MockDaemonClient: HunDaemonClientProtocol {
         actions.append("stop:\(project):\(service)")
     }
 
+    func forceStop(_ project: String, service: String?) async throws {
+        actions.append("force-stop:\(project):\(service ?? "")")
+    }
+
     func restartProject(_ project: String) async throws {
         actions.append("restart:\(project)")
     }
