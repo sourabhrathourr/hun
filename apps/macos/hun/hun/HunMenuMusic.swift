@@ -374,6 +374,11 @@ func vistaInk(_ scheme: ColorScheme) -> Color {
 struct HunMusicBars: View {
     var color: Color = AppTheme.textSecondary
     var height: CGFloat = 11
+
+    private func barHeight(level: Double, swing: Double) -> CGFloat {
+        let lift: Double = level * (0.35 + 0.65 * swing)
+        return 3 + (height - 3) * CGFloat(lift)
+    }
     private let music = HunMenuMusic.shared
 
     var body: some View {
@@ -387,7 +392,7 @@ struct HunMusicBars: View {
                     let swing = 0.5 + 0.5 * sin(t * speed + phase)
                     Capsule()
                         .fill(color)
-                        .frame(width: 2.2, height: 3 + (height - 3) * level * (0.35 + 0.65 * swing))
+                        .frame(width: 2.2, height: barHeight(level: level, swing: swing))
                 }
             }
             .frame(height: height, alignment: .bottom)
@@ -416,8 +421,13 @@ struct HunMusicNotes: View {
                     guard age >= 0, age <= life, music.emitted(at: Date(timeIntervalSinceReferenceDate: born)) else { continue }
                     let seed = Double((k &* 7919) % 97) / 97
                     let p = age / life
-                    let x = size.width / 2 + CGFloat((seed - 0.5) * 22 + sin(age * 1.7 + seed * 6) * 5)
-                    let y = size.height - 4 - rise * CGFloat(1 - pow(1 - p, 1.6))
+                    // Typed step by step: one long mixed expression is too
+                    // slow for the compiler on CI.
+                    let drift: Double = (seed - 0.5) * 22
+                    let sway: Double = sin(age * 1.7 + seed * 6) * 5
+                    let x: CGFloat = size.width / 2 + CGFloat(drift + sway)
+                    let risen: Double = 1 - pow(1 - p, 1.6)
+                    let y: CGFloat = size.height - 4 - rise * CGFloat(risen)
                     let fadeIn = min(age / 0.35, 1)
                     let fadeOut = min((life - age) / 1.3, 1)
                     var text = canvas.resolve(

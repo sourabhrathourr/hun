@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"runtime"
 	"testing"
 	"time"
 
@@ -12,6 +13,9 @@ import (
 // A start stuck waiting for a Docker that never answers ends promptly when
 // force-stopped, launches nothing, and leaves the project free to run again.
 func TestForceStopEndsAStartStuckOnDocker(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Hun starts and waits for Docker only on macOS")
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
