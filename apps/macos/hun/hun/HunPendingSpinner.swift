@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The spinner for an action in progress. Once the action has run long
-/// enough to be stuck (HunStore.forceStopDelay), the spinner becomes a thin
+/// enough to be stuck (HunStore.forceStopDelay, 15 seconds), the spinner becomes a thin
 /// turning ring with a small square in its middle, the mark of progress you
 /// can stop, at exactly the same size, so nothing around it moves. Whoever
 /// shows it makes it clickable.

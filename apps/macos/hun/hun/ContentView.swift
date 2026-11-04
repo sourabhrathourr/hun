@@ -2113,7 +2113,7 @@ struct ActionButton: View {
     let style: ActionStyle
     var isLoading = false
     var isDisabled = false
-    /// While loading, once the action has run long enough: clicking the
+    /// While loading, once the action has run long enough (15 seconds): clicking the
     /// button force-stops it. Its label and size stay as they are; only the
     /// spinner changes, to a ring with a small square.
     var onForceStop: (() -> Void)?

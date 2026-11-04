@@ -17,7 +17,7 @@
       {
         "title": "Improved",
         "changes": [
-          "Taking a while? After 8 seconds, the spinner on Run, Restart, Stop or a profile switch shows a small square: click it to force-stop the project, even while Docker isn't responding.",
+          "Taking a while? After 15 seconds, the spinner on Run, Restart, Stop or a profile switch shows a small square: click it to force-stop the project, even while Docker isn't responding.",
           "A service that keeps crashing is restarted after a growing pause, up to 10 seconds, and shows as crashed in between, with a note in its log, instead of flickering back to running every second.",
           "Activity is the default way the sidebar marks a running project. If you picked one, you keep it.",
           "Open Hun from the menu bar opens a new window when every window was closed."

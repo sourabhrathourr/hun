@@ -67,9 +67,9 @@ final class HunStore {
     private var pendingTokens: [HunActionKey: UUID] = [:]
     private var forceStoppedTokens: Set<UUID> = []
     /// How long an action runs before its spinner offers force stop. Most
-    /// finish in 1-5 seconds and a cold Docker start in 5-8; later than this
+    /// finish in 1-5 seconds and a cold Docker start in 5-8; well past that
     /// it's likely stuck.
-    static let forceStopDelay: Duration = .seconds(8)
+    static let forceStopDelay: Duration = .seconds(15)
     var daemonInfo: HunDaemonInfo?
     var daemonSettingsError: String?
     var isLoadingDaemonInfo = false
