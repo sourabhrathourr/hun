@@ -87,12 +87,29 @@ final class HunWhatsNew {
         }
     }
 
-    /// Releases after `version` up to this one, newest first; with no
-    /// version (the first launch that knows to look), just this one.
+    /// Releases after `version` up to this one, newest first.
     func releases(after version: String?) -> [HunRelease] {
-        let mine = releases.filter { Self.compare($0.version, currentVersion) <= 0 }
-        guard let version else { return Array(mine.prefix(1)) }
-        return mine.filter { Self.compare($0.version, version) > 0 }
+        Self.pending(releases, current: currentVersion, lastSeen: version)
+    }
+
+    /// The last version without What's new. A Mac that was set up but has no
+    /// version recorded came from it or earlier: every later version records
+    /// itself.
+    nonisolated static let lastVersionBeforeWhatsNew = "0.5.1"
+
+    /// What to show after an update: every release after the one last seen,
+    /// up to the running one, newest first. With none recorded, everything
+    /// since the last version without What's new, so someone jumping from
+    /// 0.5.x straight to a later version still hears about 0.6.0.
+    nonisolated static func pending(_ all: [HunRelease], current: String, lastSeen: String?) -> [HunRelease] {
+        let since = lastSeen ?? lastVersionBeforeWhatsNew
+        return all.filter { compare($0.version, current) <= 0 && compare($0.version, since) > 0 }
+    }
+
+    /// The release a card leads with: the newest one with something new (after
+    /// skipped versions, the big one, not the fixes that followed); the rest fold.
+    nonisolated static func lead(of releases: [HunRelease]) -> HunRelease? {
+        releases.first(where: \.hasNew) ?? releases.first
     }
 
     func present(_ releases: [HunRelease]) {
@@ -122,7 +139,7 @@ final class HunWhatsNew {
         presentation = nil
     }
 
-    static func compare(_ a: String, _ b: String) -> Int {
+    nonisolated static func compare(_ a: String, _ b: String) -> Int {
         let x = a.split(separator: ".").map { Int($0) ?? 0 }
         let y = b.split(separator: ".").map { Int($0) ?? 0 }
         for i in 0..<max(x.count, y.count) {
@@ -182,9 +199,7 @@ struct HunWhatsNewCard: View {
     @State private var showsFixes = false
     @State private var openOlder: Set<String> = []
 
-    /// The newest release with something new leads (after a skipped
-    /// version, the big one, not the fixes that followed it); the rest fold.
-    private var latest: HunRelease { releases.first(where: \.hasNew) ?? releases[0] }
+    private var latest: HunRelease { HunWhatsNew.lead(of: releases) ?? releases[0] }
     private var older: [HunRelease] { releases.filter { $0 != latest } }
     private var scene: HunMenuLook.Scene {
         colorScheme == .dark ? HunMenuLook.vista(named: darkVista, dark: true) : HunMenuLook.vista(named: lightVista, dark: false)
