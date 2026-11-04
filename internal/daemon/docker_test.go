@@ -44,7 +44,7 @@ func TestEnsureDockerReadyForCommandIgnoresNonDockerCommands(t *testing.T) {
 		return nil
 	}
 
-	if err := ensureDockerReadyForCommand("echo docker", nil); err != nil {
+	if err := ensureDockerReadyForCommand("echo docker", nil, nil); err != nil {
 		t.Fatalf("ensureDockerReadyForCommand returned error: %v", err)
 	}
 }
@@ -77,7 +77,7 @@ func TestEnsureDockerReadyForCommandOpensDockerDesktopOnMac(t *testing.T) {
 	var emitted []string
 	err := ensureDockerReadyForCommand("docker compose up postgres", func(line string) {
 		emitted = append(emitted, line)
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("ensureDockerReadyForCommand returned error: %v", err)
 	}

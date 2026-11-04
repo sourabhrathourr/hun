@@ -22,7 +22,12 @@ var (
 	sleepBeforeRecheck = time.Sleep
 )
 
-func ensureDockerReadyForCommand(command string, emit func(string)) error {
+// errForceStopped ends an action someone force-stopped while it waited.
+var errForceStopped = errors.New("force-stopped")
+
+// ensureDockerReadyForCommand starts Docker if the command needs it and waits
+// for it to answer. cancelled (may be nil) ends the wait early.
+func ensureDockerReadyForCommand(command string, emit func(string), cancelled func() bool) error {
 	if !commandNeedsDocker(command) {
 		return nil
 	}
@@ -48,7 +53,13 @@ func ensureDockerReadyForCommand(command string, emit func(string)) error {
 		} else if time.Now().After(deadline) {
 			return fmt.Errorf("Docker was started, but it did not become ready within %s: %w", dockerReadyTimeout.Round(time.Second), err)
 		}
+		if cancelled != nil && cancelled() {
+			return errForceStopped
+		}
 		sleepBeforeRecheck(dockerReadyPollInterval)
+		if cancelled != nil && cancelled() {
+			return errForceStopped
+		}
 	}
 }
 
@@ -130,19 +141,26 @@ func defaultLaunchDockerApp() error {
 		return errors.New("Docker Desktop auto-start is only supported on macOS")
 	}
 	if dockerPath, err := findDockerExecutable(); err == nil {
-		cmd := exec.Command(dockerPath, "desktop", "start", "--detach")
+		cmd, cancel := commandWithTimeout(dockerStartTimeout, dockerPath, "desktop", "start", "--detach")
 		cmd.Env = withDeveloperEnvironment(os.Environ())
-		if cmd.Run() == nil {
+		err := cmd.Run()
+		cancel()
+		if err == nil {
 			return nil
 		}
 	}
 	if _, err := exec.LookPath("open"); err != nil {
 		return err
 	}
-	if err := exec.Command("open", "-g", "-j", "-a", "Docker").Run(); err == nil {
+	open := func(args ...string) error {
+		cmd, cancel := commandWithTimeout(openCommandTimeout, "open", args...)
+		defer cancel()
+		return cmd.Run()
+	}
+	if err := open("-g", "-j", "-a", "Docker"); err == nil {
 		return nil
 	}
-	return exec.Command("open", "-g", "-j", "/Applications/Docker.app").Run()
+	return open("-g", "-j", "/Applications/Docker.app")
 }
 
 func isExecutableFile(path string) bool {

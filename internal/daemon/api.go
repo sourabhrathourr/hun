@@ -80,10 +80,17 @@ func (d *Daemon) HandleRequest(req Request) Response {
 		if req.Origin == "hook" {
 			return errorResponse("lifecycle commands cannot run recursively from Hun hooks")
 		}
+		// Taken before waiting its turn: a force stop from now on, even
+		// while this waits or runs hooks, cancels it.
+		generation := d.manager.cancelGeneration(req.Project)
 		if !d.acquireLifecycle(30 * time.Second) {
 			return errorResponse("lifecycle operation in progress")
 		}
 		defer d.lifecycleMu.Unlock()
+		if req.Project != "" {
+			d.manager.beginAction(req.Project, generation)
+			defer d.manager.endAction(req.Project)
+		}
 	}
 	switch req.Action {
 	case "ping":
@@ -150,6 +157,8 @@ func (d *Daemon) HandleRequest(req Request) Response {
 		return successResponse(map[string]string{"status": "valid"})
 	case "save_config":
 		return d.handleSaveConfig(req)
+	case "force_stop":
+		return d.handleForceStop(req)
 	case "free_port":
 		return d.handleFreePort(req)
 	case "subscribe":
@@ -180,6 +189,24 @@ func (d *Daemon) acquireLifecycle(timeout time.Duration) bool {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+// handleForceStop stops a project, or one service, at once, without waiting
+// its turn behind an action that's stuck. If no other action is running, it
+// also tidies up so the project can run again; otherwise the stuck action,
+// cancelled or with its processes gone, finishes and tidies up itself.
+func (d *Daemon) handleForceStop(req Request) Response {
+	if req.Project == "" {
+		return errorResponse("project is required")
+	}
+	d.manager.ForceStop(req.Project, req.Service)
+	// Let the killed processes' exit handlers run first.
+	time.Sleep(150 * time.Millisecond)
+	if d.lifecycleMu.TryLock() {
+		d.manager.FinishForceStop(req.Project, req.Service)
+		d.lifecycleMu.Unlock()
+	}
+	return successResponse(map[string]interface{}{"status": "force-stopped"})
 }
 
 func serializesLifecycle(action string) bool {

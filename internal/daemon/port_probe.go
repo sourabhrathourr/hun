@@ -107,7 +107,8 @@ func processGroupListeningTCPPorts(processGroupID int) (map[int]bool, error) {
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(lsof, "-nP", "-a", "-g", strconv.Itoa(processGroupID), "-iTCP", "-sTCP:LISTEN", "-Fn")
+	cmd, cancel := commandWithTimeout(quickCommandTimeout, lsof, "-nP", "-a", "-g", strconv.Itoa(processGroupID), "-iTCP", "-sTCP:LISTEN", "-Fn")
+	defer cancel()
 	output, err := cmd.Output()
 	if err != nil {
 		var exitErr *exec.ExitError

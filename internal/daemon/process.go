@@ -41,6 +41,7 @@ type Process struct {
 	ready     bool
 	stopping  bool
 	startedAt time.Time
+	crashes   []time.Time // recent crashes, within crashWindow
 	exited    chan struct{}
 	portLease *portLease
 	mu        sync.Mutex
@@ -308,6 +309,20 @@ func (p *Process) Stop() error {
 	return fmt.Errorf("process %s did not exit after SIGKILL", p.Name)
 }
 
+// Kill ends the process group at once, without SIGTERM's grace period, as an
+// intentional stop (so it isn't restarted). It doesn't wait for the exit.
+func (p *Process) Kill() {
+	p.mu.Lock()
+	if !p.running {
+		p.mu.Unlock()
+		return
+	}
+	pid := p.pid
+	p.stopping = true
+	p.mu.Unlock()
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
+}
+
 // IsRunning returns whether the process is currently running.
 func (p *Process) IsRunning() bool {
 	p.mu.Lock()
@@ -316,6 +331,30 @@ func (p *Process) IsRunning() bool {
 }
 
 // IsReady returns whether the process has matched its ready pattern.
+// Restarts is how many times it crashed recently (and Hun restarted it).
+func (p *Process) Restarts() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.crashes = recentCrashes(p.crashes, time.Now())
+	return len(p.crashes)
+}
+
+// recordCrash notes a crash now and returns how many happened recently.
+func (p *Process) recordCrash() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := time.Now()
+	p.crashes = recentCrashes(append(p.crashes, now), now)
+	return len(p.crashes)
+}
+
+// clearCrashes starts the count over, as when someone restarts it by hand.
+func (p *Process) clearCrashes() {
+	p.mu.Lock()
+	p.crashes = nil
+	p.mu.Unlock()
+}
+
 func (p *Process) IsReady() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()

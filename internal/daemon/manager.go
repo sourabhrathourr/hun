@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sourabhrathourr/hun/internal/config"
@@ -32,11 +33,18 @@ type Manager struct {
 	configCache       map[string]projectConfigCacheEntry
 	observer          observer
 
+	// Bumped by ForceStop, per project: actions in flight for it see the
+	// change and stand down.
+	cancelMu  sync.Mutex
+	cancelGen map[string]int
+	// The cancel generation the action now running for a project began at.
+	actionGen map[string]int
+
 	mu       sync.RWMutex
 	stateMu  sync.Mutex
 	iconMu   sync.Mutex
 	configMu sync.Mutex
-	st      *state.State
+	st       *state.State
 }
 
 type runtimePortSignal struct {
@@ -408,6 +416,8 @@ func (m *Manager) startService(projectName, serviceName string, projConfig *conf
 }
 
 func (m *Manager) startConfiguredService(projectName, serviceName string, svcConfig *config.Service, projectPath string, allowPortFallback bool, preferredPort int, waitForReady bool) (*Process, error) {
+	generation := m.actionGeneration(projectName)
+	cancelled := func() bool { return m.cancelledSince(projectName, generation) }
 	attachToContainer := false
 	if ext, ok := m.attribution(freshObservationAge).external(projectName, serviceName); ok {
 		if !ext.Docker || !commandNeedsDocker(svcConfig.Cmd) {
@@ -464,6 +474,8 @@ func (m *Manager) startConfiguredService(projectName, serviceName string, svcCon
 	// Every start boundary represents a fresh in-memory log session.
 	m.logs.ResetService(projectName, serviceName)
 
+	// One hint per run when the service runs out of open files.
+	var hintedFileLimit atomic.Bool
 	emitServiceLine := func(line string, isErr bool) {
 		logLine := LogLine{
 			Timestamp: time.Now(),
@@ -475,11 +487,14 @@ func (m *Manager) startConfiguredService(projectName, serviceName string, svcCon
 		m.logs.WriteLog(logLine)
 		m.subscribers.Broadcast(logLine)
 		m.observeRuntimePort(projectName, serviceName, line)
+		if looksLikeFileLimit(line) && hintedFileLimit.CompareAndSwap(false, true) {
+			m.emitInternalServiceLine(projectName, serviceName, fileLimitHint(serviceName), true)
+		}
 	}
 
 	if err := ensureDockerReadyForCommand(svcConfig.Cmd, func(line string) {
 		emitServiceLine(line, false)
-	}); err != nil {
+	}, cancelled); err != nil {
 		proc.ReleasePortLease()
 		return nil, err
 	}
@@ -497,8 +512,25 @@ func (m *Manager) startConfiguredService(projectName, serviceName string, svcCon
 		}
 		m.updateServiceState(projectName, serviceName, 0, proc.ObservedPort(), status)
 		if status == "crashed" && restartPolicy == "on_failure" {
-			time.Sleep(time.Second)
+			crashes := proc.recordCrash()
+			delay := restartDelay(crashes)
+			generation := m.cancelGeneration(projectName)
+			time.Sleep(delay)
+			// Stopped, restarted or removed while it waited: leave it.
+			if !m.ownsProcess(projectName, serviceName, proc) || proc.IsRunning() {
+				return
+			}
+			// Force-stopped while it waited: it stays stopped.
+			if m.cancelledSince(projectName, generation) {
+				proc.ReleasePortLease()
+				m.updateServiceState(projectName, serviceName, 0, proc.ObservedPort(), "stopped")
+				return
+			}
+			hintedFileLimit.Store(false)
 			m.logs.ResetService(projectName, serviceName)
+			if crashes >= crashLoopNotice {
+				m.emitInternalServiceLine(projectName, serviceName, crashLoopMessage(serviceName, crashes, delay), true)
+			}
 			launchPort := proc.ResetObservedPort()
 			if portErr := ensureTCPPortAvailable(launchPort); portErr != nil {
 				m.updateServiceState(projectName, serviceName, 0, launchPort, "crashed")
@@ -522,9 +554,20 @@ func (m *Manager) startConfiguredService(projectName, serviceName string, svcCon
 		}
 	}
 
+	// Force-stopped while it waited (for Docker, say): don't start it.
+	if cancelled() {
+		proc.ReleasePortLease()
+		return nil, errForceStopped
+	}
+
 	// Register before starting output scanners so fast startup lines can update
 	// the same live process model consumed by status and the macOS sidebar.
 	m.mu.Lock()
+	if m.processes[projectName] == nil {
+		m.mu.Unlock()
+		proc.ReleasePortLease()
+		return nil, errForceStopped
+	}
 	m.processes[projectName][serviceName] = proc
 	m.mu.Unlock()
 
@@ -750,6 +793,8 @@ func (m *Manager) RestartService(projectName, serviceName string) error {
 	if err := proc.Stop(); err != nil {
 		return err
 	}
+	// A restart by hand starts the crash count over.
+	proc.clearCrashes()
 	m.clearRuntimePortSignal(projectName, serviceName)
 	m.logs.ResetService(projectName, serviceName)
 	launchPort, lease, err := m.ports.ReserveAvailablePort(proc.BasePort(), proc.AllowsRuntimePort())
@@ -798,6 +843,7 @@ func (m *Manager) Status() map[string]map[string]ServiceInfo {
 				Running:   running,
 				Ready:     proc.IsReady(),
 				StartedAt: proc.StartedAt(),
+				Restarts:  proc.Restarts(),
 			}
 		}
 	}
@@ -1096,6 +1142,7 @@ type ServiceInfo struct {
 	Ready     bool      `json:"ready"`
 	StartedAt time.Time `json:"started_at,omitempty"`
 	External  bool      `json:"external,omitempty"` // running, but not started by Hun
+	Restarts  int       `json:"restarts,omitempty"` // crashes in the last few minutes
 }
 
 var runtimePortPatterns = []*regexp.Regexp{
@@ -1353,6 +1400,145 @@ func (m *Manager) applyVerifiedRuntimePort(project, service string, proc *Proces
 			}
 		}()
 	}
+}
+
+func (m *Manager) cancelGeneration(project string) int {
+	m.cancelMu.Lock()
+	defer m.cancelMu.Unlock()
+	return m.cancelGen[project]
+}
+
+func (m *Manager) cancelledSince(project string, generation int) bool {
+	return m.cancelGeneration(project) != generation
+}
+
+// beginAction records the cancel generation an action for project began at
+// (when the daemon received it); endAction forgets it.
+func (m *Manager) beginAction(project string, generation int) {
+	m.cancelMu.Lock()
+	defer m.cancelMu.Unlock()
+	if m.actionGen == nil {
+		m.actionGen = make(map[string]int)
+	}
+	m.actionGen[project] = generation
+}
+
+func (m *Manager) endAction(project string) {
+	m.cancelMu.Lock()
+	defer m.cancelMu.Unlock()
+	delete(m.actionGen, project)
+}
+
+// actionGeneration is the generation the running action for project began
+// at, or the current one when none is recorded (a crash restart, a test).
+func (m *Manager) actionGeneration(project string) int {
+	m.cancelMu.Lock()
+	defer m.cancelMu.Unlock()
+	if generation, ok := m.actionGen[project]; ok {
+		return generation
+	}
+	return m.cancelGen[project]
+}
+
+// ForceStop is Stop without waiting, for an action that's stuck (usually on
+// a Docker that doesn't answer). It cancels what's in flight for the project
+// (a start waiting for Docker won't launch; a crashed service won't be
+// restarted), kills its processes, or one service's, outright, and marks them
+// stopped. It doesn't take a turn, so it works while another action holds
+// the lifecycle lock; FinishForceStop tidies up once nothing else is running.
+// Containers a compose command started are left alone: Docker may be what's
+// stuck.
+func (m *Manager) ForceStop(projectName, serviceName string) {
+	m.cancelMu.Lock()
+	if m.cancelGen == nil {
+		m.cancelGen = make(map[string]int)
+	}
+	m.cancelGen[projectName]++
+	m.cancelMu.Unlock()
+
+	m.mu.RLock()
+	targets := make(map[string]*Process)
+	for name, proc := range m.processes[projectName] {
+		if serviceName == "" || name == serviceName {
+			targets[name] = proc
+		}
+	}
+	m.mu.RUnlock()
+
+	for name, proc := range targets {
+		proc.Kill()
+		m.updateServiceState(projectName, name, 0, proc.ObservedPort(), "stopped")
+	}
+	if len(targets) > 0 {
+		m.emitInternalServiceLine(projectName, firstName(targets, serviceName), "[hun] force-stopped", true)
+	}
+}
+
+// FinishForceStop does a stop's bookkeeping after ForceStop, so the project
+// can run again: called only while holding the lifecycle lock, with no other
+// action in flight. Skips the post-stop hook and the Docker sweep.
+func (m *Manager) FinishForceStop(projectName, serviceName string) {
+	if serviceName != "" {
+		m.mu.Lock()
+		if procs := m.processes[projectName]; procs != nil {
+			if proc := procs[serviceName]; proc != nil && !proc.IsRunning() {
+				proc.ReleasePortLease()
+				delete(procs, serviceName)
+			}
+		}
+		m.mu.Unlock()
+		m.stopProjectIfIdle(projectName)
+		return
+	}
+	m.mu.Lock()
+	procs, exists := m.processes[projectName]
+	for _, proc := range procs {
+		if proc.IsRunning() {
+			// Still dying; the exit handler finishes the job.
+			m.mu.Unlock()
+			return
+		}
+	}
+	for _, proc := range procs {
+		proc.ReleasePortLease()
+	}
+	delete(m.processes, projectName)
+	delete(m.projectCfgs, projectName)
+	nextActive := ""
+	for name := range m.processes {
+		nextActive = name
+		break
+	}
+	m.mu.Unlock()
+	if !exists {
+		return
+	}
+	m.ports.ReleaseOffset(projectName)
+	m.clearRuntimePortSignals(projectName)
+	m.setProjectStopped(projectName)
+	if nextActive != "" {
+		m.SetFocus(nextActive, m.currentMode())
+	}
+}
+
+func firstName(procs map[string]*Process, preferred string) string {
+	if preferred != "" {
+		return preferred
+	}
+	names := make([]string, 0, len(procs))
+	for name := range procs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names[0]
+}
+
+// ownsProcess reports whether proc is still the service's process: not
+// stopped, removed or replaced.
+func (m *Manager) ownsProcess(project, service string, proc *Process) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.processes[project][service] == proc
 }
 
 func (m *Manager) emitInternalServiceLine(project, service, line string, isErr bool) {
