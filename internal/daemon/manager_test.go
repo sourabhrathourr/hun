@@ -130,9 +130,18 @@ func TestStatusShowsProjectDuringStartup(t *testing.T) {
 		done <- m.StartProject("booting", proj, projectPath, false)
 	}()
 
-	time.Sleep(150 * time.Millisecond)
-
-	status := m.Status()
+	// Polled rather than one fixed pause: on a busy machine the start can
+	// take longer than a moment, and svc1 runs for 3s, so 2s is still during
+	// startup.
+	var status map[string]map[string]ServiceInfo
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		status = m.Status()
+		if _, ok := status["booting"]["svc1"]; ok || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 	projectStatus, ok := status["booting"]
 	if !ok {
 		t.Fatalf("expected booting project in status during startup, got %v", status)
