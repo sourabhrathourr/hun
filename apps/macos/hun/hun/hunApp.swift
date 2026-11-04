@@ -26,6 +26,10 @@ struct hunApp: App {
         DispatchQueue.main.async {
             HunTheme.saved.apply()
             HunStatusItemController.install(store: store, license: license)
+            HunAppBehavior.install()
+            // Notes, before the welcome can finish, whether this Mac was
+            // already set up: a fresh install's first launch isn't an update.
+            _ = HunWhatsNew.shared
             license.startMonitoring()
         }
         #if DEBUG
@@ -43,6 +47,7 @@ struct hunApp: App {
                 .environment(updater)
                 .environment(license)
                 .frame(minWidth: 560, minHeight: 420)
+                .background(HunWindowOpenerCapture())
         }
         .windowStyle(.hiddenTitleBar)
         .commands {
@@ -83,14 +88,18 @@ struct hunApp: App {
     }
 
     static func openDashboard() {
+        // The Dock icon may be hidden while no window is open.
+        HunAppBehavior.showDock()
         NSApp.activate(ignoringOtherApps: true)
         for window in NSApp.windows where window.canBecomeKey && window.isRestorable {
             window.makeKeyAndOrderFront(nil)
             return
         }
-        for window in NSApp.windows where window.canBecomeKey {
+        for window in NSApp.windows where window.canBecomeKey && !(window is NSPanel) {
             window.makeKeyAndOrderFront(nil)
             return
         }
+        // Every window was closed: open a new one.
+        HunAppBehavior.openWindow?(id: "dashboard")
     }
 }

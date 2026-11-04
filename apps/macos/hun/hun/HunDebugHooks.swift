@@ -90,6 +90,97 @@ enum HunDebugHooks {
         observers.append(center.addObserver(forName: .init("sh.hun.debug.menu"), object: nil, queue: .main) { _ in
             Task { @MainActor in HunStatusItemController.debugToggle() }
         })
+        // object: "on", "off", "play", "pause" or "skip".
+        observers.append(center.addObserver(forName: .init("sh.hun.debug.music"), object: nil, queue: .main) { note in
+            let word = (note.object as? String) ?? ""
+            Task { @MainActor in
+                let music = HunMenuMusic.shared
+                switch word {
+                case "on": UserDefaults.standard.set(true, forKey: HunMenuMusic.enabledKey)
+                case "off":
+                    UserDefaults.standard.set(false, forKey: HunMenuMusic.enabledKey)
+                    music.stop()
+                case "play": music.play()
+                case "pause": music.pause()
+                case "skip": music.skip()
+                default: break
+                }
+            }
+        })
+        // object: "focus", "focus:<a stand-in project name>", "multitask" or
+        // "off". Only the menu's sky changes; the daemon is not touched.
+        observers.append(center.addObserver(forName: .init("sh.hun.debug.menuPreview"), object: nil, queue: .main) { note in
+            let text = (note.object as? String) ?? ""
+            Task { @MainActor in
+                let preview = HunMenuPreview.shared
+                let parts = text.split(separator: ":", maxSplits: 1).map(String.init)
+                switch parts.first {
+                case "focus":
+                    preview.mode = .focus
+                    preview.focusName = parts.count > 1 ? parts[1] : nil
+                case "multitask":
+                    preview.mode = .multitask
+                    preview.focusName = nil
+                default:
+                    preview.mode = nil
+                    preview.focusName = nil
+                }
+            }
+        })
+        // What's new: "card:<version>", "notice:<version>", "since:<version>"
+        // (as if updated from that version), "preview:<path to a draft
+        // release JSON>", or "reset".
+        observers.append(center.addObserver(forName: .init("sh.hun.debug.whatsNew"), object: nil, queue: .main) { note in
+            let text = (note.object as? String) ?? ""
+            Task { @MainActor in
+                let whatsNew = HunWhatsNew.shared
+                let parts = text.split(separator: ":", maxSplits: 1).map(String.init)
+                let version = parts.count > 1 ? parts[1] : whatsNew.currentVersion
+                let release = whatsNew.releases.filter { $0.version == version }
+                switch parts.first {
+                case "card": whatsNew.presentation = release.isEmpty ? nil : .card(release)
+                case "notice": whatsNew.presentation = release.isEmpty ? nil : .notice(release)
+                case "since": whatsNew.present(whatsNew.releases(after: version))
+                case "reset": UserDefaults.standard.removeObject(forKey: HunWhatsNew.lastSeenKey)
+                case "preview":
+                    // A draft entry for a release not in the changelog yet.
+                    if let data = FileManager.default.contents(atPath: version),
+                       let draft = try? JSONDecoder().decode(HunRelease.self, from: data) {
+                        whatsNew.presentation = .card([draft])
+                    }
+                default: whatsNew.dismiss()
+                }
+            }
+        })
+        // object: a folder path. Force-stops that project's pending action,
+        // as clicking its spinner does once it offers to.
+        observers.append(center.addObserver(forName: .init("sh.hun.debug.forceStop"), object: nil, queue: .main) { note in
+            guard let path = note.object as? String else { return }
+            Task { @MainActor in
+                if let project = store.model.projects.first(where: { $0.path == path }) {
+                    store.forceStopAction(for: project)?()
+                }
+            }
+        })
+        // Dashboard windows: object "open" or "close" (closes them all).
+        observers.append(center.addObserver(forName: .init("sh.hun.debug.dashboard"), object: nil, queue: .main) { note in
+            let word = (note.object as? String) ?? ""
+            Task { @MainActor in
+                if word == "close" {
+                    for window in NSApp.windows where window.canBecomeMain && !(window is NSPanel) { window.close() }
+                } else {
+                    hunApp.openDashboard()
+                }
+            }
+        })
+        // object: "hide" or "show": the hide-Dock-icon setting.
+        observers.append(center.addObserver(forName: .init("sh.hun.debug.dock"), object: nil, queue: .main) { note in
+            let hide = (note.object as? String) == "hide"
+            Task { @MainActor in
+                UserDefaults.standard.set(hide, forKey: HunAppBehavior.hideDockKey)
+                HunAppBehavior.applyDockSetting()
+            }
+        })
         // object: "key=value", a string preference set from inside the app.
         observers.append(center.addObserver(forName: .init("sh.hun.debug.setDefault"), object: nil, queue: .main) { note in
             guard let text = note.object as? String, let split = text.firstIndex(of: "=") else { return }

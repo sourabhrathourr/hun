@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"sort"
@@ -58,6 +57,8 @@ func New() (*Daemon, error) {
 
 // Run starts the daemon and listens for connections.
 func (d *Daemon) Run() error {
+	// Before any service starts: they inherit it.
+	_ = raiseOpenFileLimit()
 	if err := d.acquireLock(); err != nil {
 		return err
 	}
@@ -242,7 +243,8 @@ func (d *Daemon) saveGitContext(project string) {
 		return
 	}
 	// Get current git branch
-	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+	cmd, cancel := commandWithTimeout(quickCommandTimeout, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	defer cancel()
 	cmd.Dir = path
 	out, err := cmd.Output()
 	if err != nil {

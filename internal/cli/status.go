@@ -77,6 +77,13 @@ var statusCmd = &cobra.Command{
 				if info.External {
 					statusStr += " (outside hun)"
 				}
+				if info.Restarts > 0 {
+					times := "times"
+					if info.Restarts == 1 {
+						times = "time"
+					}
+					statusStr += fmt.Sprintf(" (crashed %d %s recently)", info.Restarts, times)
+				}
 				fmt.Printf("  %-20s %s %-6s %s\n", svc, readyMark, port, statusStr)
 			}
 			fmt.Println()

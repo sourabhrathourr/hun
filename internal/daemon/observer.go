@@ -205,7 +205,9 @@ func defaultListTCPListeners() ([]ObservedListener, error) {
 	if err != nil {
 		return nil, err
 	}
-	output, err := exec.Command(lsof, "-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pcn").Output()
+	cmd, cancel := commandWithTimeout(quickCommandTimeout, lsof, "-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pcn")
+	defer cancel()
+	output, err := cmd.Output()
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
@@ -273,7 +275,9 @@ func parseLsofEndpointPort(endpoint string) int {
 }
 
 func defaultListProcessTable() (map[int]ObservedProcess, error) {
-	output, err := exec.Command("ps", "-axo", "pid=,ppid=,pgid=,comm=").Output()
+	cmd, cancel := commandWithTimeout(quickCommandTimeout, "ps", "-axo", "pid=,ppid=,pgid=,comm=")
+	defer cancel()
+	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("list processes: %w", err)
 	}
@@ -317,7 +321,9 @@ func defaultLookupProcessCwds(pids []int) (map[int]string, error) {
 	for _, pid := range pids {
 		list = append(list, strconv.Itoa(pid))
 	}
-	output, err := exec.Command(lsof, "-a", "-p", strings.Join(list, ","), "-d", "cwd", "-F", "pn").Output()
+	cmd, cancel := commandWithTimeout(quickCommandTimeout, lsof, "-a", "-p", strings.Join(list, ","), "-d", "cwd", "-F", "pn")
+	defer cancel()
+	output, err := cmd.Output()
 	if err != nil {
 		var exitErr *exec.ExitError
 		if !errors.As(err, &exitErr) || len(output) == 0 {

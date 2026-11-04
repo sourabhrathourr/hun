@@ -265,7 +265,7 @@ enum HunRunningMarker: String, CaseIterable, Identifiable {
     case bar
 
     static let key = "hun.appearance.runningMarker"
-    static let defaultValue = HunRunningMarker.bar
+    static let defaultValue = HunRunningMarker.activity
 
     var id: String { rawValue }
 
