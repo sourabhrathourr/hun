@@ -63,6 +63,7 @@ func ReconcileState(st *state.State) (Result, bool, error) {
 	if err != nil {
 		return result, false, err
 	}
+	result.Projects = WithWorktrees(result.Projects, st.Registry)
 	changes := Reconcile(st, result, func(key string) bool {
 		return st.Projects[key].Status == "running"
 	})
@@ -97,7 +98,7 @@ func Reconcile(st *state.State, result Result, busy func(key string) bool) Chang
 		canonical := canonicalPath(path)
 		byPath[canonical] = append(byPath[canonical], key)
 		if proj, err := config.LoadProject(path); err == nil {
-			names[key] = proj.Name
+			names[key] = projectName(path, proj)
 		}
 	}
 
@@ -204,7 +205,7 @@ func Scan(global *config.Global) (Result, error) {
 				result.Warnings = append(result.Warnings, fmt.Sprintf("skipping %s: %v", path, loadErr))
 				return nil
 			}
-			result.Projects = append(result.Projects, FoundProject{Name: proj.Name, Path: projectDir})
+			result.Projects = append(result.Projects, FoundProject{Name: projectName(projectDir, proj), Path: projectDir})
 			return nil
 		}); err != nil {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("scanning %s: %v", root, err))
@@ -215,6 +216,49 @@ func Scan(global *config.Global) (Result, error) {
 		return result.Projects[i].Path < result.Projects[j].Path
 	})
 	return result, nil
+}
+
+// WithWorktrees adds the git worktrees of known projects (found or already
+// registered) that run on their main checkout's .hun.yml: an agent's
+// worktree shows up as soon as it exists, wherever it lives (often in a
+// hidden folder such as .claude/worktrees, which a scan doesn't see).
+func WithWorktrees(found []FoundProject, registry map[string]string) []FoundProject {
+	seen := make(map[string]bool)
+	mains := make([]string, 0, len(found)+len(registry))
+	for _, project := range found {
+		seen[canonicalPath(project.Path)] = true
+		mains = append(mains, project.Path)
+	}
+	for _, path := range registry {
+		mains = append(mains, path)
+	}
+	sort.Strings(mains)
+	for _, main := range mains {
+		for _, worktree := range config.Worktrees(main) {
+			key := canonicalPath(worktree)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			proj, err := config.LoadProject(worktree)
+			if err != nil {
+				continue
+			}
+			found = append(found, FoundProject{Name: projectName(worktree, proj), Path: worktree})
+		}
+	}
+	sort.Slice(found, func(i, j int) bool { return found[i].Path < found[j].Path })
+	return found
+}
+
+// projectName is the name a folder registers under: its .hun.yml's name,
+// or, for a worktree running on its main checkout's file, that name and the
+// worktree's folder (otto-ott-1650), so it never takes the project's own.
+func projectName(dir string, proj *config.Project) string {
+	if filepath.Dir(config.ProjectFile(dir)) != filepath.Clean(dir) {
+		return proj.Name + "-" + filepath.Base(dir)
+	}
+	return proj.Name
 }
 
 // scanDirs returns the configured scan roots, or the default developer

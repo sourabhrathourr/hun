@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -96,6 +98,7 @@ func TestAttributeNestedProjectsPreferDeepest(t *testing.T) {
 }
 
 func TestAttributeSkipsManagedAndCollectsUnmanaged(t *testing.T) {
+	setUserHome(t, "/Users/me")
 	obs := Observation{
 		Listeners: []ObservedListener{
 			{PID: 200, Command: "node", Port: 3000},
@@ -206,5 +209,183 @@ func TestParseObservationSources(t *testing.T) {
 	containers := parseDockerPS("abc\totto-backend-1\t0.0.0.0:8000->8000/tcp, [::]:8000->8000/tcp\totto\t/w/otto\tbackend\n")
 	if len(containers) != 1 || !reflect.DeepEqual(containers[0].Ports, []int{8000}) || containers[0].Service != "backend" {
 		t.Fatalf("containers = %+v", containers)
+	}
+}
+
+func setUserHome(t *testing.T, home string) {
+	t.Helper()
+	previous := userHomeDir
+	userHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { userHomeDir = previous })
+}
+
+// Servers started from any of the person's own folders show under "Running
+// elsewhere", not just those in the project folders Hun scans; the home
+// folder itself, ~/Library, hidden folders and other people's folders don't.
+func TestAttributeShowsServersFromAnyUserFolder(t *testing.T) {
+	setUserHome(t, "/Users/me")
+	obs := Observation{
+		Listeners: []ObservedListener{
+			{PID: 100, Command: "node", Port: 4790},
+			{PID: 200, Command: "node", Port: 4791},
+			{PID: 300, Command: "node", Port: 4792},
+			{PID: 400, Command: "node", Port: 4793},
+			{PID: 500, Command: "node", Port: 4794},
+			{PID: 600, Command: "python", Port: 4795},
+		},
+		Processes: map[int]ObservedProcess{
+			100: {PID: 100, PPID: 1, PGID: 100, Cwd: "/Users/me/tools/reviewer"},
+			200: {PID: 200, PPID: 1, PGID: 200, Cwd: "/Users/me"},
+			300: {PID: 300, PPID: 1, PGID: 300, Cwd: "/Users/me/Library/Application Support/Some App"},
+			400: {PID: 400, PPID: 1, PGID: 400, Cwd: "/Users/me/.ollama"},
+			500: {PID: 500, PPID: 1, PGID: 500, Cwd: "/Users/someone/tools"},
+			600: {PID: 600, PPID: 1, PGID: 600, Cwd: "/Users/me/Downloads/demo"},
+		},
+	}
+	attr := attribute(obs, nil, nil, []string{"/Users/me/side-projects"})
+
+	var got []int
+	for _, entry := range attr.Unmanaged {
+		got = append(got, entry.Port)
+	}
+	if want := []int{4790, 4795}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unmanaged ports = %v, want %v", got, want)
+	}
+}
+
+func TestInUserFolder(t *testing.T) {
+	cases := map[string]bool{
+		"/Users/me/tools/reviewer": true,
+		"/Users/me/x":              true,
+		"/Users/me":                false,
+		"/Users/me/":               false,
+		"/Users/me/Library/Caches": false,
+		"/Users/me/.config/thing":  false,
+		"/Users/meet/tools":        false,
+		"/Users":                   false,
+		"/":                        false,
+		"":                         false,
+	}
+	for dir, want := range cases {
+		if got := inUserFolder("/Users/me", dir); got != want {
+			t.Errorf("inUserFolder(%q) = %v, want %v", dir, got, want)
+		}
+	}
+	if inUserFolder("", "/Users/me/tools") {
+		t.Error("no home should match nothing")
+	}
+}
+
+// A server started from a terminal or an agent is a dev server wherever it
+// runs, even in a hidden folder (an agent's worktree in ~/.codex) or /tmp;
+// one an app started (from launchd) isn't.
+func TestAttributeShowsServersStartedFromTerminalsAndAgents(t *testing.T) {
+	setUserHome(t, "/Users/me")
+	obs := Observation{
+		Listeners: []ObservedListener{
+			{PID: 100, Command: "node", Port: 5173},
+			{PID: 200, Command: "python3", Port: 8000},
+			{PID: 300, Command: "Helper", Port: 7265},
+			{PID: 400, Command: "node", Port: 3001},
+		},
+		Processes: map[int]ObservedProcess{
+			100: {PID: 100, PPID: 101, Cwd: "/Users/me/.codex/worktrees/a1b2/app"},
+			101: {PID: 101, PPID: 102, Command: "/bin/zsh", Cwd: "/Users/me/.codex/worktrees/a1b2/app"},
+			102: {PID: 102, PPID: 1, Command: "codex", Cwd: "/Users/me"},
+			200: {PID: 200, PPID: 201, Cwd: "/private/tmp/demo"},
+			201: {PID: 201, PPID: 1, Command: "-zsh", Cwd: "/private/tmp/demo"},
+			300: {PID: 300, PPID: 1, Command: "Helper", Cwd: "/Users/me/.someapp"},
+			400: {PID: 400, PPID: 401, Cwd: "/Users/me/.config/thing"},
+			401: {PID: 401, PPID: 1, Command: "hun", Cwd: "/"},
+		},
+	}
+	attr := attribute(obs, nil, nil, nil)
+
+	var got []int
+	for _, entry := range attr.Unmanaged {
+		got = append(got, entry.Port)
+	}
+	if want := []int{5173, 8000}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unmanaged ports = %v, want %v", got, want)
+	}
+}
+
+// A server in an agent's worktree inside the project folder is that
+// worktree's, not the project's: it must not show the project as running.
+func TestAttributeKeepsNestedWorktreesApartFromTheirProject(t *testing.T) {
+	setUserHome(t, "/Users/me")
+	previous := isLinkedWorktree
+	isLinkedWorktree = func(dir string) bool { return dir == "/w/otto/.claude/worktrees/ott-1" }
+	t.Cleanup(func() { isLinkedWorktree = previous })
+
+	obs := Observation{
+		Listeners: []ObservedListener{{PID: 100, Command: "node", Port: 3000}},
+		Processes: map[int]ObservedProcess{
+			100: {PID: 100, PPID: 1, Cwd: "/w/otto/.claude/worktrees/ott-1/frontend"},
+		},
+	}
+	attr := attribute(obs, []attributionProject{ottoProject()}, nil, []string{"/w"})
+
+	if ext, ok := attr.external("otto", "frontend"); ok {
+		t.Fatalf("worktree server attributed to otto: %+v", ext)
+	}
+	if holder := attr.Holders[3000]; holder.Project != "" {
+		t.Fatalf("holder = %+v, want no project", holder)
+	}
+	if len(attr.Unmanaged) != 1 || attr.Unmanaged[0].Project != "" || attr.Unmanaged[0].Cwd != "/w/otto/.claude/worktrees/ott-1/frontend" {
+		t.Fatalf("unmanaged = %+v, want the worktree server on its own", attr.Unmanaged)
+	}
+}
+
+func TestDefaultIsLinkedWorktree(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) string {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if content != "" {
+			if err := os.WriteFile(filepath.Join(path, ".git"), []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return path
+	}
+	worktree := write("wt", "gitdir: /w/otto/.git/worktrees/ott-1\n")
+	submodule := write("sub", "gitdir: ../.git/modules/sub\n")
+	plain := write("plain", "")
+	if !defaultIsLinkedWorktree(worktree) {
+		t.Error("worktree not recognised")
+	}
+	if defaultIsLinkedWorktree(submodule) || defaultIsLinkedWorktree(plain) {
+		t.Error("submodule or plain folder taken for a worktree")
+	}
+}
+
+func TestWorktreeOf(t *testing.T) {
+	root := t.TempDir()
+	mk := func(rel string) string {
+		path := filepath.Join(root, rel)
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	mk("otto/.git/worktrees/ott-1650")
+	wt := mk("otto/.claude/worktrees/ott-1650/frontend")
+	if err := os.WriteFile(filepath.Join(root, "otto/.claude/worktrees/ott-1650/.git"), []byte("gitdir: "+filepath.Join(root, "otto/.git/worktrees/ott-1650")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	main := mk("otto/frontend")
+	plain := mk("loose/app")
+
+	if got := worktreeOf(wt); got == nil || *got != (WorktreeRef{Name: "ott-1650", Repo: "otto"}) {
+		t.Fatalf("worktree = %+v, want ott-1650 of otto", got)
+	}
+	if got := worktreeOf(main); got != nil {
+		t.Fatalf("main checkout reported as a worktree: %+v", got)
+	}
+	if got := worktreeOf(plain); got != nil {
+		t.Fatalf("plain folder reported as a worktree: %+v", got)
 	}
 }

@@ -6,9 +6,14 @@ struct HunConfigEditorTarget: Identifiable, Hashable {
     let name: String
     /// The project folder that holds the .hun.yml.
     let directory: String
+    /// The file itself, when it's elsewhere: a worktree without its own
+    /// .hun.yml runs on (and edits) its main checkout's.
+    var file: String? = nil
 
     var id: String { directory }
-    var fileURL: URL { URL(fileURLWithPath: directory).appendingPathComponent(".hun.yml") }
+    var fileURL: URL {
+        file.map { URL(fileURLWithPath: $0) } ?? URL(fileURLWithPath: directory).appendingPathComponent(".hun.yml")
+    }
 }
 
 /// Edits .hun.yml in place. The text is checked as you type with the same

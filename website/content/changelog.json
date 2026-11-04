@@ -1,5 +1,30 @@
 [
   {
+    "version": "0.6.2",
+    "date": "2026-11-05",
+    "title": "Worktrees",
+    "summary": "Your agents' git worktrees show up under their project and run on its setup. Hun also sees every dev server you or an agent start.",
+    "groups": [
+      {
+        "title": "New",
+        "changes": [
+          "Git worktrees show up under their project in the sidebar. A worktree without its own .hun.yml runs on the main checkout's, so an agent's worktree runs like the project. Running worktrees stay on top, the rest fold into one line, newest first.",
+          "Point one service at another with ${service.port} in env, such as API_URL: http://localhost:${api.port}. Hun fills in the port that service really runs on, so a worktree's frontend talks to its own backend when Multitask moves it to a free port."
+        ]
+      },
+      {
+        "title": "Improved",
+        "changes": [
+          "Running elsewhere lists any dev server you or an agent started, wherever it runs, and names the worktree it's in.",
+          "A server in an agent's worktree no longer makes its project look like it's running.",
+          "Hover the record in the menu bar for previous and next. Previous goes round from the first piece.",
+          "The running count in the menu bar sits exactly in the middle, and \"all quiet\" moves up to the corner when music plays.",
+          "Quiet City is out of the music."
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.6.1",
     "date": "2026-11-05",
     "title": "Quiet at login",

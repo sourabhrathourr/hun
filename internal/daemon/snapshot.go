@@ -47,6 +47,15 @@ type SnapshotProject struct {
 	// Profile is the one Run uses: the last one run, empty for every service.
 	Profiles []SnapshotProfile `json:"profiles,omitempty"`
 	Profile  string            `json:"profile,omitempty"`
+	// WorktreeOf is the main checkout's folder when this is a git worktree,
+	// so the app can show it under its project.
+	WorktreeOf string `json:"worktree_of,omitempty"`
+	// WorktreeCreatedAt is when the worktree was made, so the newest can
+	// be listed first.
+	WorktreeCreatedAt string `json:"worktree_created_at,omitempty"`
+	// ConfigPath is the .hun.yml in use: the folder's own, or its main
+	// checkout's for a worktree without one.
+	ConfigPath string `json:"config_path,omitempty"`
 }
 
 type SnapshotProfile struct {
@@ -160,6 +169,7 @@ func (m *Manager) ReconcileDiscovery(force bool) (discovery.Result, error) {
 	if err != nil {
 		return result, err
 	}
+	result.Projects = discovery.WithWorktrees(result.Projects, current)
 
 	// Stop running projects whose folder was deleted before unregistering them.
 	names := make([]string, 0, len(current))
@@ -229,6 +239,13 @@ func (m *Manager) snapshotProject(name, path string, st *state.State, live map[s
 	if projectState.Status != "" {
 		project.Status = projectState.Status
 	}
+	if main, ok := config.MainCheckout(path); ok {
+		project.WorktreeOf = main
+		if created := createdAt(path); !created.IsZero() {
+			project.WorktreeCreatedAt = created.UTC().Format(time.RFC3339)
+		}
+	}
+	project.ConfigPath = config.ProjectFile(path)
 
 	proj, err := m.cachedProjectConfig(path)
 	if err != nil {
@@ -443,7 +460,7 @@ type projectConfigCacheEntry struct {
 // every couple of seconds. The parsed config is reused until the file's
 // modification time or size changes. Callers must not modify the result.
 func (m *Manager) cachedProjectConfig(path string) (*config.Project, error) {
-	info, statErr := os.Stat(filepath.Join(path, ".hun.yml"))
+	info, statErr := os.Stat(config.ProjectFile(path))
 	if statErr != nil {
 		return config.LoadProject(path)
 	}

@@ -24,8 +24,10 @@ struct MenuBarView: View {
         projects.filter { $0.status != .stopped || store.projectAction(for: $0) == .stopProject }
     }
 
+    /// The rest, but not idle worktrees: a project can have dozens, and
+    /// they show here only while they run (the dashboard lists them all).
     private var others: [HunProject] {
-        projects.filter { project in !running.contains { $0.id == project.id } }
+        projects.filter { project in !project.isWorktree && !running.contains { $0.id == project.id } }
     }
 
     /// Running first (they matter most), then the rest by name.
@@ -39,7 +41,7 @@ struct MenuBarView: View {
                 MenuSky(
                     showsGlow: scene.needsGlow,
                     // Up if any service runs; a crashed service is counted on its own.
-                    running: running.filter { project in project.services.contains { $0.status == .running || $0.status == .starting } },
+                    running: HunMenuPreview.shared.running(running.filter { project in project.services.contains { $0.status == .running || $0.status == .starting } }, all: projects),
                     crashedCount: running.reduce(0) { $0 + $1.services.filter { $0.status == .crashed }.count },
                     mode: HunMenuPreview.shared.mode ?? store.displayedMode,
                     showsMusic: musicEnabled
@@ -273,6 +275,9 @@ private struct MenuSky: View {
                     .transition(Self.wordsTransition)
             }
             hero
+            if isEmpty {
+                quietWords
+            }
         }
         .padding(.horizontal, 30)
         .padding(.vertical, 14)
@@ -319,10 +324,16 @@ private struct MenuSky: View {
                         .opacity(0)
                         .matchedGeometryEffect(id: "heroSmall", in: sky)
                 }
-                Text(caption)
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(crashedCount > 0 && running.isEmpty ? AppTheme.danger : ink.opacity(0.72))
-                    .lineLimit(1)
+                if isEmpty {
+                    quietText
+                        .opacity(0)
+                        .matchedGeometryEffect(id: "quietSmall", in: sky)
+                } else {
+                    Text(caption)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(crashedCount > 0 && running.isEmpty ? AppTheme.danger : ink.opacity(0.72))
+                        .lineLimit(1)
+                }
             }
             Spacer(minLength: 0)
         }
@@ -338,12 +349,57 @@ private struct MenuSky: View {
     private var hero: some View {
         heroText(size: heroSize.big)
             .contentTransition(.numericText())
+            .offset(x: focused == nil ? Self.opticalOffset(of: heroWords) * heroSize.big : 0)
             .shadow(color: (colorScheme == .dark ? Color.black : Color.white).opacity(0.35), radius: 14)
-            .scaleEffect(musicPlaying ? heroSize.small / heroSize.big : 1)
-            .matchedGeometryEffect(id: musicPlaying ? "heroSmall" : "heroBig", in: sky, properties: .position, isSource: false)
-            // With music on and nothing running, the corner has no number.
-            .opacity(musicPlaying && focused == nil && running.isEmpty ? 0 : 1)
+            // With nothing running the corner has no number: the 0 shrinks
+            // away where it is, quickly, before "all quiet" flies past it;
+            // and comes back only once "all quiet" is home beneath it.
+            .scaleEffect(musicPlaying && isEmpty ? 0.7 : 1)
+            .opacity(musicPlaying && isEmpty ? 0 : 1)
+            .animation(musicPlaying ? .easeOut(duration: 0.16) : .smooth(duration: 0.4).delay(0.4), value: musicPlaying)
+            .scaleEffect(musicPlaying && !isEmpty ? heroSize.small / heroSize.big : 1)
+            .matchedGeometryEffect(id: musicPlaying && !isEmpty ? "heroSmall" : "heroBig", in: sky, properties: .position, isSource: false)
             .allowsHitTesting(false)
+    }
+
+    /// Nothing running (and no Focus): the sky shows 0 and "all quiet".
+    private var isEmpty: Bool { focused == nil && running.isEmpty }
+
+    /// With nothing running, "all quiet" is what's left in the corner while
+    /// music plays: drawn once and flown there from under the 0, and back,
+    /// the way the count flies.
+    private var quietWords: some View {
+        quietText
+            .shadow(color: (colorScheme == .dark ? Color.black : Color.white).opacity(0.35), radius: 14)
+            .matchedGeometryEffect(id: musicPlaying ? "quietSmall" : "quietBig", in: sky, properties: .position, isSource: false)
+            .allowsHitTesting(false)
+    }
+
+    private var quietText: some View {
+        Text(caption)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(crashedCount > 0 ? AppTheme.danger : ink.opacity(0.72))
+            .lineLimit(1)
+            .fixedSize()
+    }
+
+    /// How far to move a count so it looks centred, as a fraction of its
+    /// size. Digits don't sit in the middle of their own space: a 1's flag
+    /// takes room on its left, so its stem (which is what the eye centres)
+    /// sits right of middle; a 5 leans right too, a 7 left. Each digit's
+    /// clear space on the left and right of what the eye sees (for a 1, its
+    /// stem), measured in SF Pro Rounded Semibold; a count is centred by
+    /// its first digit's left and its last digit's right.
+    static func opticalOffset(of count: String) -> CGFloat {
+        let margins: [Character: (left: CGFloat, right: CGFloat)] = [
+            "0": (0.040, 0.043), "1": (0.230, 0.112), "2": (0.050, 0.035),
+            "3": (0.050, 0.046), "4": (0.035, 0.022), "5": (0.065, 0.030),
+            "6": (0.040, 0.037), "7": (0.025, 0.033), "8": (0.040, 0.038),
+            "9": (0.035, 0.043),
+        ]
+        guard let first = count.first.flatMap({ margins[$0] }),
+              let last = count.last.flatMap({ margins[$0] }) else { return 0 }
+        return (last.right - first.left) / 2
     }
 
     /// The hero's type size at rest and in the corner.
@@ -387,10 +443,18 @@ private struct MenuSky: View {
                 .matchedGeometryEffect(id: "heroBig", in: sky)
                 .padding(.vertical, focused == nil ? 0 : 8)
                 .padding(.top, focused == nil ? -4 : 0)
-            Text(caption)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(crashedCount > 0 && running.isEmpty ? AppTheme.danger : ink.opacity(0.72))
-                .padding(.top, focused == nil ? -8 : -4)
+            Group {
+                if isEmpty {
+                    quietText
+                        .opacity(0)
+                        .matchedGeometryEffect(id: "quietBig", in: sky)
+                } else {
+                    Text(caption)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(crashedCount > 0 && running.isEmpty ? AppTheme.danger : ink.opacity(0.72))
+                }
+            }
+            .padding(.top, focused == nil ? -8 : -4)
         }
     }
 

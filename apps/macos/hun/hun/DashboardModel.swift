@@ -361,7 +361,7 @@ final class HunStore {
                 lastError = "Install Claude Code or Codex to change the setup by asking."
                 return
             }
-            let configURL = URL(fileURLWithPath: project.path).appendingPathComponent(".hun.yml")
+            let configURL = URL(fileURLWithPath: project.configPath)
             let current = (try? String(contentsOf: configURL, encoding: .utf8)) ?? ""
             var chat = agentChats[project.path]
                 ?? HunAgentChat(agent: agent.kind, sessionID: nil, messages: [])
@@ -672,7 +672,7 @@ final class HunStore {
     var reviewConfigEditor: HunConfigEditorTarget?
 
     func openConfig(for project: HunProject) {
-        let target = HunConfigEditorTarget(name: project.name, directory: project.path)
+        let target = HunConfigEditorTarget(name: project.name, directory: project.path, file: project.configPath)
         guard FileManager.default.fileExists(atPath: target.fileURL.path) else {
             lastError = "\(project.name) does not have a .hun.yml file."
             return
@@ -1118,9 +1118,12 @@ final class HunStore {
         globalMode = HunMode(snapshot.mode)
         isRecoveringServices = snapshot.lifecycleBusy
 
-        let projects = snapshot.projects.map { project in
+        var projects = snapshot.projects.map { project in
             HunProject(snapshot: project, activeID: snapshot.activeProject)
         }
+        #if DEBUG
+        projects += HunWorktreeSimulation.projects()
+        #endif
         loadAgentChats(for: projects.map(\.path))
         // A project renamed in .hun.yml comes back under a new ID; keep its
         // tab and selection by matching the folder.
@@ -1342,6 +1345,27 @@ nonisolated struct HunProject: Identifiable, Hashable {
     var profiles: [HunDaemonProfile]
     /// The profile Run uses; nil runs every service.
     var profile: String?
+    /// The main checkout's folder, when this is a git worktree: it's shown
+    /// under that project.
+    var worktreeOf: String?
+    /// When the worktree was made: the newest are listed first.
+    var worktreeCreated: Date?
+    /// The .hun.yml it runs on: its own, or its main checkout's.
+    var configPath: String
+
+    var isWorktree: Bool { worktreeOf != nil }
+
+    /// Newest worktree first; ones without a date last, then by name.
+    static func newestWorktreeFirst(_ a: HunProject, _ b: HunProject) -> Bool {
+        switch (a.worktreeCreated, b.worktreeCreated) {
+        case let (x?, y?) where x != y: return x > y
+        case (_?, nil): return true
+        case (nil, _?): return false
+        default: return a.worktreeName.localizedStandardCompare(b.worktreeName) == .orderedAscending
+        }
+    }
+    /// A worktree's own name: its folder (ott-1650), not its registry key.
+    var worktreeName: String { URL(fileURLWithPath: path).lastPathComponent }
 
     /// What the current profile runs, or nil when it runs every service.
     var profileServices: Set<String>? {
@@ -1369,6 +1393,9 @@ nonisolated struct HunProject: Identifiable, Hashable {
         configError = snapshot.configError
         profiles = snapshot.profiles
         profile = snapshot.profile
+        worktreeOf = snapshot.worktreeOf
+        worktreeCreated = snapshot.worktreeCreatedAt.flatMap(HunDateParser.date(from:))
+        configPath = snapshot.configPath ?? URL(fileURLWithPath: snapshot.path).appendingPathComponent(".hun.yml").path
     }
 
     private static func runtimeText(startedAt: String?, status: ProjectStatus) -> String {

@@ -101,6 +101,16 @@ type SnapshotProcess struct {
 	Ports   []int  `json:"ports,omitempty"`
 	Cwd     string `json:"cwd"`
 	Project string `json:"project,omitempty"`
+	// Worktree names the git worktree it runs in, if it's a linked
+	// worktree (an agent's, say), so the app can say whose it is.
+	Worktree *WorktreeRef `json:"worktree,omitempty"`
+}
+
+// WorktreeRef is a linked git worktree: its folder's name and the name of
+// the repository it belongs to.
+type WorktreeRef struct {
+	Name string `json:"name"`
+	Repo string `json:"repo"`
 }
 
 type attributionProject struct {
@@ -136,6 +146,7 @@ func attribute(obs Observation, projects []attributionProject, managed map[int]m
 		Holders:  make(map[int]PortHolder),
 		obs:      obs,
 	}
+	home := resolvedHome()
 	add := func(ext externalService) {
 		if attr.Services[ext.Project] == nil {
 			attr.Services[ext.Project] = make(map[string]externalService)
@@ -237,7 +248,10 @@ func attribute(obs Observation, projects []attributionProject, managed map[int]m
 			// themselves are not dev servers.
 			continue
 		}
-		if project == nil && !underAnyRoot(scanRoots, cwd) {
+		// A dev server is one the person (or their agent) started: from a
+		// terminal or an agent, wherever it runs; or, if that terminal has
+		// gone, from one of their own folders.
+		if project == nil && !startedByPerson(obs, listener.PID) && !underAnyRoot(scanRoots, cwd) && !inUserFolder(home, cwd) {
 			continue
 		}
 		key := unmanagedKey{listener.PID}
@@ -255,6 +269,7 @@ func attribute(obs Observation, projects []attributionProject, managed map[int]m
 		if project != nil {
 			entry.Project = project.Name
 		}
+		entry.Worktree = worktreeOf(cwd)
 		unmanaged[key] = entry
 	}
 
@@ -423,7 +438,7 @@ func projectForPath(projects []attributionProject, path string) *attributionProj
 	var best *attributionProject
 	for i := range projects {
 		project := &projects[i]
-		if project.Path == "" || !pathWithin(project.Path, path) {
+		if project.Path == "" || !pathWithin(project.Path, path) || inNestedWorktree(project.Path, path) {
 			continue
 		}
 		if best == nil || len(project.Path) > len(best.Path) {
@@ -440,6 +455,134 @@ func serviceConfig(projects []attributionProject, project, service string) *conf
 		}
 	}
 	return nil
+}
+
+// startedByPerson reports whether pid was started from a terminal or by an
+// agent: a shell, terminal, multiplexer, agent or editor among its
+// ancestors. Apps and system services descend from launchd alone.
+func startedByPerson(obs Observation, pid int) bool {
+	current := pid
+	for depth := 0; current > 1 && depth < maxAncestorDepth; depth++ {
+		proc, ok := obs.Processes[current]
+		if !ok || proc.PPID <= 1 {
+			return false
+		}
+		parent, ok := obs.Processes[proc.PPID]
+		if !ok {
+			return false
+		}
+		name := strings.ToLower(filepath.Base(strings.TrimPrefix(parent.Command, "-")))
+		if name != "launchd" && name != "hun" && isProcessBoundary(parent.Command) {
+			return true
+		}
+		current = parent.PID
+	}
+	return false
+}
+
+// userHomeDir is swapped in tests.
+var userHomeDir = os.UserHomeDir
+
+// resolvedHome is the home folder with symlinks resolved, as process
+// working directories are reported; empty if unknown.
+func resolvedHome() string {
+	home, err := userHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(home); err == nil {
+		home = resolved
+	}
+	return filepath.Clean(home)
+}
+
+// inUserFolder reports whether dir is one of the person's own folders,
+// where a server they started from a terminal or an agent runs: inside
+// their home folder, but not the home folder itself, ~/Library (apps' own
+// helpers) or a hidden folder.
+func inUserFolder(home, dir string) bool {
+	if home == "" || dir == "" {
+		return false
+	}
+	rel, err := filepath.Rel(home, filepath.Clean(dir))
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	first := strings.SplitN(rel, string(filepath.Separator), 2)[0]
+	return first != "Library" && !strings.HasPrefix(first, ".")
+}
+
+// isLinkedWorktree and gitdirOf are swapped in tests.
+var (
+	isLinkedWorktree = defaultIsLinkedWorktree
+	gitdirOf         = defaultGitdirOf
+)
+
+// worktreeOf finds the linked git worktree dir is in, if any: the nearest
+// folder up from dir with a .git, if that .git points into a repository's
+// worktrees.
+func worktreeOf(dir string) *WorktreeRef {
+	for current, depth := filepath.Clean(dir), 0; depth < 32; current, depth = filepath.Dir(current), depth+1 {
+		gitdir, isFile, found := gitdirOf(current)
+		if found {
+			if !isFile {
+				return nil
+			}
+			slashed := filepath.ToSlash(gitdir)
+			at := strings.LastIndex(slashed, "/.git/worktrees/")
+			if at <= 0 {
+				return nil
+			}
+			return &WorktreeRef{Name: filepath.Base(current), Repo: filepath.Base(filepath.FromSlash(slashed[:at]))}
+		}
+		if current == filepath.Dir(current) {
+			return nil
+		}
+	}
+	return nil
+}
+
+// defaultGitdirOf reports whether dir has a .git, and if it's a file (a
+// linked worktree or a submodule), where it points.
+func defaultGitdirOf(dir string) (gitdir string, isFile, found bool) {
+	path := filepath.Join(dir, ".git")
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", false, false
+	}
+	if info.IsDir() {
+		return "", false, true
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", true, true
+	}
+	return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(data)), "gitdir:")), true, true
+}
+
+// inNestedWorktree reports whether path is inside a separate git worktree
+// within the project folder, such as an agent's worktree in
+// .claude/worktrees: a different checkout, so not the project itself.
+func inNestedWorktree(projectPath, path string) bool {
+	projectPath = filepath.Clean(projectPath)
+	for dir := filepath.Clean(path); dir != projectPath && pathWithin(projectPath, dir); dir = filepath.Dir(dir) {
+		if isLinkedWorktree(dir) {
+			return true
+		}
+	}
+	return false
+}
+
+// defaultIsLinkedWorktree reports whether dir is the top of a linked git
+// worktree: its .git is a file pointing into a repository's worktrees
+// (a submodule's points into modules, and stays part of its project).
+func defaultIsLinkedWorktree(dir string) bool {
+	data, err := os.ReadFile(filepath.Join(dir, ".git"))
+	if err != nil {
+		return false
+	}
+	line := strings.TrimSpace(string(data))
+	return strings.HasPrefix(line, "gitdir:") && strings.Contains(filepath.ToSlash(line), "/worktrees/")
 }
 
 func underAnyRoot(roots []string, path string) bool {

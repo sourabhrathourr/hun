@@ -3,6 +3,7 @@ package discovery
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/sourabhrathourr/hun/internal/config"
@@ -247,4 +248,44 @@ func writeProject(t *testing.T, root, name, service string) string {
 		t.Fatalf("write project config: %v", err)
 	}
 	return dir
+}
+
+func TestWorktreesOfKnownProjectsAreFoundWithTheirOwnNames(t *testing.T) {
+	root := t.TempDir()
+	main := filepath.Join(root, "otto")
+	inherits := filepath.Join(main, ".claude", "worktrees", "ott-1650")
+	own := filepath.Join(main, ".claude", "worktrees", "ott-1651")
+	for _, wt := range []struct{ path, name string }{{inherits, "ott-1650"}, {own, "ott-1651"}} {
+		record := filepath.Join(main, ".git", "worktrees", wt.name)
+		mustMkdir(t, record)
+		mustMkdir(t, wt.path)
+		mustWrite(t, filepath.Join(record, "gitdir"), filepath.Join(wt.path, ".git")+"\n")
+		mustWrite(t, filepath.Join(wt.path, ".git"), "gitdir: "+record+"\n")
+	}
+	mustWrite(t, filepath.Join(main, ".hun.yml"), "name: otto\nservices:\n  web:\n    cmd: npm run dev\n    port: 3000\n")
+	mustWrite(t, filepath.Join(own, ".hun.yml"), "name: otto-own\nservices:\n  web:\n    cmd: npm run dev\n    port: 3100\n")
+
+	found := WithWorktrees(nil, map[string]string{"otto": main})
+	got := map[string]string{}
+	for _, project := range found {
+		got[project.Path] = project.Name
+	}
+	want := map[string]string{inherits: "otto-ott-1650", own: "otto-own"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("found = %v, want %v", got, want)
+	}
+}
+
+func mustMkdir(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustWrite(t *testing.T, path, contents string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }

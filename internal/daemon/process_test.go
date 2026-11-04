@@ -3,6 +3,7 @@ package daemon
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -125,4 +126,29 @@ func pathContains(path, dir string) bool {
 		}
 	}
 	return false
+}
+
+func TestExpandPortRefs(t *testing.T) {
+	ports := map[string]int{"backend": 8001, "db": 5433}
+	portOf := func(service string) int { return ports[service] }
+	got := expandPortRefs(map[string]string{
+		"API_URL":   "http://localhost:${backend.port}/api",
+		"DB":        "postgres://localhost:${db.port}/app?x=${db.port}",
+		"SELF":      "http://localhost:${frontend.port}",
+		"UNKNOWN":   "${nope.port}",
+		"UNTOUCHED": "plain ${HOME}",
+	}, "frontend", 3002, portOf)
+	want := map[string]string{
+		"API_URL":   "http://localhost:8001/api",
+		"DB":        "postgres://localhost:5433/app?x=5433",
+		"SELF":      "http://localhost:3002",
+		"UNKNOWN":   "${nope.port}",
+		"UNTOUCHED": "plain ${HOME}",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("expandPortRefs = %v, want %v", got, want)
+	}
+	if expandPortRefs(nil, "x", 1, portOf) != nil {
+		t.Fatal("no env stays nil")
+	}
 }

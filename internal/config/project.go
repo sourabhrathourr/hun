@@ -11,7 +11,7 @@ import (
 
 // LoadProject reads and validates a .hun.yml file from the given directory.
 func LoadProject(dir string) (*Project, error) {
-	path := filepath.Join(dir, ".hun.yml")
+	path := ProjectFile(dir)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
@@ -43,12 +43,12 @@ func SaveProjectSource(dir string, contents []byte) error {
 	if _, err := ParseProject(contents); err != nil {
 		return err
 	}
-	path := filepath.Join(dir, ".hun.yml")
+	path := ProjectFile(dir)
 	mode := os.FileMode(0o644)
 	if info, err := os.Stat(path); err == nil {
 		mode = info.Mode().Perm()
 	}
-	tmp, err := os.CreateTemp(dir, ".hun.yml.*")
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".hun.yml.*")
 	if err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)
 	}
@@ -71,7 +71,7 @@ func SaveProjectSource(dir string, contents []byte) error {
 
 // ProjectExists checks if a .hun.yml file exists in the given directory.
 func ProjectExists(dir string) bool {
-	path := filepath.Join(dir, ".hun.yml")
+	path := ProjectFile(dir)
 	_, err := os.Stat(path)
 	return err == nil
 }
