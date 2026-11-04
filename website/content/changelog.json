@@ -1,7 +1,30 @@
 [
   {
+    "version": "0.6.3",
+    "date": "2026-11-04",
+    "title": "Worktree clean-up",
+    "summary": "See at a glance which worktrees are merged, still open or failing CI, and clear away the merged ones safely, by hand or by asking.",
+    "groups": [
+      {
+        "title": "New",
+        "changes": [
+          "With the GitHub CLI signed in, a worktree's branch icon shows its pull request: green for open, violet for merged, yellow while CI runs, red when CI fails.",
+          "Right-click a worktree to delete it. Hun says first whether its PR is merged and what uncommitted changes would be lost, and a merged branch goes with it only if it has nothing the PR doesn't.",
+          "Ask a project's chat to \"delete my merged worktrees\". It picks them, and Hun deletes them once you confirm. A project's right-click menu can do the same."
+        ]
+      },
+      {
+        "title": "Improved",
+        "changes": [
+          "Clicking an idle worktree no longer moves it to the top of the list.",
+          "Right-click menus for projects and worktrees have icons, the PR's state, and Copy Branch Name and Copy Path."
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.6.2",
-    "date": "2026-11-05",
+    "date": "2026-11-04",
     "title": "Worktrees",
     "summary": "Your agents' git worktrees show up under their project and run on its setup. Hun also sees every dev server you or an agent start.",
     "groups": [

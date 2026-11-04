@@ -191,6 +191,13 @@ nonisolated enum AppTheme {
         darkBlue: 0.45
     )
 
+    // A worktree's pull request, on its branch icon: GitHub's meanings in
+    // clear but gentle hues, bright enough to keep their colour, never neon.
+    static let pullRequestOpen = color(light: 0x2F8A4E, dark: 0x6FC48A)          // green: open
+    static let pullRequestMerged = color(light: 0x7556C9, dark: 0xA990EC)        // violet: merged
+    static let pullRequestChecksRunning = color(light: 0xB58300, dark: 0xF0C649) // yellow: CI running
+    static let pullRequestChecksFailing = color(light: 0xC44B45, dark: 0xEE7F78) // red: CI failing
+
     static let brand = textPrimary
 
     // The commit control was intentionally neutral in the original dark UI.

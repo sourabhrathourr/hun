@@ -56,6 +56,9 @@ type SnapshotProject struct {
 	// ConfigPath is the .hun.yml in use: the folder's own, or its main
 	// checkout's for a worktree without one.
 	ConfigPath string `json:"config_path,omitempty"`
+	// PullRequest is the GitHub pull request for a worktree's branch, when
+	// gh can tell.
+	PullRequest *PullRequestRef `json:"pull_request,omitempty"`
 }
 
 type SnapshotProfile struct {
@@ -241,6 +244,7 @@ func (m *Manager) snapshotProject(name, path string, st *state.State, live map[s
 	}
 	if main, ok := config.MainCheckout(path); ok {
 		project.WorktreeOf = main
+		project.PullRequest = m.prs.lookup(main, branch)
 		if created := createdAt(path); !created.IsZero() {
 			project.WorktreeCreatedAt = created.UTC().Format(time.RFC3339)
 		}

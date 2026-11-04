@@ -32,6 +32,8 @@ type Request struct {
 	Services []string `json:"services,omitempty"`
 	// Content is .hun.yml source for validate_config and save_config.
 	Content string `json:"content,omitempty"`
+	// Force lets delete_worktree throw away uncommitted changes.
+	Force bool `json:"force,omitempty"`
 }
 
 // Response is the JSON response from the daemon.
@@ -124,6 +126,8 @@ func (d *Daemon) HandleRequest(req Request) Response {
 		return d.handleRegisterProject(req)
 	case "remove_project":
 		return d.handleRemoveProject(req)
+	case "delete_worktree":
+		return d.handleDeleteWorktree(req)
 	case "logs":
 		return d.handleLogs(req)
 	case "clear_logs":
@@ -212,7 +216,7 @@ func (d *Daemon) handleForceStop(req Request) Response {
 func serializesLifecycle(action string) bool {
 	switch action {
 	case "start", "start_service", "stop", "stop_service", "remove_service", "restart", "focus",
-		"register_project", "add_project", "remove_project", "free_port", "save_profile", "select_profile", "save_config":
+		"register_project", "add_project", "remove_project", "delete_worktree", "free_port", "save_profile", "select_profile", "save_config":
 		return true
 	default:
 		return false

@@ -31,6 +31,7 @@ type Manager struct {
 	discoveryWarnings []string
 	iconCache         map[string]projectIconCacheEntry
 	configCache       map[string]projectConfigCacheEntry
+	prs               pullRequestCache
 	observer          observer
 
 	// Bumped by ForceStop, per project: actions in flight for it see the

@@ -378,7 +378,7 @@ final class HunStore {
                 agent, path: project.path,
                 prompt: HunAgentBrief.change(
                     steering ? "Change of plan, this replaces what I asked just before: \(request)" : request,
-                    current: current, state: state
+                    current: current, state: state, worktrees: worktreeState(for: project)
                 ),
                 resuming: chat.sessionID,
                 previousConfig: current
@@ -435,6 +435,45 @@ final class HunStore {
 
     /// Each service's status and port, and the latest log lines, so the agent
     /// can answer "why did the API crash?".
+    /// The worktrees of `project` (or of its main checkout), for the agent.
+    private func worktrees(for project: HunProject) -> [HunProject] {
+        let main = project.worktreeOf ?? project.path
+        return model.projects.filter { $0.worktreeOf == main }.sorted(by: HunProject.newestWorktreeFirst)
+    }
+
+    private func worktreeState(for project: HunProject) -> String? {
+        let list = worktrees(for: project)
+        guard !list.isEmpty else { return nil }
+        return list.map { worktree in
+            var parts = [worktree.status == .stopped ? "idle" : "running"]
+            if let branch = worktree.branch { parts.append("branch \(branch)") }
+            if let pr = worktree.pullRequest {
+                var text = "PR #\(pr.number) \(pr.state.rawValue)"
+                if pr.checksFailing { text += ", CI failing" } else if pr.checksRunning { text += ", CI running" }
+                parts.append(text)
+            } else {
+                parts.append("no PR")
+            }
+            return "- \(worktree.worktreeName): " + parts.joined(separator: ", ")
+        }.joined(separator: "\n")
+    }
+
+    /// Deletes the worktrees a reply offered, once the person confirms.
+    func confirmWorktreeCleanup(_ messageID: UUID, for project: HunProject, delete: Bool) {
+        guard var chat = agentChats[project.path],
+              let index = chat.messages.firstIndex(where: { $0.id == messageID }),
+              let cleanup = chat.messages[index].worktreeCleanup, cleanup.state == .pending
+        else { return }
+        if delete {
+            let paths = Set(cleanup.items.map(\.path))
+            let targets = model.projects.filter { paths.contains($0.path) && $0.status == .stopped }
+            deleteWorktrees(targets, discardChanges: false)
+        }
+        chat.messages[index].worktreeCleanup?.state = delete ? .deleted : .kept
+        agentChats[project.path] = chat
+        HunAgentChatArchive.save(chat, for: project.path)
+    }
+
     private func liveState(for project: HunProject) async -> String? {
         let services = project.services.filter { !$0.isExternal }
         guard !services.isEmpty else { return nil }
@@ -536,6 +575,7 @@ final class HunStore {
                     change = HunAgentChange(lines: lines, previousConfig: previousConfig, undone: false)
                 }
                 self.finishAgent(path: path, summary: result.summary, sessionID: result.sessionID, change: change)
+                self.offerWorktreeCleanup(result.deleteWorktrees, path: path)
             } catch is CancellationError {
                 HunTrace.addProject("agent cancelled path=\(path)")
             } catch {
@@ -616,6 +656,20 @@ final class HunStore {
             HunAgentChatArchive.save(chat, for: path)
         }
         HunTrace.addProject("agent done path=\(path)")
+    }
+
+    /// Turns the names an agent offered into a confirmation in the chat:
+    /// only idle worktrees of this project, matched by folder name.
+    private func offerWorktreeCleanup(_ names: [String], path: String) {
+        guard !names.isEmpty, let project = model.projects.first(where: { $0.path == path }) else { return }
+        let wanted = Set(names)
+        let items = worktrees(for: project)
+            .filter { wanted.contains($0.worktreeName) && $0.status == .stopped }
+            .map { HunWorktreeCleanup.Item(name: $0.worktreeName, path: $0.path) }
+        guard !items.isEmpty else { return }
+        updateLastAgentMessage(path: path) { message in
+            message.worktreeCleanup = HunWorktreeCleanup(items: items, state: .pending)
+        }
     }
 
     private func updateLastAgentMessage(path: String, save: Bool = true, _ update: (inout HunAgentMessage) -> Void) {
@@ -928,6 +982,46 @@ final class HunStore {
     func remove(_ project: HunProject) {
         perform(key: .project(project.id, .stopProject)) { [self] in
             try await self.client.removeProject(project.id)
+        }
+    }
+
+    /// How many uncommitted changes a worktree has, or nil if git can't say.
+    func uncommittedChanges(in project: HunProject) async -> Int? {
+        guard let git = client as? HunGitClientProtocol else { return nil }
+        return try? await git.gitStatus(project: project.id).files.count
+    }
+
+    /// Deletes worktrees from disk. One that's selected hands the selection
+    /// to its main checkout. Deleting several keeps going past one git
+    /// refuses (uncommitted changes), and says which were kept.
+    func deleteWorktrees(_ worktrees: [HunProject], discardChanges: Bool) {
+        guard !worktrees.isEmpty else { return }
+        perform(key: worktrees.count == 1 ? .project(worktrees[0].id, .stopProject) : nil) { [self] in
+            var kept: [String] = []
+            var reason = "uncommitted changes"
+            for worktree in worktrees {
+                do {
+                    _ = try await self.client.deleteWorktree(worktree.id, discardChanges: discardChanges)
+                    if self.selectedProjectID == worktree.id,
+                       let main = self.model.projects.first(where: { $0.path == worktree.worktreeOf }) {
+                        self.selectProject(main.id)
+                    }
+                } catch {
+                    if worktrees.count == 1 { throw error }
+                    kept.append(worktree.worktreeName)
+                    if !error.localizedDescription.contains("uncommitted") {
+                        reason = error.localizedDescription
+                    }
+                }
+            }
+            if !kept.isEmpty {
+                await self.refresh(force: true)
+                let names = ListFormatter.localizedString(byJoining: kept)
+                let deleted = worktrees.count - kept.count
+                throw HunDaemonError.daemon(
+                    "Deleted \(deleted) of \(worktrees.count). Kept \(names): \(reason)."
+                )
+            }
         }
     }
 
@@ -1352,6 +1446,8 @@ nonisolated struct HunProject: Identifiable, Hashable {
     var worktreeCreated: Date?
     /// The .hun.yml it runs on: its own, or its main checkout's.
     var configPath: String
+    /// A worktree branch's pull request, when gh can tell.
+    var pullRequest: HunPullRequest?
 
     var isWorktree: Bool { worktreeOf != nil }
 
@@ -1396,6 +1492,7 @@ nonisolated struct HunProject: Identifiable, Hashable {
         worktreeOf = snapshot.worktreeOf
         worktreeCreated = snapshot.worktreeCreatedAt.flatMap(HunDateParser.date(from:))
         configPath = snapshot.configPath ?? URL(fileURLWithPath: snapshot.path).appendingPathComponent(".hun.yml").path
+        pullRequest = snapshot.pullRequest
     }
 
     private static func runtimeText(startedAt: String?, status: ProjectStatus) -> String {
