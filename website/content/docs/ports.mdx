@@ -44,6 +44,30 @@ services:
 
 `PORT` and the `port_env` variable win over a variable of the same name in `env`.
 
+## Services that call each other
+
+When one service calls another, don't write the other's port into `env`. Write `${service.port}`, and Hun puts in the port it really runs on:
+
+```yaml title=".hun.yml"
+services:
+  api:
+    cmd: npm run api
+    port: 8000
+  web:
+    cmd: npm run dev
+    port: 3000
+    env:
+      API_URL: http://localhost:${api.port}
+```
+
+If `api` moves to 8001 in Multitask (say a worktree of the project already uses 8000), `web` gets `http://localhost:8001`, so each copy talks to its own `api`.
+
+## Worktrees
+
+A git worktree of a project in Hun shows up under that project in the sidebar. If it has no `.hun.yml` of its own, it uses the main checkout's, so an agent's worktree runs like the project. A worktree's own `.hun.yml` wins. Running worktrees are listed; the rest fold into one line under the project.
+
+Worktrees use the same ports as the main checkout. In Multitask, both run: the second one moves to the next free ports. In Focus, starting one stops the other.
+
 ## Services without a port
 
 A service without `port` gets no `PORT` variable. If it starts listening anyway, Hun reads the address it prints, such as `http://localhost:5173`, checks that the service really listens there, and shows that port. The log shows:

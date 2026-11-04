@@ -183,6 +183,13 @@ env:
   LOG_LEVEL: debug
 ```
 
+To point a service at another one, write `${service.port}`: Hun puts in the port that service actually runs on. In Multitask a service can move to the next free port, so this keeps services that call each other together:
+
+```yaml
+env:
+  API_URL: http://localhost:${api.port}
+```
+
 ### `depends_on`
 
 **Type:** list of service names. **Default:** none.

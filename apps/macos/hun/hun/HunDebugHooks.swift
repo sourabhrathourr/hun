@@ -103,6 +103,7 @@ enum HunDebugHooks {
                 case "play": music.play()
                 case "pause": music.pause()
                 case "skip": music.skip()
+                case "previous": music.previous()
                 default: break
                 }
             }
@@ -121,9 +122,13 @@ enum HunDebugHooks {
                 case "multitask":
                     preview.mode = .multitask
                     preview.focusName = nil
+                case "count":
+                    // "count:<n>": as if n projects ran; "count:0", nothing.
+                    preview.count = parts.count > 1 ? Int(parts[1]) : nil
                 default:
                     preview.mode = nil
                     preview.focusName = nil
+                    preview.count = nil
                 }
             }
         })
@@ -179,6 +184,13 @@ enum HunDebugHooks {
                 } else {
                     hunApp.openDashboard()
                 }
+            }
+        })
+        // object: "on" or "off": five made-up projects with twenty worktrees each.
+        observers.append(center.addObserver(forName: .init("sh.hun.debug.simulateWorktrees"), object: nil, queue: .main) { note in
+            let on = (note.object as? String) == "on"
+            Task { @MainActor in
+                HunWorktreeSimulation.isOn = on
             }
         })
         // object: "hide" or "show": the hide-Dock-icon setting.
@@ -241,6 +253,51 @@ enum HunDebugHooks {
         else { return }
         view.cacheDisplay(in: view.bounds, to: rep)
         try? rep.representation(using: .png, properties: [:])?.write(to: url)
+    }
+}
+#endif
+#if DEBUG
+/// sh.hun.debug.simulateWorktrees ("on" / "off"): adds five made-up projects
+/// with twenty worktrees each to the dashboard and menu, to see how a Mac
+/// full of agent worktrees looks. Only the picture: nothing behind it runs.
+enum HunWorktreeSimulation {
+    nonisolated(unsafe) static var isOn = false
+
+    static func projects() -> [HunProject] {
+        guard isOn else { return [] }
+        let root = "/Users/demo/Simulated"
+        let names = ["atlas", "beacon", "cobalt", "drift", "ember"]
+        let worktreeNames = [
+            "fix-login-redirect", "agent-a3f9", "ott-1601", "ott-1602", "new-onboarding",
+            "refactor-billing", "agent-7c21", "dark-mode", "ott-1610", "perf-cache",
+            "agent-e0b4", "search-v2", "ott-1622", "flaky-tests", "upgrade-next",
+            "agent-91fd", "export-csv", "ott-1640", "email-digest", "agent-5aa0",
+        ]
+        // Which worktrees run in each project: a few, as on a busy day.
+        let live: [String: [Int: String]] = [
+            "atlas": [1: "running", 4: "running"],
+            "beacon": [6: "running", 11: "crashed"],
+            "drift": [0: "running", 2: "running", 9: "starting"],
+        ]
+        var projects: [HunProject] = []
+        for name in names {
+            let main = "\(root)/\(name)"
+            projects.append(HunProject(snapshot: HunDaemonProject(
+                id: "sim-\(name)", name: name, path: main, status: name == "cobalt" ? "running" : "stopped",
+                isActive: false, branch: "main", lastNote: nil, startedAt: nil, services: [], configError: nil
+            ), activeID: nil))
+            for (index, worktree) in worktreeNames.enumerated() {
+                projects.append(HunProject(snapshot: HunDaemonProject(
+                    id: "sim-\(name)-\(worktree)", name: "\(name)-\(worktree)",
+                    path: "\(main)/.claude/worktrees/\(worktree)", status: live[name]?[index] ?? "stopped",
+                    isActive: false, branch: worktree, lastNote: nil, startedAt: nil, services: [], configError: nil,
+                    worktreeOf: main,
+                    // Made a few hours apart, the last in the list newest.
+                    worktreeCreatedAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(Double(index - worktreeNames.count) * 3 * 3600))
+                ), activeID: nil))
+            }
+        }
+        return projects
     }
 }
 #endif

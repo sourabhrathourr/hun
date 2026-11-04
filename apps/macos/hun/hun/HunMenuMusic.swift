@@ -3,14 +3,15 @@ import AVFoundation
 import CryptoKit
 import SwiftUI
 
-// Music to work to, from the menu bar. Off until it's turned on in Settings,
-// and even then it only plays when you press play. Eleven pieces, played in a
-// shuffled order that doesn't repeat until all have played; each crossfades
-// into the next near its end. Doorway (the welcome's music) ships in the app;
-// the other ten download the first time music plays, into ~/.hun/music, so
-// the app stays small and nobody downloads music they never play. Skip only
-// moves between pieces already on this Mac, so it never waits on the network. While it plays, it takes
-// the middle of the sky as a record drawn in the sky's own ink.
+// Music from the menu bar. It only plays when you press play (and can be
+// turned off in Settings). Ten pieces, played in a shuffled order that
+// doesn't repeat until all have played; each crossfades into the next near
+// its end. Doorway (the welcome's music) ships in the app; the other nine
+// download the first time music plays, into ~/.hun/music, so the app stays
+// small and nobody downloads music they never play. Next and previous only
+// move between pieces already on this Mac, so they never wait on the
+// network. While it plays, it takes the middle of the sky as a record drawn
+// in the sky's own ink.
 
 @MainActor
 @Observable
@@ -36,7 +37,6 @@ final class HunMenuMusic {
         Piece(title: "First Snow", file: "MenuMusic-FirstSnow", sha256: "c9069f1f5891c512afd983f964069a194d7596a068615ffa577dbf5151544018"),
         Piece(title: "After Rain", file: "MenuMusic-AfterRain", sha256: "04023979ffb3aebaee0dc4931cde764c9e52ab6b54963964677ad21d44c5e8ac"),
         Piece(title: "Sunlit", file: "MenuMusic-Sunlit", sha256: "69b9f193ed4ce2fcd3d66fb4de7750c57920f3c62dc67d3605847294a647e860"),
-        Piece(title: "Quiet City", file: "MenuMusic-QuietCity", sha256: "a1b1e1c591fdd5c1d76ded317ed0b0c599806dcaf12b956fdf9b39e3d3e03d2d"),
         Piece(title: "Quiet Sea", file: "MenuMusic-QuietSea", sha256: "3a299458e7624f377329536b1ff4500ca985217d006acfc5bdaba9377daac868"),
         Piece(title: "Meadow", file: "MenuMusic-Meadow", sha256: "4351b1f7ac0f797ad81c3db57a60fc3d1bc50c9cc6bf6718984654dca98476d5"),
         Piece(title: "Still Water", file: "MenuMusic-StillWater", sha256: "4f6a22eb16f06b7dc11d17f3800b41347ff2a56320d7a186952cab9dd382056d"),
@@ -71,13 +71,17 @@ final class HunMenuMusic {
     /// The pieces in this round's shuffled order, and where we are in it.
     private var order: [Int] = Array(HunMenuMusic.pieces.indices).shuffled()
     private var position = 0
+    /// The pieces as they've played, oldest first, and where we are along
+    /// it: back and forward retrace it before the shuffle carries on.
+    private var trail: [Int] = []
+    private var at = 0
+    /// The piece playing now (or next, while paused).
+    private var current: Int { trail[at] }
     /// When playback last started or stopped, and how far things had turned.
     private(set) var changedAt = Date.distantPast
     private(set) var turnsAtChange: Double = 0
     /// When the current (or last) stretch of playing began.
     private(set) var playStartedAt = Date.distantPast
-    /// Bumps on every skip, so the players can show the change.
-    private(set) var skips = 0
     /// Bumps once everything has come to rest after a pause.
     private(set) var settled = 0
 
@@ -93,9 +97,10 @@ final class HunMenuMusic {
     private var downloadTask: Task<Void, Never>?
     private var downloadAttempts = 0
 
-    var piece: Piece { Self.pieces[order[position]] }
+    var piece: Piece { Self.pieces[current] }
 
     private init() {
+        trail = [order[position]]
         let workspace = NSWorkspace.shared.notificationCenter
         let distributed = DistributedNotificationCenter.default()
         let suspend: @Sendable (Notification) -> Void = { [weak self] _ in
@@ -135,7 +140,7 @@ final class HunMenuMusic {
         // Every press of play tries again, so a failed download never sticks.
         downloadAttempts = 0
         downloadMissing()
-        if !isAvailable(order[position]) { advance() }
+        if !isAvailable(current), let next = nextInOrder() { trail[at] = next }
         if player == nil { player = makePlayer() }
         guard let player else { return }
         mark(playing: true)
@@ -163,14 +168,54 @@ final class HunMenuMusic {
 
     /// Crossfades to the next piece, and plays.
     func skip() {
+        while at + 1 < trail.count, !isAvailable(trail[at + 1]) { trail.remove(at: at + 1) }
+        if at + 1 < trail.count {
+            at += 1
+        } else if let next = nextInOrder() {
+            trail.append(next)
+            at += 1
+            if trail.count > 50 {
+                trail.removeFirst()
+                at -= 1
+            }
+        }
+        crossfadeToCurrent()
+    }
+
+    /// Crossfades back to the piece before, and plays. From the first piece
+    /// it goes round: to the last one still to come.
+    func previous() {
+        while at > 0, !isAvailable(trail[at - 1]) {
+            trail.remove(at: at - 1)
+            at -= 1
+        }
+        if at > 0 {
+            at -= 1
+        } else if let before = pieceBefore() {
+            trail.insert(before, at: 0)
+            if trail.count > 50 { trail.removeLast() }
+        }
+        crossfadeToCurrent()
+    }
+
+    /// What comes before the first piece, going round: the last piece still
+    /// to come in this shuffle, taken out of it so it won't play twice; once
+    /// all have played, any other piece. Nil with only one piece here (then
+    /// that piece starts over).
+    private func pieceBefore() -> Int? {
+        if let last = order.indices.last(where: { $0 > position && isAvailable(order[$0]) }) {
+            return order.remove(at: last)
+        }
+        return Self.pieces.indices.filter { $0 != current && isAvailable($0) }.randomElement()
+    }
+
+    private func crossfadeToCurrent() {
         let old = player
         old?.setVolume(0, fadeDuration: Self.crossfade)
         Task {
             try? await Task.sleep(for: .seconds(Self.crossfade + 0.1))
             old?.stop()
         }
-        advance()
-        skips += 1
         player = makePlayer()
         if isPlaying {
             player?.volume = 0
@@ -182,10 +227,10 @@ final class HunMenuMusic {
         }
     }
 
-    /// The next piece on this Mac in the shuffled order; a new order once all
-    /// have played, never starting with the piece that just ended. With only
-    /// Doorway here so far, that's Doorway again.
-    private func advance() {
+    /// The next piece on this Mac in the shuffled order; a new order once
+    /// all have played, never starting with the piece that just ended. With
+    /// only Doorway here so far, that's Doorway again.
+    private func nextInOrder() -> Int? {
         for _ in 0..<(Self.pieces.count * 2) {
             position += 1
             if position >= order.count {
@@ -195,8 +240,9 @@ final class HunMenuMusic {
                 order = next
                 position = 0
             }
-            if isAvailable(order[position]) { return }
+            if isAvailable(order[position]) { return order[position] }
         }
+        return nil
     }
 
     // MARK: Downloads
@@ -361,6 +407,13 @@ final class HunMenuPreview {
     static let shared = HunMenuPreview()
     var mode: HunMode?
     var focusName: String?
+    /// Show the sky as if this many projects were running (0: nothing).
+    var count: Int?
+
+    func running(_ running: [HunProject], all: [HunProject]) -> [HunProject] {
+        guard let count, let any = all.first else { return running }
+        return Array(repeating: any, count: count)
+    }
 }
 
 // MARK: - Shared pieces
@@ -482,7 +535,7 @@ struct HunSkyMusicToggle: View {
 }
 
 /// What's playing, in the middle of the sky. Click it to pause; hover for
-/// the next piece.
+/// the piece before and the next, on either side of the record.
 struct HunSkyMusic: View {
     @Environment(\.colorScheme) private var colorScheme
     private let music = HunMenuMusic.shared
@@ -492,14 +545,19 @@ struct HunSkyMusic: View {
 
     var body: some View {
         VStack(spacing: 7) {
-            HunSkyRecord(ink: ink)
-                .overlay(alignment: .topTrailing) { notes }
-                .contentShape(Rectangle())
-                .onTapGesture(perform: music.toggle)
+            // Same width each side, so the record stays in the middle and
+            // the buttons never move, whatever the title.
+            HStack(spacing: 0) {
+                HunSkyStep(forward: false, label: "Previous piece", ink: ink, shown: hovering, action: music.previous)
+                HunSkyRecord(ink: ink)
+                    .overlay(alignment: .topTrailing) { notes }
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: music.toggle)
+                HunSkyStep(forward: true, label: "Next piece", ink: ink, shown: hovering, action: music.skip)
+            }
             Text(music.piece.title)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(ink.opacity(0.78))
-                .overlay(alignment: .trailing) { skip.offset(x: 26) }
         }
         // The sky's words carry the same soft glow.
         .shadow(color: (colorScheme == .dark ? Color.black : Color.white).opacity(0.35), radius: 14)
@@ -514,18 +572,56 @@ struct HunSkyMusic: View {
             .offset(x: 30, y: -54)
     }
 
-    private var skip: some View {
-        Button(action: music.skip) {
-            Image(systemName: "forward.fill")
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(ink.opacity(0.75))
+}
+
+/// A quiet step back or forward beside the record: there only while the
+/// pointer is over the music, faint until it's over the button itself.
+private struct HunSkyStep: View {
+    let forward: Bool
+    let label: String
+    let ink: Color
+    let shown: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HunSoftTriangle()
+                .fill(ink.opacity(hovering ? 0.8 : 0.4))
+                .frame(width: 8, height: 10)
+                // A triangle's weight sits on its flat side: nudged toward
+                // its point (to its centroid), it looks centred in the circle.
+                .offset(x: 8 / 6)
+                .scaleEffect(x: forward ? 1 : -1)
                 .frame(width: 22, height: 22)
-                .background(Circle().fill(ink.opacity(0.1)))
+                .background(Circle().fill(ink.opacity(hovering ? 0.08 : 0)))
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .opacity(hovering ? 1 : 0)
-        .accessibilityLabel("Next piece")
+        // Level with the middle of the record, not of its frame.
+        .offset(y: 1)
+        .opacity(shown ? 1 : 0)
+        .allowsHitTesting(shown)
+        .onHover { over in withAnimation(.easeOut(duration: 0.15)) { hovering = over } }
+        .accessibilityLabel(label)
+    }
+}
+
+/// A small triangle pointing right, its corners softly rounded.
+private struct HunSoftTriangle: Shape {
+    var radius: CGFloat = 1.6
+
+    func path(in rect: CGRect) -> Path {
+        let a = CGPoint(x: rect.minX, y: rect.minY)
+        let b = CGPoint(x: rect.maxX, y: rect.midY)
+        let c = CGPoint(x: rect.minX, y: rect.maxY)
+        var path = Path()
+        path.move(to: CGPoint(x: (a.x + c.x) / 2, y: (a.y + c.y) / 2))
+        path.addArc(tangent1End: a, tangent2End: b, radius: radius)
+        path.addArc(tangent1End: b, tangent2End: c, radius: radius)
+        path.addArc(tangent1End: c, tangent2End: a, radius: radius)
+        path.closeSubpath()
+        return path
     }
 }
 
@@ -550,7 +646,7 @@ private struct HunSkyRecord: View {
             }
             .frame(width: d + 26, height: d + 6, alignment: .topLeading)
             // As much room on the left as the arm takes on the right, so the
-            // record itself sits in the middle.
+            // record itself sits in the middle, over its title.
             .padding(.leading, 26)
         }
     }

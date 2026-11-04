@@ -42,8 +42,20 @@ struct ContentView: View {
         store.openTabIDs.compactMap { id in model.projects.first { $0.id == id } }
     }
 
+    /// Worktrees of a project in Hun, by that project's folder: shown under
+    /// it rather than as projects of their own.
+    private var worktreesByMain: [String: [HunProject]] {
+        let mains = Set(model.projects.filter { !$0.isWorktree }.map(\.path))
+        let nested = model.projects.filter { $0.worktreeOf.map(mains.contains) ?? false }
+        return Dictionary(grouping: nested) { $0.worktreeOf ?? "" }
+            .mapValues { $0.sorted(by: HunProject.newestWorktreeFirst) }
+    }
+
     private var workspaceGroups: [(name: String, projects: [HunProject])] {
-        let grouped = Dictionary(grouping: model.projects) { project -> String in
+        let mains = Set(model.projects.filter { !$0.isWorktree }.map(\.path))
+        // A worktree of a project in Hun sits under that project.
+        let listed = model.projects.filter { !($0.worktreeOf.map(mains.contains) ?? false) }
+        let grouped = Dictionary(grouping: listed) { project -> String in
             let parts = project.path.split(separator: "/")
             guard parts.count >= 2 else { return "Projects" }
             return String(parts[parts.count - 2])
@@ -360,6 +372,7 @@ struct ContentView: View {
             searchText: $sidebarSearch,
             searchFocused: $sidebarSearchFocused,
             workspaceGroups: workspaceGroups,
+            worktreesByMain: worktreesByMain,
             activeID: store.selectedProjectID ?? "",
             collapsedSections: $collapsedSections,
             onSelectProject: openProject,
@@ -507,6 +520,7 @@ private struct SidebarColumnView: View {
     @Binding var searchText: String
     let searchFocused: FocusState<Bool>.Binding
     let workspaceGroups: [(name: String, projects: [HunProject])]
+    let worktreesByMain: [String: [HunProject]]
     let activeID: String
     @Binding var collapsedSections: Set<String>
     let onSelectProject: (String) -> Void
@@ -529,6 +543,7 @@ private struct SidebarColumnView: View {
                 searchText: $searchText,
                 searchFocused: searchFocused,
                 workspaceGroups: workspaceGroups,
+                worktreesByMain: worktreesByMain,
                 activeID: activeID,
                 collapsedSections: $collapsedSections,
                 onSelectProject: onSelectProject,
@@ -578,6 +593,7 @@ private struct SidebarView: View {
     @Binding var searchText: String
     let searchFocused: FocusState<Bool>.Binding
     let workspaceGroups: [(name: String, projects: [HunProject])]
+    let worktreesByMain: [String: [HunProject]]
     let activeID: String
     @Binding var collapsedSections: Set<String>
     let onSelectProject: (String) -> Void
@@ -588,6 +604,8 @@ private struct SidebarView: View {
     let onRemoveProject: (HunProject) -> Void
 
     private static let elsewhereSectionID = "__running_elsewhere__"
+    /// Projects whose idle worktrees are shown (they're folded by default).
+    @State private var openWorktrees: Set<String> = []
 
     private var allProjects: [HunProject] {
         workspaceGroups.flatMap { $0.projects }
@@ -628,12 +646,58 @@ private struct SidebarView: View {
         }
     }
 
+    private var query: String { searchText.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private func matches(_ project: HunProject) -> Bool {
+        project.name.localizedCaseInsensitiveContains(query) ||
+            project.path.localizedCaseInsensitiveContains(query) ||
+            (project.branch?.localizedCaseInsensitiveContains(query) ?? false)
+    }
+
+    /// While searching: projects that match, or have a worktree that does.
     private func filtered(_ projects: [HunProject]) -> [HunProject] {
-        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { return projects }
-        return projects.filter {
-            $0.name.localizedCaseInsensitiveContains(q) ||
-                $0.path.localizedCaseInsensitiveContains(q)
+        guard !query.isEmpty else { return projects }
+        return projects.filter { project in
+            matches(project) || (worktreesByMain[project.path] ?? []).contains(where: matches)
+        }
+    }
+
+    /// A project's worktrees, under it. Those running (and the one open)
+    /// always show; the rest fold into one quiet row, so a project with
+    /// twenty worktrees takes one extra line, not twenty.
+    @ViewBuilder
+    private func worktreeRows(for project: HunProject) -> some View {
+        let all = worktreesByMain[project.path] ?? []
+        if !all.isEmpty {
+            let searching = !query.isEmpty
+            let open = searching || openWorktrees.contains(project.id)
+            let candidates = searching ? all.filter(matches) : all
+            // Running ones stay on top, then the one open in Hun; the rest
+            // follow, newest first.
+            let running = candidates.filter { $0.status != .stopped }
+            let pinned = running + candidates.filter { $0.status == .stopped && $0.id == activeID }
+            let shown = open ? pinned + candidates.filter { !pinned.contains($0) } : pinned
+            ForEach(shown) { worktree in
+                SidebarWorktreeRow(
+                    worktree: worktree,
+                    selected: worktree.id == activeID,
+                    onTap: { onSelectProject(worktree.id) },
+                    onRemove: { onRemoveProject(worktree) }
+                )
+            }
+            let folded = all.count - pinned.count
+            if !searching && (folded > 0 || open) {
+                let noun = folded == 1 ? "worktree" : "worktrees"
+                SidebarWorktreesToggle(
+                    label: open ? "Hide idle worktrees" : (pinned.isEmpty ? "\(folded) \(noun)" : "\(folded) more \(noun)"),
+                    open: open,
+                    onToggle: {
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            if open { openWorktrees.remove(project.id) } else { openWorktrees.insert(project.id) }
+                        }
+                    }
+                )
+            }
         }
     }
 
@@ -655,6 +719,7 @@ private struct SidebarView: View {
                             onTap: { onSelectProject(project.id) },
                             onRemove: { onRemoveProject(project) }
                         )
+                        worktreeRows(for: project)
                     }
                 }
                 .padding(.top, 2)
@@ -1013,11 +1078,18 @@ private struct UnmanagedProcessRow: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(AppTheme.textPrimary)
                     .lineLimit(1)
-                Text(process.project.map { "\($0) · not in .hun.yml" } ?? HunPortHolder.abbreviate(process.cwd))
+                Group {
+                    if process.project == nil && process.worktree != nil {
+                        Text("\(Image(systemName: "arrow.triangle.branch")) \(process.place)")
+                    } else {
+                        Text(process.place)
+                    }
+                }
                     .font(.system(size: 10.5))
                     .foregroundStyle(AppTheme.textTertiary)
                     .lineLimit(1)
-                    .truncationMode(.head)
+                    .truncationMode(process.worktree == nil ? .head : .tail)
+                    .help(HunPortHolder.abbreviate(process.cwd))
             }
             Spacer(minLength: 4)
             if hovering {
@@ -1189,6 +1261,111 @@ private struct SidebarProjectRow: View {
         if selected { return AppTheme.selectedFill }
         if hovering { return AppTheme.rowHover }
         return .clear
+    }
+}
+
+/// A worktree under its project: a branch mark and the worktree's folder
+/// name, indented a step; running ones carry the same marker as projects.
+private struct SidebarWorktreeRow: View {
+    let worktree: HunProject
+    let selected: Bool
+    let onTap: () -> Void
+    let onRemove: () -> Void
+    @State private var hovering = false
+    @State private var confirmingRemoval = false
+    @AppStorage(HunRunningMarker.key) private var runningMarkerName = HunRunningMarker.defaultValue.rawValue
+    private var runningMarker: HunRunningMarker {
+        HunRunningMarker(rawValue: runningMarkerName) ?? .defaultValue
+    }
+
+    private var isLive: Bool { worktree.status != .stopped }
+
+    private var liveColor: Color {
+        switch worktree.status {
+        case .starting: return AppTheme.warning
+        case .crashed: return AppTheme.danger
+        default: return AppTheme.liveMarker
+        }
+    }
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 7) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(isLive ? liveColor : AppTheme.textTertiary)
+                    .frame(width: 14)
+                Text(worktree.worktreeName)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(selected || hovering || isLive ? AppTheme.textPrimary : AppTheme.textTertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 0)
+                if isLive && runningMarker == .activity {
+                    HunActivityBars(color: liveColor)
+                        .padding(.trailing, 2)
+                }
+            }
+            .padding(.leading, SidebarMetrics.rowPadding + SidebarMetrics.nestedIndent + 18)
+            .padding(.trailing, SidebarMetrics.rowPadding)
+            .frame(height: 26)
+            .background(HunRoundedShape().fill(selected ? AppTheme.selectedFill : (hovering ? AppTheme.rowHover : .clear)))
+            .overlay(alignment: .leading) {
+                if runningMarker == .bar && isLive {
+                    HunRunningBar(color: liveColor)
+                        .padding(.leading, SidebarMetrics.nestedIndent + 15)
+                        .transition(.opacity)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(worktree.branch.map { "\(worktree.worktreeName) · \($0)" } ?? worktree.worktreeName)
+        .contextMenu {
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: worktree.path)])
+            }
+            Divider()
+            Button("Remove from Hun…", role: .destructive) { confirmingRemoval = true }
+        }
+        .confirmationDialog(
+            "Remove \(worktree.worktreeName) from Hun?",
+            isPresented: $confirmingRemoval
+        ) {
+            Button("Remove", role: .destructive, action: onRemove)
+        } message: {
+            Text("Hun stops its services and stops listing it. The worktree itself is not touched.")
+        }
+    }
+}
+
+/// The quiet row under a project that folds its idle worktrees away, and
+/// brings them back.
+private struct SidebarWorktreesToggle: View {
+    let label: String
+    let open: Bool
+    let onToggle: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(spacing: 7) {
+                Image(systemName: open ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .frame(width: 14)
+                Text(label)
+                    .font(.system(size: 11.5))
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(hovering ? AppTheme.textSecondary : AppTheme.textTertiary)
+            .padding(.leading, SidebarMetrics.rowPadding + SidebarMetrics.nestedIndent + 18)
+            .padding(.trailing, SidebarMetrics.rowPadding)
+            .frame(height: 24)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
     }
 }
 

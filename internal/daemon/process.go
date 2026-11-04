@@ -8,7 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -49,10 +51,17 @@ type Process struct {
 	onOutput func(line string, isErr bool)
 	onExit   func(err error, intentional bool)
 	onReady  func()
+	// portOf gives another service of the project's port, for env values
+	// that name it (${backend.port}); nil leaves them as written.
+	portOf func(service string) int
 }
 
 // Start launches the process in its own process group.
 func (p *Process) Start() error {
+	// Other services' ports are looked up before taking the lock, so two
+	// services naming each other never wait on each other.
+	env := expandPortRefs(p.Env, p.Name, p.LaunchPort(), p.portOf)
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -75,7 +84,7 @@ func (p *Process) Start() error {
 	if launchPort <= 0 {
 		launchPort = p.observedPort
 	}
-	p.cmd.Env = buildServiceEnvironment(p.Env, p.PortEnv, launchPort)
+	p.cmd.Env = buildServiceEnvironment(env, p.PortEnv, launchPort)
 
 	// Start in own process group for clean kill
 	p.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -115,6 +124,36 @@ func (p *Process) Start() error {
 	}
 
 	return nil
+}
+
+var portRef = regexp.MustCompile(`\$\{([A-Za-z0-9_.-]+)\.port\}`)
+
+// expandPortRefs fills in ${<service>.port} in env values with the port
+// that service actually runs on, so services that call each other stay
+// wired together when Multitask moves them to free ports (a worktree's
+// frontend reaches the worktree's backend, not the main checkout's).
+func expandPortRefs(env map[string]string, self string, selfPort int, portOf func(string) int) map[string]string {
+	if len(env) == 0 {
+		return env
+	}
+	out := make(map[string]string, len(env))
+	for key, value := range env {
+		out[key] = portRef.ReplaceAllStringFunc(value, func(ref string) string {
+			service := portRef.FindStringSubmatch(ref)[1]
+			port := 0
+			switch {
+			case service == self:
+				port = selfPort
+			case portOf != nil:
+				port = portOf(service)
+			}
+			if port <= 0 {
+				return ref
+			}
+			return strconv.Itoa(port)
+		})
+	}
+	return out
 }
 
 func buildServiceEnvironment(overrides map[string]string, portEnv string, port int) []string {

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -166,7 +165,7 @@ func validateProfiles(proj *Project) error {
 // profiles section changes; comments elsewhere in the file are kept.
 func SaveProfile(dir, name string, services []string) error {
 	name = strings.TrimSpace(name)
-	path := filepath.Join(dir, ".hun.yml")
+	path := ProjectFile(dir)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("reading %s: %w", path, err)

@@ -1,16 +1,18 @@
 # Menu bar music
 
-The macOS app's menu bar plays music: a record in the menu bar's sky, eleven
+The macOS app's menu bar plays music: a record in the menu bar's sky, ten
 pieces in a shuffled order. One piece, Doorway (the welcome's music,
-`OnboardingMusic.mp3`), ships inside the app. The other ten are downloaded the
+`OnboardingMusic.mp3`), ships inside the app. The other nine are downloaded the
 first time someone presses play, so the app stays small and nobody downloads
 music they never play.
 
 ## Where the music lives
 
-The ten pieces are assets of the GitHub release
+The nine pieces are assets of the GitHub release
 [`menu-music-1`](https://github.com/sourabhrathourr/hun/releases/tag/menu-music-1),
-which is not an app release and is never marked Latest.
+which is not an app release and is never marked Latest. It holds ten files:
+Quiet City (`MenuMusic-QuietCity.m4a`) was taken out of the app in 0.6.2, but
+0.6.0 and 0.6.1 still download it, so it stays.
 
 The app has that release's address and each file's SHA-256 built in
 (`HunMenuMusic.pieces` in `apps/macos/hun/hun/HunMenuMusic.swift`). It saves
@@ -30,6 +32,9 @@ stay installed for a long time. So:
   app.
 
 ## Adding or changing music
+
+To drop a piece, delete its line from `HunMenuMusic.pieces` and ship an app
+update. Leave its file in the release: older copies still download it.
 
 1. Publish a new release, `menu-music-2`, with all the files the new set
    needs, created with `--latest=false`. Check afterwards that the Latest

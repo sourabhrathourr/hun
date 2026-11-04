@@ -251,6 +251,12 @@ nonisolated struct HunDaemonProject: Decodable, Equatable {
     let profiles: [HunDaemonProfile]
     /// The profile Run uses; nil runs every service.
     let profile: String?
+    /// The main checkout's folder, when this is a git worktree.
+    var worktreeOf: String? = nil
+    /// When the worktree was made.
+    var worktreeCreatedAt: String? = nil
+    /// The .hun.yml in use: the folder's own, or its main checkout's.
+    var configPath: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -267,6 +273,9 @@ nonisolated struct HunDaemonProject: Decodable, Equatable {
         case configError = "config_error"
         case profiles
         case profile
+        case worktreeOf = "worktree_of"
+        case worktreeCreatedAt = "worktree_created_at"
+        case configPath = "config_path"
     }
 
     init(from decoder: Decoder) throws {
@@ -285,6 +294,9 @@ nonisolated struct HunDaemonProject: Decodable, Equatable {
         configError = try container.decodeIfPresent(String.self, forKey: .configError)
         profiles = try container.decodeIfPresent([HunDaemonProfile].self, forKey: .profiles) ?? []
         profile = try container.decodeIfPresent(String.self, forKey: .profile).flatMap { $0.isEmpty ? nil : $0 }
+        worktreeOf = try container.decodeIfPresent(String.self, forKey: .worktreeOf).flatMap { $0.isEmpty ? nil : $0 }
+        worktreeCreatedAt = try container.decodeIfPresent(String.self, forKey: .worktreeCreatedAt)
+        configPath = try container.decodeIfPresent(String.self, forKey: .configPath).flatMap { $0.isEmpty ? nil : $0 }
     }
 
     init(
@@ -301,7 +313,9 @@ nonisolated struct HunDaemonProject: Decodable, Equatable {
         services: [HunDaemonService],
         configError: String?,
         profiles: [HunDaemonProfile] = [],
-        profile: String? = nil
+        profile: String? = nil,
+        worktreeOf: String? = nil,
+        worktreeCreatedAt: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -317,6 +331,8 @@ nonisolated struct HunDaemonProject: Decodable, Equatable {
         self.configError = configError
         self.profiles = profiles
         self.profile = profile
+        self.worktreeOf = worktreeOf
+        self.worktreeCreatedAt = worktreeCreatedAt
     }
 }
 
@@ -420,8 +436,25 @@ nonisolated struct HunUnmanagedProcess: Decodable, Hashable, Identifiable {
     var ports: [Int]? = nil
     let cwd: String
     var project: String? = nil
+    /// The git worktree it runs in, if it's a linked worktree.
+    var worktree: Worktree? = nil
 
     var id: Int { pid }
+
+    nonisolated struct Worktree: Decodable, Hashable {
+        let name: String
+        let repo: String
+    }
+
+    /// Where it runs, for its row: the project it belongs to, the worktree
+    /// it's in (repo/worktree), or its folder.
+    var place: String {
+        if let project { return "\(project) · not in .hun.yml" }
+        if let worktree {
+            return worktree.name == worktree.repo ? worktree.repo : "\(worktree.repo)/\(worktree.name)"
+        }
+        return HunPortHolder.abbreviate(cwd)
+    }
 }
 
 nonisolated struct HunDaemonLogLine: Decodable, Equatable {

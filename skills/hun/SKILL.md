@@ -61,7 +61,8 @@ Add these only when they clearly help:
 - `depends_on: [service]`: starts that service first. Workers usually depend on the database or queue they use.
 - `ready: "text"`: the exact line the service prints once it's up, so services that depend on it wait. Leave it out if you don't know the line.
 - `port_env: APP_PORT`: if the app reads its port from a variable other than `PORT`. Hun sets both.
-- `env: { KEY: value }` and `restart: on_failure`.
+- `env: { KEY: value }` and `restart: on_failure`. When a service calls another, write `${service.port}` instead of the number (`API_URL: http://localhost:${api.port}`): Hun fills in the port that service really runs on.
+- Git worktrees without their own `.hun.yml` use the main checkout's, so in a worktree run `hun run` as usual; don't copy `.hun.yml` into it.
 
 Don't put secrets in `.hun.yml`, add install or migration steps as services, or add services the project doesn't use.
 

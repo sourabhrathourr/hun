@@ -415,6 +415,25 @@ func (m *Manager) startService(projectName, serviceName string, projConfig *conf
 	return nil
 }
 
+// servicePort is the port a project's service runs on now, or, if it isn't
+// running under Hun, its configured port.
+func (m *Manager) servicePort(project, projectPath, service string) int {
+	m.mu.RLock()
+	proc := m.processes[project][service]
+	m.mu.RUnlock()
+	if proc != nil && proc.IsRunning() {
+		if port := proc.ObservedPort(); port > 0 {
+			return port
+		}
+	}
+	if proj, err := config.LoadProject(projectPath); err == nil {
+		if svc := proj.Services[service]; svc != nil {
+			return svc.Port
+		}
+	}
+	return 0
+}
+
 func (m *Manager) startConfiguredService(projectName, serviceName string, svcConfig *config.Service, projectPath string, allowPortFallback bool, preferredPort int, waitForReady bool) (*Process, error) {
 	generation := m.actionGeneration(projectName)
 	cancelled := func() bool { return m.cancelledSince(projectName, generation) }
@@ -463,6 +482,7 @@ func (m *Manager) startConfiguredService(projectName, serviceName string, svcCon
 		observedPort:     actualPort,
 		launchPort:       actualPort,
 		allowRuntimePort: allowPortFallback,
+		portOf:           func(service string) int { return m.servicePort(projectName, projectPath, service) },
 	}
 	if commandNeedsDocker(svcConfig.Cmd) {
 		// Compose stops containers on SIGTERM with a 10s default timeout;
