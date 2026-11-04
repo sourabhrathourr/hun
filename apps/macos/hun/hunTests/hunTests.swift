@@ -26,6 +26,42 @@ struct hunTests {
         [release("0.6.1", new: false), release("0.6.0", new: true), release("0.5.1", new: false), release("0.5.0", new: true), release("0.4.4", new: true)]
     }
 
+    @Test func agentReplyCarriesWorktreesToDelete() throws {
+        let reply = #"{"summary": "These four are merged.", "yaml": "name: otto\n", "delete_worktrees": ["ott-1383", "ott-1384"]}"#
+        let output = try #require(HunAgentStreamParser.decodeOutput(Data(reply.utf8)))
+        #expect(output.deleteWorktrees == ["ott-1383", "ott-1384"])
+        // Older replies without the field still read.
+        let old = try #require(HunAgentStreamParser.decodeOutput(Data(#"{"summary": "", "yaml": "name: otto\n"}"#.utf8)))
+        #expect(old.deleteWorktrees.isEmpty)
+        // Strict structured output needs every property listed as required.
+        let schema = try #require(try JSONSerialization.jsonObject(with: Data(HunAgentBrief.schema.utf8)) as? [String: Any])
+        let required = Set(try #require(schema["required"] as? [String]))
+        let properties = Set(try #require(schema["properties"] as? [String: Any]).keys)
+        #expect(required == properties)
+    }
+
+    @Test func worktreePullRequestDecodesAndAnUnknownStateIsIgnored() throws {
+        func project(_ pullRequest: String) throws -> HunProject {
+            let json = """
+            {"id": "otto-ott-1", "name": "otto", "path": "/w/otto/.claude/worktrees/ott-1", "status": "stopped",
+             "is_active": false, "services": [], "worktree_of": "/w/otto", "pull_request": \(pullRequest)}
+            """
+            return HunProject(snapshot: try JSONDecoder().decode(HunDaemonProject.self, from: Data(json.utf8)), activeID: nil)
+        }
+        let merged = try project(#"{"number": 1673, "state": "merged", "url": "https://github.com/o/r/pull/1673"}"#)
+        #expect(merged.pullRequest?.number == 1673)
+        #expect(merged.pullRequest?.state == .merged)
+        #expect(merged.pullRequest?.title == "PR #1673 · merged")
+        #expect(merged.pullRequest?.checksFailing == false)
+        let failing = try project(#"{"number": 1553, "state": "draft", "url": "", "checks": "failing"}"#)
+        #expect(failing.pullRequest?.checksFailing == true)
+        #expect(failing.pullRequest?.title == "PR #1553 · draft · CI failing")
+        // A state Hun doesn't know yet mustn't drop the whole project.
+        let unknown = try project(#"{"number": 2, "state": "queued", "url": ""}"#)
+        #expect(unknown.pullRequest == nil)
+        #expect(unknown.isWorktree)
+    }
+
     @Test func whatsNewAfterJumpingFromBeforeItExistedLeadsWithTheBigRelease() {
         // 0.5.x recorded nothing; jumping straight to 0.6.1 must still show 0.6.0.
         let pending = HunWhatsNew.pending(changelog, current: "0.6.1", lastSeen: nil)
@@ -2241,6 +2277,11 @@ private final class MockDaemonClient: HunDaemonClientProtocol {
 
     func removeProject(_ project: String) async throws {
         actions.append("remove_project:\(project)")
+    }
+
+    func deleteWorktree(_ project: String, discardChanges: Bool) async throws -> HunWorktreeDeletion {
+        actions.append("delete_worktree:\(project):\(discardChanges)")
+        return try JSONDecoder().decode(HunWorktreeDeletion.self, from: Data(#"{"branch_deleted": false}"#.utf8))
     }
 
     func clearLogs(project: String, service: String?) async throws {

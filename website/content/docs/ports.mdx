@@ -66,6 +66,8 @@ If `api` moves to 8001 in Multitask (say a worktree of the project already uses 
 
 A git worktree of a project in Hun shows up under that project in the sidebar. If it has no `.hun.yml` of its own, it uses the main checkout's, so an agent's worktree runs like the project. A worktree's own `.hun.yml` wins. Running worktrees are listed; the rest fold into one line under the project.
 
+When the GitHub CLI (`gh`) is signed in, each worktree's branch icon takes its pull request's colour: green for open, violet for merged, yellow while CI runs, red when CI fails, grey for draft, closed or no PR. Right-click a worktree and choose **Delete Worktree…** to remove it with git. Hun says first whether its PR is merged and how many uncommitted changes would be lost. A merged worktree's local branch goes with it, unless it has commits the PR doesn't. **Delete N Merged Worktrees…** in a project's right-click menu clears every idle merged worktree at once and keeps any with uncommitted changes. You can also ask in the project's chat, for example "delete my merged worktrees": the agent picks them and Hun asks you to confirm before deleting.
+
 Worktrees use the same ports as the main checkout. In Multitask, both run: the second one moves to the next free ports. In Focus, starting one stops the other.
 
 ## Services without a port

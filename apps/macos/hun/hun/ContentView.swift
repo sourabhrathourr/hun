@@ -294,6 +294,7 @@ struct ContentView: View {
                     onAskAgent: { request in store.sendAgentMessage(request, for: project) },
                     onStopAgent: { store.cancelAgent(for: project.path) },
                     onUndoAgentChange: { id in store.undoAgentChange(id, for: project) },
+                    onConfirmWorktreeCleanup: { id, delete in store.confirmWorktreeCleanup(id, for: project, delete: delete) },
                     onNewAgentConversation: { store.clearAgentChat(for: project.path) },
                     queuedAgentMessages: store.agentQueues[project.path] ?? [],
                     onSteerAgent: { text in store.steerAgent(text, for: project) },
@@ -381,7 +382,11 @@ struct ContentView: View {
             unmanaged: store.model.unmanaged,
             onStopUnmanaged: { process in store.stop(process) },
             onAddUnmanaged: { process in store.addProject(from: process) },
-            onRemoveProject: { project in store.remove(project) }
+            onRemoveProject: { project in store.remove(project) },
+            worktreeActions: SidebarWorktreeActions(
+                uncommittedChanges: { project in await store.uncommittedChanges(in: project) },
+                delete: { worktrees, discard in store.deleteWorktrees(worktrees, discardChanges: discard) }
+            )
         )
     }
 
@@ -530,6 +535,7 @@ private struct SidebarColumnView: View {
     let onStopUnmanaged: (HunUnmanagedProcess) -> Void
     let onAddUnmanaged: (HunUnmanagedProcess) -> Void
     let onRemoveProject: (HunProject) -> Void
+    let worktreeActions: SidebarWorktreeActions
 
     var body: some View {
         VStack(spacing: 0) {
@@ -551,7 +557,8 @@ private struct SidebarColumnView: View {
                 unmanaged: unmanaged,
                 onStopUnmanaged: onStopUnmanaged,
                 onAddUnmanaged: onAddUnmanaged,
-                onRemoveProject: onRemoveProject
+                onRemoveProject: onRemoveProject,
+                worktreeActions: worktreeActions
             )
         }
     }
@@ -602,10 +609,13 @@ private struct SidebarView: View {
     let onStopUnmanaged: (HunUnmanagedProcess) -> Void
     let onAddUnmanaged: (HunUnmanagedProcess) -> Void
     let onRemoveProject: (HunProject) -> Void
+    let worktreeActions: SidebarWorktreeActions
 
     private static let elsewhereSectionID = "__running_elsewhere__"
     /// Projects whose idle worktrees are shown (they're folded by default).
     @State private var openWorktrees: Set<String> = []
+    /// Worktrees waiting on the delete confirmation.
+    @State private var deletion: WorktreeDeletionPlan?
 
     private var allProjects: [HunProject] {
         workspaceGroups.flatMap { $0.projects }
@@ -644,6 +654,25 @@ private struct SidebarView: View {
             SidebarUpdateSlot()
             SidebarFooter(onSettings: onSettings)
         }
+        .confirmationDialog(
+            deletion?.title ?? "",
+            isPresented: Binding(get: { deletion != nil }, set: { if !$0 { deletion = nil } }),
+            presenting: deletion
+        ) { plan in
+            Button(plan.confirmTitle, role: .destructive) {
+                worktreeActions.delete(plan.worktrees, plan.uncommitted > 0)
+            }
+        } message: { plan in
+            Text(plan.message)
+        }
+    }
+
+    /// Asks before deleting one worktree, after counting what would be lost.
+    private func confirmDelete(_ worktree: HunProject) {
+        Task {
+            let uncommitted = await worktreeActions.uncommittedChanges(worktree) ?? 0
+            deletion = WorktreeDeletionPlan(worktrees: [worktree], uncommitted: uncommitted)
+        }
     }
 
     private var query: String { searchText.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -662,6 +691,11 @@ private struct SidebarView: View {
         }
     }
 
+    /// A project's idle worktrees whose PR is merged: safe to clear away.
+    private func mergedIdleWorktrees(of project: HunProject) -> [HunProject] {
+        (worktreesByMain[project.path] ?? []).filter { $0.status == .stopped && $0.pullRequest?.state == .merged }
+    }
+
     /// A project's worktrees, under it. Those running (and the one open)
     /// always show; the rest fold into one quiet row, so a project with
     /// twenty worktrees takes one extra line, not twenty.
@@ -672,17 +706,20 @@ private struct SidebarView: View {
             let searching = !query.isEmpty
             let open = searching || openWorktrees.contains(project.id)
             let candidates = searching ? all.filter(matches) : all
-            // Running ones stay on top, then the one open in Hun; the rest
-            // follow, newest first.
+            // Running ones stay on top, the rest follow newest first.
+            // Selecting one never moves it: unfolded, it keeps its place;
+            // folded, it shows alone below the running ones.
             let running = candidates.filter { $0.status != .stopped }
-            let pinned = running + candidates.filter { $0.status == .stopped && $0.id == activeID }
-            let shown = open ? pinned + candidates.filter { !pinned.contains($0) } : pinned
+            let idle = candidates.filter { $0.status == .stopped }
+            let pinned = running + idle.filter { $0.id == activeID }
+            let shown = open ? running + idle : pinned
             ForEach(shown) { worktree in
                 SidebarWorktreeRow(
                     worktree: worktree,
                     selected: worktree.id == activeID,
                     onTap: { onSelectProject(worktree.id) },
-                    onRemove: { onRemoveProject(worktree) }
+                    onRemove: { onRemoveProject(worktree) },
+                    onDelete: { confirmDelete(worktree) }
                 )
             }
             let folded = all.count - pinned.count
@@ -697,6 +734,7 @@ private struct SidebarView: View {
                         }
                     }
                 )
+
             }
         }
     }
@@ -717,7 +755,11 @@ private struct SidebarView: View {
                             project: project,
                             selected: project.id == activeID,
                             onTap: { onSelectProject(project.id) },
-                            onRemove: { onRemoveProject(project) }
+                            onRemove: { onRemoveProject(project) },
+                            mergedWorktrees: mergedIdleWorktrees(of: project).count,
+                            onDeleteMerged: {
+                                deletion = WorktreeDeletionPlan(worktrees: mergedIdleWorktrees(of: project), uncommitted: 0)
+                            }
                         )
                         worktreeRows(for: project)
                     }
@@ -1168,6 +1210,8 @@ private struct SidebarProjectRow: View {
     let selected: Bool
     let onTap: () -> Void
     let onRemove: () -> Void
+    var mergedWorktrees = 0
+    var onDeleteMerged: () -> Void = {}
     @State private var hovering = false
     @State private var confirmingRemoval = false
 
@@ -1217,11 +1261,37 @@ private struct SidebarProjectRow: View {
         .onHover { hovering = $0 }
         .accessibilityHint("\(project.name)\n\(project.path)")
         .contextMenu {
-            Button("Reveal in Finder") {
-                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: project.path)])
+            Section {
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: project.path)])
+                } label: {
+                    Label("Reveal in Finder", systemImage: "folder")
+                }
+                if let branch = project.branch {
+                    Button {
+                        copyToPasteboard(branch)
+                    } label: {
+                        Label("Copy Branch Name", systemImage: "arrow.triangle.branch")
+                    }
+                }
+                Button {
+                    copyToPasteboard(project.path)
+                } label: {
+                    Label("Copy Path", systemImage: "doc.on.doc")
+                }
             }
-            Divider()
-            Button("Remove from Hun…", role: .destructive) { confirmingRemoval = true }
+            Section {
+                if mergedWorktrees > 0 {
+                    Button(role: .destructive, action: onDeleteMerged) {
+                        Label("Delete \(String(mergedWorktrees)) Merged Worktrees…", systemImage: "trash")
+                    }
+                }
+                Button(role: .destructive) {
+                    confirmingRemoval = true
+                } label: {
+                    Label("Remove from Hun…", systemImage: "eye.slash")
+                }
+            }
         }
         .confirmationDialog(
             "Remove \(project.name) from Hun?",
@@ -1271,6 +1341,7 @@ private struct SidebarWorktreeRow: View {
     let selected: Bool
     let onTap: () -> Void
     let onRemove: () -> Void
+    let onDelete: () -> Void
     @State private var hovering = false
     @State private var confirmingRemoval = false
     @AppStorage(HunRunningMarker.key) private var runningMarkerName = HunRunningMarker.defaultValue.rawValue
@@ -1288,13 +1359,24 @@ private struct SidebarWorktreeRow: View {
         }
     }
 
+    /// Running ones show their run colour; idle ones their PR's, so merged
+    /// worktrees stand out as safe to delete and failing CI as needing a look.
+    private var iconColor: Color {
+        if isLive { return liveColor }
+        guard let pullRequest = worktree.pullRequest else { return AppTheme.textTertiary }
+        if pullRequest.checksFailing { return AppTheme.pullRequestChecksFailing }
+        if pullRequest.checksRunning { return AppTheme.pullRequestChecksRunning }
+        switch pullRequest.state {
+        case .open: return AppTheme.pullRequestOpen
+        case .merged: return AppTheme.pullRequestMerged
+        case .closed, .draft: return AppTheme.textTertiary
+        }
+    }
+
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: 7) {
-                Image(systemName: "arrow.triangle.branch")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(isLive ? liveColor : AppTheme.textTertiary)
-                    .frame(width: 14)
+                WorktreeBranchIcon(color: iconColor)
                 Text(worktree.worktreeName)
                     .font(.system(size: 12.5))
                     .foregroundStyle(selected || hovering || isLive ? AppTheme.textPrimary : AppTheme.textTertiary)
@@ -1321,13 +1403,48 @@ private struct SidebarWorktreeRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help(worktree.branch.map { "\(worktree.worktreeName) · \($0)" } ?? worktree.worktreeName)
         .contextMenu {
-            Button("Reveal in Finder") {
-                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: worktree.path)])
+            if let pullRequest = worktree.pullRequest {
+                // What the PR is up to, as the menu's heading.
+                Section(pullRequest.title) {
+                    if let url = URL(string: pullRequest.url) {
+                        Button {
+                            NSWorkspace.shared.open(url)
+                        } label: {
+                            Label("Open Pull Request", systemImage: "arrow.up.right.square")
+                        }
+                    }
+                }
             }
-            Divider()
-            Button("Remove from Hun…", role: .destructive) { confirmingRemoval = true }
+            Section {
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: worktree.path)])
+                } label: {
+                    Label("Reveal in Finder", systemImage: "folder")
+                }
+                if let branch = worktree.branch {
+                    Button {
+                        copyToPasteboard(branch)
+                    } label: {
+                        Label("Copy Branch Name", systemImage: "arrow.triangle.branch")
+                    }
+                }
+                Button {
+                    copyToPasteboard(worktree.path)
+                } label: {
+                    Label("Copy Path", systemImage: "doc.on.doc")
+                }
+            }
+            Section {
+                Button {
+                    confirmingRemoval = true
+                } label: {
+                    Label("Remove from Hun…", systemImage: "eye.slash")
+                }
+                Button(role: .destructive, action: onDelete) {
+                    Label("Delete Worktree…", systemImage: "trash")
+                }
+            }
         }
         .confirmationDialog(
             "Remove \(worktree.worktreeName) from Hun?",
@@ -1353,9 +1470,10 @@ private struct SidebarWorktreesToggle: View {
             HStack(spacing: 7) {
                 Image(systemName: open ? "chevron.up" : "chevron.down")
                     .font(.system(size: 8, weight: .bold))
-                    .frame(width: 14)
+                    .frame(width: WorktreeBranchIcon.size)
                 Text(label)
                     .font(.system(size: 11.5))
+                    .lineLimit(1)
                 Spacer(minLength: 0)
             }
             .foregroundStyle(hovering ? AppTheme.textSecondary : AppTheme.textTertiary)
@@ -1366,6 +1484,77 @@ private struct SidebarWorktreesToggle: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+    }
+}
+
+/// A worktree's branch mark, in its state's colour.
+private struct WorktreeBranchIcon: View {
+    static let size: CGFloat = 14
+    let color: Color
+
+    var body: some View {
+        Image(systemName: "arrow.triangle.branch")
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(color)
+            .frame(width: Self.size)
+    }
+}
+
+private func copyToPasteboard(_ text: String) {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
+}
+
+/// Sidebar hooks for deleting worktrees, filled in by the store.
+struct SidebarWorktreeActions {
+    let uncommittedChanges: (HunProject) async -> Int?
+    let delete: ([HunProject], Bool) -> Void
+}
+
+/// What the delete confirmation shows: one worktree, with its PR and what
+/// would be lost, or several merged ones at once.
+private struct WorktreeDeletionPlan {
+    let worktrees: [HunProject]
+    let uncommitted: Int
+
+    var title: String {
+        worktrees.count == 1
+            ? "Delete \(worktrees[0].worktreeName)?"
+            : "Delete \(worktrees.count) merged worktrees?"
+    }
+
+    var confirmTitle: String {
+        if uncommitted > 0 {
+            return "Delete and Lose \(uncommitted) \(uncommitted == 1 ? "Change" : "Changes")"
+        }
+        return worktrees.count == 1 ? "Delete" : "Delete \(worktrees.count)"
+    }
+
+    var message: String {
+        guard worktrees.count == 1, let worktree = worktrees.first else {
+            let names = ListFormatter.localizedString(byJoining: worktrees.map(\.worktreeName))
+            return "\(names) will be removed from disk, with their branches unless they have commits the PR doesn't. Any with uncommitted changes are kept."
+        }
+        var lines: [String] = []
+        switch worktree.pullRequest {
+        case let pr? where pr.state == .merged:
+            lines.append("PR #\(pr.number) is merged, so its branch goes too.")
+        case let pr? where pr.state == .closed:
+            lines.append("PR #\(pr.number) was closed without merging. The branch is kept.")
+        case let pr?:
+            lines.append("PR #\(pr.number) is still open. The branch is kept, so the PR is unaffected.")
+        case nil:
+            lines.append("No pull request found. The branch is kept.")
+        }
+        if uncommitted > 0 {
+            lines.append("\(uncommitted) uncommitted \(uncommitted == 1 ? "change" : "changes") will be lost.")
+        } else {
+            lines.append("No uncommitted changes.")
+        }
+        if worktree.status != .stopped {
+            lines.append("Its services stop first.")
+        }
+        return lines.joined(separator: " ")
     }
 }
 
@@ -1768,6 +1957,7 @@ private struct ProjectDetailView: View {
     let onAskAgent: (String) -> Void
     let onStopAgent: () -> Void
     let onUndoAgentChange: (UUID) -> Void
+    var onConfirmWorktreeCleanup: (UUID, Bool) -> Void = { _, _ in }
     let onNewAgentConversation: () -> Void
     let queuedAgentMessages: [HunQueuedMessage]
     let onSteerAgent: (String) -> Void
@@ -1857,6 +2047,7 @@ private struct ProjectDetailView: View {
                         onSendQueuedNow: onSendQueuedAgentMessageNow,
                         onStop: onStopAgent,
                         onUndo: onUndoAgentChange,
+                        onConfirmCleanup: onConfirmWorktreeCleanup,
                         onNewConversation: onNewAgentConversation,
                         onCheckForAgent: onCheckForAgent
                     )

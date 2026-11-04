@@ -293,11 +293,28 @@ enum HunWorktreeSimulation {
                     isActive: false, branch: worktree, lastNote: nil, startedAt: nil, services: [], configError: nil,
                     worktreeOf: main,
                     // Made a few hours apart, the last in the list newest.
-                    worktreeCreatedAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(Double(index - worktreeNames.count) * 3 * 3600))
+                    worktreeCreatedAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(Double(index - worktreeNames.count) * 3 * 3600)),
+                    pullRequest: simulatedPullRequest(index)
                 ), activeID: nil))
             }
         }
         return projects
+    }
+
+    /// Older worktrees mostly merged, newer ones open or in draft, a few
+    /// without a PR yet, one closed.
+    private static func simulatedPullRequest(_ index: Int) -> HunPullRequest? {
+        let state: String
+        switch index {
+        case 0..<9: state = index == 3 ? "closed" : "merged"
+        case 9..<14: state = "open"
+        case 14..<17: state = "draft"
+        default: return nil
+        }
+        // A few with CI failing, a couple still running.
+        let checks = [10, 15].contains(index) ? "failing" : ([12, 16].contains(index) ? "pending" : "passing")
+        let json = #"{"number": \#(1500 + index), "state": "\#(state)", "url": "https://github.com/example/repo/pull/\#(1500 + index)", "checks": "\#(checks)"}"#
+        return try? JSONDecoder().decode(HunPullRequest.self, from: Data(json.utf8))
     }
 }
 #endif

@@ -36,6 +36,10 @@ nonisolated protocol HunDaemonClientProtocol: AnyObject {
     func restartService(_ project: String, service: String) async throws
     func freePort(_ port: Int) async throws
     func removeProject(_ project: String) async throws
+    /// Deletes a git worktree: stops it, removes it with git, and drops its
+    /// branch when its pull request is merged. It refuses uncommitted
+    /// changes unless `discardChanges`.
+    func deleteWorktree(_ project: String, discardChanges: Bool) async throws -> HunWorktreeDeletion
     func removeService(_ project: String, service: String) async throws
     func setMode(_ mode: HunMode, preferredProject: String?) async throws
     func logs(project: String, service: String?, lines: Int) async throws -> [HunDaemonLogLine]
@@ -257,6 +261,8 @@ nonisolated struct HunDaemonProject: Decodable, Equatable {
     var worktreeCreatedAt: String? = nil
     /// The .hun.yml in use: the folder's own, or its main checkout's.
     var configPath: String? = nil
+    /// The GitHub pull request for a worktree's branch, when gh can tell.
+    var pullRequest: HunPullRequest? = nil
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -276,6 +282,7 @@ nonisolated struct HunDaemonProject: Decodable, Equatable {
         case worktreeOf = "worktree_of"
         case worktreeCreatedAt = "worktree_created_at"
         case configPath = "config_path"
+        case pullRequest = "pull_request"
     }
 
     init(from decoder: Decoder) throws {
@@ -297,6 +304,7 @@ nonisolated struct HunDaemonProject: Decodable, Equatable {
         worktreeOf = try container.decodeIfPresent(String.self, forKey: .worktreeOf).flatMap { $0.isEmpty ? nil : $0 }
         worktreeCreatedAt = try container.decodeIfPresent(String.self, forKey: .worktreeCreatedAt)
         configPath = try container.decodeIfPresent(String.self, forKey: .configPath).flatMap { $0.isEmpty ? nil : $0 }
+        pullRequest = try? container.decodeIfPresent(HunPullRequest.self, forKey: .pullRequest)
     }
 
     init(
@@ -315,7 +323,8 @@ nonisolated struct HunDaemonProject: Decodable, Equatable {
         profiles: [HunDaemonProfile] = [],
         profile: String? = nil,
         worktreeOf: String? = nil,
-        worktreeCreatedAt: String? = nil
+        worktreeCreatedAt: String? = nil,
+        pullRequest: HunPullRequest? = nil
     ) {
         self.id = id
         self.name = name
@@ -333,6 +342,44 @@ nonisolated struct HunDaemonProject: Decodable, Equatable {
         self.profile = profile
         self.worktreeOf = worktreeOf
         self.worktreeCreatedAt = worktreeCreatedAt
+        self.pullRequest = pullRequest
+    }
+}
+
+/// A worktree branch's pull request on GitHub.
+nonisolated struct HunPullRequest: Decodable, Hashable, Sendable {
+    enum State: String, Decodable, Sendable {
+        case open, draft, merged, closed
+    }
+
+    let number: Int
+    let state: State
+    let url: String
+    /// CI on an open PR: "failing", "pending" or "passing"; nil if none.
+    var checks: String? = nil
+
+    var checksFailing: Bool { checks == "failing" && (state == .open || state == .draft) }
+    var checksRunning: Bool { checks == "pending" && (state == .open || state == .draft) }
+
+    var title: String {
+        let base = "PR #\(number) · \(state.rawValue)"
+        switch checks {
+        case "failing": return base + " · CI failing"
+        case "pending": return base + " · CI running"
+        case "passing": return base + " · CI passing"
+        default: return base
+        }
+    }
+}
+
+/// What deleting a worktree did.
+nonisolated struct HunWorktreeDeletion: Decodable, Sendable {
+    let branch: String?
+    let branchDeleted: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case branch
+        case branchDeleted = "branch_deleted"
     }
 }
 
@@ -568,6 +615,13 @@ nonisolated final class HunDaemonClient: HunDaemonClientProtocol, HunGitClientPr
 
     func removeProject(_ project: String) async throws {
         try await send(HunDaemonRequest(action: "remove_project", project: project))
+    }
+
+    func deleteWorktree(_ project: String, discardChanges: Bool) async throws -> HunWorktreeDeletion {
+        try await request(
+            HunDaemonRequest(action: "delete_worktree", project: project, force: discardChanges ? true : nil),
+            timeoutNanoseconds: 120_000_000_000
+        )
     }
 
     func setMode(_ mode: HunMode, preferredProject: String?) async throws {
@@ -961,6 +1015,7 @@ nonisolated private struct HunDaemonRequest: Encodable {
     var profile: String?
     var services: [String]?
     var content: String?
+    var force: Bool?
 }
 
 nonisolated private struct HunDaemonEnvelope<T: Decodable>: Decodable {

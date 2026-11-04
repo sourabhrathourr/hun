@@ -309,6 +309,7 @@ struct HunAgentChatView: View {
     let onSendQueuedNow: (UUID) -> Void
     let onStop: () -> Void
     let onUndo: (UUID) -> Void
+    var onConfirmCleanup: (UUID, Bool) -> Void = { _, _ in }
     let onNewConversation: () -> Void
     let onCheckForAgent: () -> Void
     @State private var draft = ""
@@ -381,6 +382,7 @@ struct HunAgentChatView: View {
                                     projectName: projectName,
                                     canUndo: !isWorking,
                                     onUndo: { onUndo(message.id) },
+                                    onConfirmCleanup: { delete in onConfirmCleanup(message.id, delete) },
                                     onStop: onStop
                                 )
                             }
@@ -611,6 +613,7 @@ private struct HunAgentTurn: View {
     let projectName: String
     let canUndo: Bool
     let onUndo: () -> Void
+    let onConfirmCleanup: (Bool) -> Void
     let onStop: () -> Void
     @State private var showsFiles = false
 
@@ -650,6 +653,10 @@ private struct HunAgentTurn: View {
                     }
                     if let change = message.change, !change.lines.isEmpty {
                         HunChangeCard(change: change, canUndo: canUndo, onUndo: onUndo)
+                            .padding(.top, 2)
+                    }
+                    if let cleanup = message.worktreeCleanup {
+                        HunWorktreeCleanupCard(cleanup: cleanup, onConfirm: onConfirmCleanup)
                             .padding(.top, 2)
                     }
                 }
@@ -825,6 +832,74 @@ private struct HunInstallCommand: View {
 }
 
 /// What a reply changed, line by line, with Undo.
+/// Worktrees a reply offers to delete, with Delete and Keep. Laid out like
+/// the change card above it.
+private struct HunWorktreeCleanupCard: View {
+    let cleanup: HunWorktreeCleanup
+    let onConfirm: (Bool) -> Void
+    @State private var hoveringDelete = false
+    @State private var hoveringKeep = false
+
+    private var footer: String {
+        switch cleanup.state {
+        case .pending: return "Ones with uncommitted changes are kept"
+        case .deleted: return cleanup.items.count == 1 ? "Deleted" : "Deleted \(cleanup.items.count) worktrees"
+        case .kept: return "Kept"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(cleanup.items, id: \.self) { item in
+                    HStack(spacing: 8) {
+                        Image(systemName: "arrow.triangle.branch")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(AppTheme.textTertiary)
+                            .frame(width: 10)
+                        Text(item.name)
+                            .font(.system(size: 11.5, design: .monospaced))
+                            .foregroundStyle(cleanup.state == .pending ? AppTheme.textPrimary : AppTheme.textTertiary)
+                            .strikethrough(cleanup.state == .deleted)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+            }
+            .padding(12)
+
+            Rectangle().fill(AppTheme.divider).frame(height: 1)
+
+            HStack(spacing: 14) {
+                Text(footer)
+                    .font(.system(size: 11))
+                    .foregroundStyle(AppTheme.textTertiary)
+                Spacer()
+                if cleanup.state == .pending {
+                    Button { onConfirm(false) } label: {
+                        Text("Keep")
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundStyle(hoveringKeep ? AppTheme.textPrimary : AppTheme.textSecondary)
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { hoveringKeep = $0 }
+                    Button { onConfirm(true) } label: {
+                        Text(cleanup.items.count == 1 ? "Delete" : "Delete \(cleanup.items.count)")
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .foregroundStyle(hoveringDelete ? AppTheme.danger : AppTheme.danger.opacity(0.85))
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { hoveringDelete = $0 }
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+        }
+        .background(HunRoundedShape().fill(AppTheme.elevated))
+        .overlay(HunRoundedShape().strokeBorder(AppTheme.divider, lineWidth: 1))
+    }
+}
+
 private struct HunChangeCard: View {
     let change: HunAgentChange
     let canUndo: Bool

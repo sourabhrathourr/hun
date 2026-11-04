@@ -98,6 +98,8 @@ nonisolated struct HunAgentResult: Sendable, Equatable {
     let summary: String
     /// For follow-ups. Nil if the agent didn't report one.
     let sessionID: String?
+    /// Worktrees the agent offers to delete; Hun asks before it does.
+    var deleteWorktrees: [String] = []
 }
 
 nonisolated enum HunAgentError: LocalizedError, Equatable {
@@ -195,8 +197,19 @@ nonisolated enum HunAgentBrief {
 
     /// A message from the setup chat. `state` is what's running now and the
     /// latest log lines, so questions like "why did the API crash?" can be answered.
-    static func change(_ request: String, current: String, state: String? = nil) -> String {
+    static func change(_ request: String, current: String, state: String? = nil, worktrees: String? = nil) -> String {
         let stateSection = state.map { "\n\nWhat's happening in Hun right now:\n\n\($0)" } ?? ""
+        let worktreeSection = worktrees.map {
+            """
+
+
+            The project's git worktrees, with their pull requests on GitHub:
+
+            \($0)
+
+            If they ask to delete or clean up worktrees (for example "delete my merged worktrees"), put the names of the ones they mean in `delete_worktrees`, exactly as listed, and say in `summary` which ones and why. Only idle worktrees can be deleted. "Merged" means the PR is merged. Hun shows them the list and deletes only after they confirm; it keeps any with uncommitted changes, and keeps a branch with commits its PR doesn't have. Leave the file exactly as it is. Otherwise `delete_worktrees` is empty.
+            """
+        } ?? ""
         return """
         The person using Hun says:
 
@@ -206,7 +219,7 @@ nonisolated enum HunAgentBrief {
 
         ```yaml
         \(current)
-        ```\(stateSection)
+        ```\(stateSection)\(worktreeSection)
 
         If they're asking for a change, read what you need, change only that, and follow the same rules as before. Return the whole updated file in `yaml`, and one sentence in `summary` saying what changed.
 
@@ -234,7 +247,7 @@ nonisolated enum HunAgentBrief {
 
     /// `summary` comes first so the reply streams before the file.
     static let schema = """
-    {"type":"object","additionalProperties":false,"required":["summary","yaml"],"properties":{"summary":{"type":"string","description":"Your reply to the person, in plain sentences: what you set up or changed, or the answer to their question"},"yaml":{"type":"string","description":"The complete .hun.yml file"}}}
+    {"type":"object","additionalProperties":false,"required":["summary","yaml","delete_worktrees"],"properties":{"summary":{"type":"string","description":"Your reply to the person, in plain sentences: what you set up or changed, or the answer to their question"},"yaml":{"type":"string","description":"The complete .hun.yml file"},"delete_worktrees":{"type":"array","items":{"type":"string"},"description":"Worktree names to delete, only when the person asks to delete or clean up worktrees; otherwise empty. Hun asks them to confirm first."}}}
     """
 }
 
@@ -322,7 +335,10 @@ nonisolated enum HunAgentRunner {
             structured = HunAgentStreamParser.decodeOutput(data) ?? structured
         }
         if let structured, !structured.yaml.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return HunAgentResult(yaml: structured.yaml, summary: structured.summary, sessionID: parser.sessionID ?? sessionID)
+            return HunAgentResult(
+                yaml: structured.yaml, summary: structured.summary,
+                sessionID: parser.sessionID ?? sessionID, deleteWorktrees: structured.deleteWorktrees
+            )
         }
         if let message = parser.errorMessage {
             throw HunAgentError.failed(message)
@@ -418,6 +434,7 @@ nonisolated final class HunAgentStreamParser: @unchecked Sendable {
     struct Output: Equatable {
         let yaml: String
         let summary: String
+        var deleteWorktrees: [String] = []
     }
 
     private let kind: HunAgentKind
@@ -466,7 +483,11 @@ nonisolated final class HunAgentStreamParser: @unchecked Sendable {
 
     private static func output(from object: [String: Any]) -> Output? {
         guard let yaml = object["yaml"] as? String else { return nil }
-        return Output(yaml: yaml, summary: (object["summary"] as? String) ?? "")
+        return Output(
+            yaml: yaml,
+            summary: (object["summary"] as? String) ?? "",
+            deleteWorktrees: (object["delete_worktrees"] as? [String]) ?? []
+        )
     }
 
     private func handle(_ line: Data) {
@@ -726,6 +747,8 @@ nonisolated struct HunAgentMessage: Codable, Equatable, Identifiable, Sendable {
     var isSetup: Bool
     var change: HunAgentChange?
     let date: Date
+    /// Worktrees the reply offers to delete, waiting on the person.
+    var worktreeCleanup: HunWorktreeCleanup? = nil
 
     static func user(_ text: String) -> HunAgentMessage {
         HunAgentMessage(id: UUID(), role: .user, text: text, steps: [], files: nil, isThinking: nil, status: .done, isSetup: false, change: nil, date: Date())
@@ -740,6 +763,24 @@ nonisolated struct HunAgentMessage: Codable, Equatable, Identifiable, Sendable {
 nonisolated struct HunQueuedMessage: Identifiable, Equatable, Sendable {
     let id = UUID()
     let text: String
+}
+
+/// Worktrees an agent's reply offers to delete. Nothing happens until the
+/// person confirms in the chat.
+nonisolated struct HunWorktreeCleanup: Codable, Equatable, Sendable {
+    struct Item: Codable, Equatable, Sendable, Hashable {
+        let name: String
+        let path: String
+    }
+
+    enum State: String, Codable, Sendable {
+        case pending
+        case deleted
+        case kept
+    }
+
+    let items: [Item]
+    var state: State
 }
 
 /// What a reply changed, service by service, and how to put it back.
