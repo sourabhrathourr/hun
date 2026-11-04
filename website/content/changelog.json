@@ -1,5 +1,39 @@
 [
   {
+    "version": "0.6.0",
+    "date": "2026-11-04",
+    "title": "Music in the menu bar",
+    "summary": "Soft music to work to, played from the menu bar. Hun can also open at login and keep out of your Dock, and a stuck action can now be stopped.",
+    "groups": [
+      {
+        "title": "New",
+        "changes": [
+          "Music in the menu bar. Press the note in the menu bar's sky and a record turns while eleven calm pieces play, shuffled; hover it to skip one. The music downloads the first time you press play. Don't want the note? Turn it off in Settings › Appearance.",
+          "Open at login, in the new General section of Settings.",
+          "Hide Hun's Dock icon once its windows are closed. Hun keeps running in the menu bar, and the icon comes back when you open the dashboard.",
+          "After an update, Hun shows what's new, like this. It's in Settings › About too."
+        ]
+      },
+      {
+        "title": "Improved",
+        "changes": [
+          "Taking a while? After 8 seconds, the spinner on Run, Restart, Stop or a profile switch shows a small square: click it to force-stop the project, even while Docker isn't responding.",
+          "A service that keeps crashing is restarted after a growing pause, up to 10 seconds, and shows as crashed in between, with a note in its log, instead of flickering back to running every second.",
+          "Activity is the default way the sidebar marks a running project. If you picked one, you keep it.",
+          "Open Hun from the menu bar opens a new window when every window was closed."
+        ]
+      },
+      {
+        "title": "Fixes",
+        "changes": [
+          "Services started while Hun was opened from Finder, Spotlight or at login got macOS's limit of 256 open files, so dev servers watching many folders crashed with EMFILE. They now get the full limit, and Hun explains the error when it does happen.",
+          "hun status no longer says a service that keeps crashing is running.",
+          "A Docker that stops responding no longer leaves Run, Stop and Restart stuck until Hun is restarted."
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.5.1",
     "date": "2026-11-02",
     "title": "A smoother unlock",
