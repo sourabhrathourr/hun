@@ -26,8 +26,13 @@ enum HunAppBehavior {
                 DispatchQueue.main.async { hideDockIfNoWindows(ignoring: closing) }
             }
         })
-        observers.append(center.addObserver(forName: NSWindow.didBecomeMainNotification, object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated { showDock() }
+        observers.append(center.addObserver(forName: NSWindow.didBecomeMainNotification, object: nil, queue: .main) { note in
+            let window = note.object as? NSWindow
+            MainActor.assumeIsolated {
+                // Not for the window a quiet login launch is hiding.
+                if let window, HunQuietLaunch.isHidden(window) { return }
+                showDock()
+            }
         })
     }
 
@@ -80,13 +85,21 @@ enum HunAppBehavior {
     }
 }
 
-/// Keeps a way to open a dashboard window for when every window is closed.
-struct HunWindowOpenerCapture: View {
-    @Environment(\.openWindow) private var openWindow
+/// Sits in each dashboard window: keeps a way to open a window for when every
+/// window is closed, and lets a quiet login launch hide the first one before
+/// it's drawn.
+struct HunWindowOpenerCapture: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        HunAppBehavior.openWindow = context.environment.openWindow
+        return HunWindowHookView()
+    }
 
-    var body: some View {
-        Color.clear
-            .frame(width: 0, height: 0)
-            .onAppear { HunAppBehavior.openWindow = openWindow }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+private final class HunWindowHookView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let window { HunQuietLaunch.windowAppeared(window) }
     }
 }
