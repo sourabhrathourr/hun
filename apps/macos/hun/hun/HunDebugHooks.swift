@@ -142,6 +142,14 @@ enum HunDebugHooks {
                 case "notice": whatsNew.presentation = release.isEmpty ? nil : .notice(release)
                 case "since": whatsNew.present(whatsNew.releases(after: version))
                 case "reset": UserDefaults.standard.removeObject(forKey: HunWhatsNew.lastSeenKey)
+                case "jump":
+                    // "jump:<from>><to>", as if updating between those versions
+                    // ("none" for a Mac that recorded nothing).
+                    let ends = version.split(separator: ">").map(String.init)
+                    if ends.count == 2 {
+                        let from = ends[0] == "none" ? nil : ends[0]
+                        whatsNew.present(HunWhatsNew.pending(whatsNew.releases, current: ends[1], lastSeen: from))
+                    }
                 case "preview":
                     // A draft entry for a release not in the changelog yet.
                     if let data = FileManager.default.contents(atPath: version),

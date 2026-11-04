@@ -12,6 +12,48 @@ private enum ThemeTestError: Error {
 
 @MainActor
 struct hunTests {
+    private func release(_ version: String, new: Bool) -> HunRelease {
+        HunRelease(
+            version: version,
+            date: "2026-11-01",
+            title: version,
+            summary: "",
+            groups: new ? [.init(title: "New", changes: ["a"]), .init(title: "Fixes", changes: ["b"])] : [.init(title: "Improved", changes: ["c"])]
+        )
+    }
+
+    private var changelog: [HunRelease] {
+        [release("0.6.1", new: false), release("0.6.0", new: true), release("0.5.1", new: false), release("0.5.0", new: true), release("0.4.4", new: true)]
+    }
+
+    @Test func whatsNewAfterJumpingFromBeforeItExistedLeadsWithTheBigRelease() {
+        // 0.5.x recorded nothing; jumping straight to 0.6.1 must still show 0.6.0.
+        let pending = HunWhatsNew.pending(changelog, current: "0.6.1", lastSeen: nil)
+        let showsCard = pending.contains { $0.hasNew }
+        #expect(pending.map(\.version) == ["0.6.1", "0.6.0"])
+        #expect(showsCard)
+        #expect(HunWhatsNew.lead(of: pending)?.version == "0.6.0")
+    }
+
+    @Test func whatsNewAfterAFixReleaseIsJustThatRelease() {
+        let pending = HunWhatsNew.pending(changelog, current: "0.6.1", lastSeen: "0.6.0")
+        let showsCard = pending.contains { $0.hasNew }
+        #expect(pending.map(\.version) == ["0.6.1"])
+        #expect(!showsCard) // the small notice, not the card
+    }
+
+    @Test func whatsNewAfterSkippingSeveralVersionsCoversThemAll() {
+        let pending = HunWhatsNew.pending(changelog, current: "0.6.1", lastSeen: "0.4.4")
+        #expect(pending.map(\.version) == ["0.6.1", "0.6.0", "0.5.1", "0.5.0"])
+        #expect(HunWhatsNew.lead(of: pending)?.version == "0.6.0")
+    }
+
+    @Test func whatsNewShowsNothingWithoutAnUpdateOrFromTheFuture() {
+        #expect(HunWhatsNew.pending(changelog, current: "0.6.1", lastSeen: "0.6.1").isEmpty)
+        // A changelog entry newer than the running app isn't shown.
+        #expect(HunWhatsNew.pending(changelog, current: "0.6.0", lastSeen: "0.5.1").map(\.version) == ["0.6.0"])
+    }
+
     @Test func welcomeShowsAgainAfterAReinstallButNotAfterAnUpdate() {
         // Same copy: nothing changed.
         #expect(HunOnboarding.installChange(from: "4412:0.4.4", to: "4412:0.4.4") == .same)

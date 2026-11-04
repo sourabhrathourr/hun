@@ -287,7 +287,7 @@ private struct HunGeneralSettings: View {
 
     private var loginDetail: String {
         if let loginError { return "Couldn't change it: \(loginError)" }
-        return "Start Hun when you log in, so your projects and the menu bar are ready."
+        return "Start Hun quietly in the menu bar when you log in, with your projects a click away."
     }
 }
 

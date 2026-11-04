@@ -1,5 +1,20 @@
 [
   {
+    "version": "0.6.1",
+    "date": "2026-11-05",
+    "title": "Quiet at login",
+    "summary": "Opened at login, Hun now starts quietly in the menu bar.",
+    "groups": [
+      {
+        "title": "Improved",
+        "changes": [
+          "With Open at login on, Hun starts in the menu bar when you log in, without opening its window. If you hide the Dock icon when windows are closed, there's no Dock icon either. Open Hun from the menu bar or the Dock whenever you need it.",
+          "If Hun needs you at login, for its license or to finish the welcome, it still opens its window."
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.6.0",
     "date": "2026-11-04",
     "title": "Music in the menu bar",

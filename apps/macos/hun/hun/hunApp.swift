@@ -10,6 +10,7 @@ import AppKit
 
 @main
 struct hunApp: App {
+    @NSApplicationDelegateAdaptor(HunAppDelegate.self) private var appDelegate
     @State private var store: HunStore
     @State private var updater = HunUpdater()
     @State private var license: HunLicenseManager
@@ -31,6 +32,9 @@ struct hunApp: App {
             // already set up: a fresh install's first launch isn't an update.
             _ = HunWhatsNew.shared
             license.startMonitoring()
+            // Opened quietly at login: show the window only if the license
+            // needs the person.
+            HunQuietLaunch.watchLicense(license)
         }
         #if DEBUG
         HunDebugHooks.install(store: store, license: license)
@@ -47,7 +51,7 @@ struct hunApp: App {
                 .environment(updater)
                 .environment(license)
                 .frame(minWidth: 560, minHeight: 420)
-                .background(HunWindowOpenerCapture())
+                .background(HunWindowOpenerCapture().frame(width: 0, height: 0))
         }
         .windowStyle(.hiddenTitleBar)
         .commands {
