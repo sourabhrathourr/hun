@@ -18,6 +18,18 @@ struct HunAvailableUpdate: Equatable, Sendable {
 @MainActor
 @Observable
 final class HunUpdater: NSObject, SPUStandardUserDriverDelegate {
+    /// Development builds never update themselves. Sparkle reads the same
+    /// feed, so it would install the release over the dev build in place,
+    /// and that copy then runs as the real Hun on ~/.hun beside the one in
+    /// /Applications, the two restarting each other's daemon.
+    nonisolated static let installsUpdates: Bool = {
+        #if DEBUG
+        return false
+        #else
+        return true
+        #endif
+    }()
+
     private(set) var availableUpdate: HunAvailableUpdate?
 
     @ObservationIgnored
@@ -27,7 +39,7 @@ final class HunUpdater: NSObject, SPUStandardUserDriverDelegate {
         super.init()
 
         updaterController = SPUStandardUpdaterController(
-            startingUpdater: true,
+            startingUpdater: Self.installsUpdates,
             updaterDelegate: nil,
             userDriverDelegate: self
         )
@@ -45,6 +57,10 @@ final class HunUpdater: NSObject, SPUStandardUserDriverDelegate {
     }
 
     func checkForUpdates() {
+        guard Self.installsUpdates else {
+            NSSound.beep()
+            return
+        }
         updaterController.checkForUpdates(nil)
     }
 
