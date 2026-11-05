@@ -1,6 +1,6 @@
 ---
 name: hun
-description: Use whenever you need to start, stop, restart or check dev servers, workers or databases in a project that has a .hun.yml (always start them through Hun), or when setting up a project's .hun.yml or its profiles.
+description: Use whenever you need to start, stop, restart or check anything a project runs in development (dev servers, workers, databases, or a watcher that builds and relaunches an app) in a project that has a .hun.yml (always start them through Hun), when creating or starting work in a git worktree of such a project, or when setting up a project's .hun.yml or its profiles.
 ---
 
 # Hun
@@ -9,7 +9,7 @@ Hun runs a project's dev services from a `.hun.yml` file and shows them, with th
 
 ## Always start services through Hun
 
-In a project with a `.hun.yml`, start every dev server, worker or database with `hun run`. Never start one yourself with `npm run dev`, `docker compose up`, `uvicorn` or similar. Hun then captures the logs and ports where the user can see them, and keeps ports from clashing with other projects. This applies whenever you need something running: to test a change, to reproduce a bug, or because the user asked you to start it.
+In a project with a `.hun.yml`, start everything it runs in development with `hun run`: dev servers, workers, databases, and watchers that build and relaunch an app, such as a macOS or mobile dev build. Read the services in `.hun.yml` before running anything yourself. Never start one yourself with `npm run dev`, `docker compose up`, `uvicorn`, `xcodebuild` and `open`, or similar. Hun then captures the logs and ports where the user can see them, and keeps ports from clashing with other projects. This applies whenever you need something running: to test a change, to reproduce a bug, or because the user asked you to start it.
 
 If a service you need isn't in `.hun.yml`, add it there and start it with Hun. If the project has no `.hun.yml` yet, set one up first (see below), then start it with Hun.
 
@@ -62,7 +62,6 @@ Add these only when they clearly help:
 - `ready: "text"`: the exact line the service prints once it's up, so services that depend on it wait. Leave it out if you don't know the line.
 - `port_env: APP_PORT`: if the app reads its port from a variable other than `PORT`. Hun sets both.
 - `env: { KEY: value }` and `restart: on_failure`. When a service calls another, write `${service.port}` instead of the number (`API_URL: http://localhost:${api.port}`): Hun fills in the port that service really runs on.
-- Git worktrees without their own `.hun.yml` use the main checkout's, so in a worktree run `hun run` as usual; don't copy `.hun.yml` into it.
 
 Don't put secrets in `.hun.yml`, add install or migration steps as services, or add services the project doesn't use.
 
@@ -80,7 +79,18 @@ profiles:
 - List only the services someone works on. Their `depends_on` services start with them, so you don't list databases and the like.
 - Name profiles after what the user is doing: `web`, `api`, `app`, `mobile`.
 - `all` means every service; it can't be used as a profile name.
-- Run one with `hun run <project> -p <profile>`. Hun remembers the last profile, and switching profiles only starts and stops the difference.
+- Run one with `hun run <project> -p <profile>`. Hun remembers the last profile for each project and each worktree separately, and switching profiles only starts and stops the difference.
 - If the user describes what they work on ("I usually just need the frontend and the API"), turn that straight into a profile.
 
 After adding profiles, run `hun validate .` again.
+
+## Worktrees
+
+When you create a git worktree for a task, or start working in one, give it its own `.hun.yml` and run only what the task needs:
+
+1. If the worktree has no `.hun.yml`, copy the main checkout's into the worktree's root, whether or not git ignores the file. Without its own copy, the worktree uses the main checkout's file, which works but runs every service.
+2. Choose a profile for the task. Read the profiles in `.hun.yml` and reuse one that covers the services the task touches. If none fits, add a profile to the worktree's copy, named after the task, listing only those services. Then run `hun validate .`.
+3. Run `hun add . -y` in the worktree. It prints the worktree's project name.
+4. Start it with `hun run <name> -p <profile>`, always with `-p`. A new worktree has no profile yet, so without `-p` it runs everything. Hun then remembers the profile for this worktree only.
+
+Change only the worktree's `.hun.yml`, never the main checkout's. The worktree's copy goes when the worktree is deleted. If `.hun.yml` is committed to the repository, git puts it in the worktree already: reuse a profile when one fits, and leave a profile you add out of your commits.

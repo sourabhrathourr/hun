@@ -337,6 +337,10 @@ enum HunLayout {
     /// unless someone turns it off for the classic edge-to-edge layout.
     static let roundedPanelsKey = "hun.design.refreshed"
     static let roundedPanelsDefault = true
+    /// Worktrees in a Worktrees section of their own, one folder per
+    /// project, rather than under each project.
+    static let worktreesSectionKey = "hun.sidebar.worktreesSection"
+    static let worktreesSectionDefault = true
     /// The one corner radius used across the main window: the card, service
     /// cards, rows, fields, buttons and dialogs. Small controls come out as
     /// pills, which keeps a single shape language.

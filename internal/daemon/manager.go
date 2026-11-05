@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/sourabhrathourr/hun/internal/config"
+	"github.com/sourabhrathourr/hun/internal/discovery"
 	"github.com/sourabhrathourr/hun/internal/state"
 )
 
@@ -118,7 +119,8 @@ func (m *Manager) RegisterProjectPath(path string) (*config.Project, string, str
 	if m.st.Projects == nil {
 		m.st.Projects = make(map[string]state.ProjectState)
 	}
-	key := m.st.RegisterPath(proj.Name, clean)
+	// Discovery's name, so a later scan doesn't rename what this returns.
+	key := m.st.RegisterPath(discovery.ProjectName(clean, proj), clean)
 	m.lastDiscoveryScan = time.Time{}
 	if err := m.st.Save(); err != nil {
 		return nil, "", "", err

@@ -1,5 +1,34 @@
 [
   {
+    "version": "0.6.4",
+    "date": "2026-11-05",
+    "title": "Worktrees section",
+    "summary": "Worktrees get a section of their own, one folder per project, and agents set up each new worktree to run only what its task needs.",
+    "groups": [
+      {
+        "title": "New",
+        "changes": [
+          "Worktrees have their own section in the sidebar: one folder per project, with its icon and how many worktrees it has. Open a folder to see them, running ones first, then the newest. To list them under their project instead, turn off Group worktrees in the sidebar in Settings › General.",
+          "Agents using the Hun skill copy .hun.yml into a new worktree and start it with a profile for the task: one that already fits, or a new one in the worktree's copy. A worktree runs only what its task needs, not every service."
+        ]
+      },
+      {
+        "title": "Improved",
+        "changes": [
+          "The Hun skill is installed once and linked for Claude Code, Codex and Cursor, so Codex no longer lists it twice.",
+          "The Hun skill also covers app build watchers, such as a macOS dev build, so agents start them through Hun too.",
+          "Sidebar rows fade out at the bottom edge instead of being cut off by the update card."
+        ]
+      },
+      {
+        "title": "Fixed",
+        "changes": [
+          "hun add in a worktree now prints the name Hun keeps for it, so hun run with that name works."
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.6.3",
     "date": "2026-11-04",
     "title": "Worktree clean-up",

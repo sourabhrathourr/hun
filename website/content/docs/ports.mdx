@@ -64,7 +64,9 @@ If `api` moves to 8001 in Multitask (say a worktree of the project already uses 
 
 ## Worktrees
 
-A git worktree of a project in Hun shows up under that project in the sidebar. If it has no `.hun.yml` of its own, it uses the main checkout's, so an agent's worktree runs like the project. A worktree's own `.hun.yml` wins. Running worktrees are listed; the rest fold into one line under the project.
+A git worktree of a project in Hun shows up in the sidebar's Worktrees section, in a folder with its project's icon. Open the folder to see its worktrees, running ones first, then the newest; a closed folder carries the running marker while one inside runs. To list worktrees under their project instead, turn off **Group worktrees in the sidebar** in Settings › General.
+
+If a worktree has no `.hun.yml` of its own, it uses the main checkout's, so an agent's worktree runs like the project. A worktree's own `.hun.yml` wins, and each worktree remembers its own profile. The Hun skill tells agents to copy `.hun.yml` into a new worktree and run it with a profile for the task: one that already fits, or a new one in the worktree's copy. Under the project, running worktrees are listed and the rest fold into one line.
 
 When the GitHub CLI (`gh`) is signed in, each worktree's branch icon takes its pull request's colour: green for open, violet for merged, yellow while CI runs, red when CI fails, grey for draft, closed or no PR. Right-click a worktree and choose **Delete Worktree…** to remove it with git. Hun says first whether its PR is merged and how many uncommitted changes would be lost. A merged worktree's local branch goes with it, unless it has commits the PR doesn't. **Delete N Merged Worktrees…** in a project's right-click menu clears every idle merged worktree at once and keeps any with uncommitted changes. You can also ask in the project's chat, for example "delete my merged worktrees": the agent picks them and Hun asks you to confirm before deleting.
 
