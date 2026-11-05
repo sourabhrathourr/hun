@@ -1357,6 +1357,11 @@ struct hunTests {
         #expect(try fileManager.attributesOfItem(atPath: home.appendingPathComponent(".agents/skills/hun").path)[.type] as? FileAttributeType == .typeDirectory)
     }
 
+    /// Tests run a Debug build: it must never install a release over itself.
+    @Test func developmentBuildsNeverInstallUpdates() {
+        #expect(HunUpdater.installsUpdates == false)
+    }
+
     @Test func skillInstallReplacesOldCopiesWithLinksAndKeepsOtherSkills() throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: home) }
