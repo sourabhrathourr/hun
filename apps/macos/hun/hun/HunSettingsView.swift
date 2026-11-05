@@ -25,7 +25,7 @@ enum HunSettingsSection: String, CaseIterable, Identifiable {
 
     var subtitle: String {
         switch self {
-        case .general: return "How Hun starts, and where it lives on your Mac."
+        case .general: return "How Hun starts, where it lives on your Mac, and how it lists your projects."
         case .appearance: return "How Hun looks: its theme and layout."
         case .daemon: return "The background process that runs your services."
         case .license: return "Your plan and this Mac's activation."
@@ -229,6 +229,7 @@ struct HunSettingsPage: View {
 
 private struct HunGeneralSettings: View {
     @AppStorage(HunAppBehavior.hideDockKey) private var hidesDock = false
+    @AppStorage(HunLayout.worktreesSectionKey) private var worktreesSection = HunLayout.worktreesSectionDefault
     @State private var loginStatus = HunAppBehavior.loginStatus
     @State private var loginError: String?
 
@@ -277,6 +278,16 @@ private struct HunGeneralSettings: View {
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 .tint(AppTheme.textSecondary)
+            }
+            SettingsRow(
+                title: "Group worktrees in the sidebar",
+                detail: "Show each project's worktrees in their own Worktrees section, one folder per project. Turn off to list them under the project instead."
+            ) {
+                Toggle("Group worktrees in the sidebar", isOn: $worktreesSection)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .tint(AppTheme.textSecondary)
             }
         }
         // The login item can be changed in System Settings too.

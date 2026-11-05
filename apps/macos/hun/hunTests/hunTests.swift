@@ -1314,7 +1314,7 @@ struct hunTests {
         #expect(environment["bad-key"] == nil)
     }
 
-    @Test func agentSkillInstallerCopiesToGlobalSkillDirectories() throws {
+    @Test func agentSkillInstallerKeepsOneCopyAndLinksTheRest() throws {
         let home = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent(UUID().uuidString)
         let source = home.appendingPathComponent("source")
@@ -1346,6 +1346,48 @@ struct hunTests {
         ].sorted())
         #expect(FileManager.default.fileExists(atPath: home.appendingPathComponent(".agents/skills/hun/agents/openai.yaml").path))
         #expect(FileManager.default.fileExists(atPath: home.appendingPathComponent(".claude/skills/hun/SKILL.md").path))
+
+        // One real copy; the other agents' folders link to it, so Codex,
+        // which reads both ~/.agents and ~/.codex, lists it once.
+        let fileManager = FileManager.default
+        for agent in [".claude", ".codex", ".cursor"] {
+            let path = home.appendingPathComponent("\(agent)/skills/hun").path
+            #expect(try fileManager.destinationOfSymbolicLink(atPath: path) == "../../.agents/skills/hun")
+        }
+        #expect(try fileManager.attributesOfItem(atPath: home.appendingPathComponent(".agents/skills/hun").path)[.type] as? FileAttributeType == .typeDirectory)
+    }
+
+    @Test func skillInstallReplacesOldCopiesWithLinksAndKeepsOtherSkills() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let fileManager = FileManager.default
+        let source = home.appendingPathComponent("source")
+        try fileManager.createDirectory(at: source, withIntermediateDirectories: true)
+        try "---\nname: hun\n---\nNew skill for .hun.yml.\n".write(to: source.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+
+        // An earlier Hun copied the skill into every folder.
+        for agent in [".agents", ".claude", ".codex", ".cursor"] {
+            let old = home.appendingPathComponent("\(agent)/skills/hun")
+            try fileManager.createDirectory(at: old, withIntermediateDirectories: true)
+            try "---\nname: hun\n---\nOld skill for .hun.yml.\n".write(to: old.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        }
+        _ = try HunAgentSkillInstaller.installSkill(from: source, homeDirectory: home)
+        _ = try HunAgentSkillInstaller.installSkill(from: source, homeDirectory: home)
+        for agent in [".claude", ".codex", ".cursor"] {
+            let path = home.appendingPathComponent("\(agent)/skills/hun").path
+            #expect(try fileManager.destinationOfSymbolicLink(atPath: path) == "../../.agents/skills/hun")
+            #expect(try String(contentsOfFile: path + "/SKILL.md", encoding: .utf8).contains("New skill"))
+        }
+
+        // Someone else's skill named hun is never replaced.
+        let other = home.appendingPathComponent(".agents/skills/hun")
+        try fileManager.removeItem(at: other)
+        try fileManager.createDirectory(at: other, withIntermediateDirectories: true)
+        try "---\nname: hun\n---\nA different tool.\n".write(to: other.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        #expect(throws: HunAgentSkillInstallError.self) {
+            try HunAgentSkillInstaller.installSkill(from: source, homeDirectory: home)
+        }
+        #expect(try String(contentsOfFile: other.path + "/SKILL.md", encoding: .utf8).contains("A different tool"))
     }
 
     @Test func snapshotKeepsAllConfiguredServices() async throws {

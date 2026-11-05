@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/sourabhrathourr/hun/internal/config"
+	"github.com/sourabhrathourr/hun/internal/discovery"
 	"github.com/sourabhrathourr/hun/internal/state"
 	"github.com/spf13/cobra"
 )
@@ -57,7 +58,7 @@ var addCmd = &cobra.Command{
 			}
 		}
 
-		key, err := registerProjectPath(proj.Name, dir)
+		key, err := registerProjectPath(discovery.ProjectName(dir, proj), dir)
 		if err != nil {
 			return err
 		}

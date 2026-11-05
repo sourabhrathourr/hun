@@ -98,7 +98,7 @@ func Reconcile(st *state.State, result Result, busy func(key string) bool) Chang
 		canonical := canonicalPath(path)
 		byPath[canonical] = append(byPath[canonical], key)
 		if proj, err := config.LoadProject(path); err == nil {
-			names[key] = projectName(path, proj)
+			names[key] = ProjectName(path, proj)
 		}
 	}
 
@@ -205,7 +205,7 @@ func Scan(global *config.Global) (Result, error) {
 				result.Warnings = append(result.Warnings, fmt.Sprintf("skipping %s: %v", path, loadErr))
 				return nil
 			}
-			result.Projects = append(result.Projects, FoundProject{Name: projectName(projectDir, proj), Path: projectDir})
+			result.Projects = append(result.Projects, FoundProject{Name: ProjectName(projectDir, proj), Path: projectDir})
 			return nil
 		}); err != nil {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("scanning %s: %v", root, err))
@@ -244,17 +244,17 @@ func WithWorktrees(found []FoundProject, registry map[string]string) []FoundProj
 			if err != nil {
 				continue
 			}
-			found = append(found, FoundProject{Name: projectName(worktree, proj), Path: worktree})
+			found = append(found, FoundProject{Name: ProjectName(worktree, proj), Path: worktree})
 		}
 	}
 	sort.Slice(found, func(i, j int) bool { return found[i].Path < found[j].Path })
 	return found
 }
 
-// projectName is the name a folder registers under: its .hun.yml's name,
+// ProjectName is the name a folder registers under: its .hun.yml's name,
 // or, for a worktree running on its main checkout's file, that name and the
 // worktree's folder (otto-ott-1650), so it never takes the project's own.
-func projectName(dir string, proj *config.Project) string {
+func ProjectName(dir string, proj *config.Project) string {
 	if filepath.Dir(config.ProjectFile(dir)) != filepath.Clean(dir) {
 		return proj.Name + "-" + filepath.Base(dir)
 	}

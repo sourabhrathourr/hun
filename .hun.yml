@@ -14,3 +14,4 @@ detect:
     profile: hybrid
 profiles:
     website: [hun]
+    macOS: [macos]

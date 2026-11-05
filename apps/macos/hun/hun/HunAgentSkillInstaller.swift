@@ -10,14 +10,18 @@ nonisolated enum HunAgentSkillInstaller {
         return try installSkill(from: source, homeDirectory: FileManager.default.homeDirectoryForCurrentUser)
     }
 
+    /// Installs one copy in ~/.agents/skills, which Codex and other agents
+    /// read, and links the other agents' folders to it. Codex reads both
+    /// ~/.agents/skills and ~/.codex/skills and lists a real second copy
+    /// twice, but a link once.
     static func installSkill(from source: URL, homeDirectory: URL) throws -> [URL] {
         let destinations = globalSkillDirectories(homeDirectory: homeDirectory)
-        var installed: [URL] = []
-        for destination in destinations {
-            try installSkill(from: source, to: destination)
-            installed.append(destination.appendingPathComponent("SKILL.md"))
+        let shared = destinations[0]
+        try installSkill(from: source, to: shared)
+        for destination in destinations.dropFirst() {
+            try link(destination, to: shared)
         }
-        return installed
+        return destinations.map { $0.appendingPathComponent("SKILL.md") }
     }
 
     static func existingGlobalSkillURLs(homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) -> [URL] {
@@ -47,15 +51,34 @@ nonisolated enum HunAgentSkillInstaller {
         guard fileManager.fileExists(atPath: sourceSkill.path) else {
             throw HunAgentSkillInstallError.missingSkillFile(sourceSkill.path)
         }
-
         try fileManager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if fileManager.fileExists(atPath: destination.path) {
-            guard isHunSkill(at: destination.appendingPathComponent("SKILL.md")) else {
-                throw HunAgentSkillInstallError.conflictingSkill(destination.path)
-            }
-            try fileManager.removeItem(at: destination)
-        }
+        try removeHunSkill(at: destination)
         try fileManager.copyItem(at: source, to: destination)
+    }
+
+    /// Points destination at the shared copy with a relative link
+    /// (../../.agents/skills/hun), the way other skill installers do.
+    private static func link(_ destination: URL, to shared: URL) throws {
+        let fileManager = FileManager.default
+        try fileManager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try removeHunSkill(at: destination)
+        let target = "../../" + shared.pathComponents.suffix(3).joined(separator: "/")
+        try fileManager.createSymbolicLink(atPath: destination.path, withDestinationPath: target)
+    }
+
+    /// Clears what's at url so Hun's skill can go there: a link of any kind,
+    /// or an earlier copy of Hun's skill. Anything else is someone else's
+    /// skill and is left alone.
+    private static func removeHunSkill(at url: URL) throws {
+        let fileManager = FileManager.default
+        // attributesOfItem doesn't follow links, so a broken one is seen too.
+        guard let attributes = try? fileManager.attributesOfItem(atPath: url.path) else { return }
+        if attributes[.type] as? FileAttributeType != .typeSymbolicLink {
+            guard isHunSkill(at: url.appendingPathComponent("SKILL.md")) else {
+                throw HunAgentSkillInstallError.conflictingSkill(url.path)
+            }
+        }
+        try fileManager.removeItem(at: url)
     }
 
     private static func isHunSkill(at url: URL) -> Bool {

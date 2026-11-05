@@ -612,6 +612,8 @@ private struct SidebarView: View {
     let worktreeActions: SidebarWorktreeActions
 
     private static let elsewhereSectionID = "__running_elsewhere__"
+    private static let worktreesSectionID = "__worktrees__"
+    @AppStorage(HunLayout.worktreesSectionKey) private var worktreesSection = HunLayout.worktreesSectionDefault
     /// Projects whose idle worktrees are shown (they're folded by default).
     @State private var openWorktrees: Set<String> = []
     /// Worktrees waiting on the delete confirmation.
@@ -641,6 +643,9 @@ private struct SidebarView: View {
                             projects: filtered(group.projects)
                         )
                     }
+                    if worktreesSection {
+                        worktreesSectionView
+                    }
                     if !unmanaged.isEmpty {
                         runningElsewhereSection
                     }
@@ -650,6 +655,16 @@ private struct SidebarView: View {
                 .padding(.bottom, 16)
             }
             .hunScrollStyle()
+            // Rows fade out at the bottom edge instead of being cut in half
+            // against the update card or the footer. The list's bottom
+            // padding lets the last row clear the fade once scrolled down.
+            .mask {
+                VStack(spacing: 0) {
+                    Rectangle()
+                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 24)
+                }
+            }
 
             SidebarUpdateSlot()
             SidebarFooter(onSettings: onSettings)
@@ -683,11 +698,78 @@ private struct SidebarView: View {
             (project.branch?.localizedCaseInsensitiveContains(query) ?? false)
     }
 
-    /// While searching: projects that match, or have a worktree that does.
+    /// While searching: projects that match, or (with worktrees under their
+    /// project) have a worktree that does.
     private func filtered(_ projects: [HunProject]) -> [HunProject] {
         guard !query.isEmpty else { return projects }
         return projects.filter { project in
-            matches(project) || (worktreesByMain[project.path] ?? []).contains(where: matches)
+            matches(project) || (!worktreesSection && (worktreesByMain[project.path] ?? []).contains(where: matches))
+        }
+    }
+
+    /// The Worktrees section's folders: projects with a running worktree
+    /// first, then the one with the newest worktree. While searching, those
+    /// whose name or a worktree matches.
+    private var worktreeFolders: [HunProject] {
+        let folders = allProjects.filter { project in
+            let worktrees = worktreesByMain[project.path] ?? []
+            guard !worktrees.isEmpty else { return false }
+            return query.isEmpty || matches(project) || worktrees.contains(where: matches)
+        }
+        return folders.sorted { a, b in
+            let worktreesA = worktreesByMain[a.path] ?? [], worktreesB = worktreesByMain[b.path] ?? []
+            let runningA = worktreesA.contains { $0.status != .stopped }
+            let runningB = worktreesB.contains { $0.status != .stopped }
+            if runningA != runningB { return runningA }
+            // Each list is newest first, so its first is its newest.
+            return HunProject.newestWorktreeFirst(worktreesA[0], worktreesB[0])
+        }
+    }
+
+    /// Worktrees in a section of their own: one folder per project, with the
+    /// project's icon, holding its worktrees.
+    @ViewBuilder
+    private var worktreesSectionView: some View {
+        let folders = worktreeFolders
+        if !folders.isEmpty {
+            let id = Self.worktreesSectionID
+            let collapsed = collapsedSections.contains(id)
+            VStack(alignment: .leading, spacing: 1) {
+                SidebarSectionHeader(
+                    title: "Worktrees",
+                    isCollapsed: collapsed,
+                    onToggle: { withAnimation(.easeOut(duration: 0.15)) { toggle(id) } }
+                )
+                if !collapsed {
+                    VStack(spacing: 2) {
+                        ForEach(folders) { project in
+                            let merged = mergedIdleWorktrees(of: project)
+                            let worktrees = worktreesByMain[project.path] ?? []
+                            SidebarWorktreeFolderRow(
+                                project: project,
+                                count: worktrees.count,
+                                runningStatus: worktrees.first { $0.status != .stopped }?.status,
+                                open: !query.isEmpty || openWorktrees.contains(project.id),
+                                onToggle: {
+                                    withAnimation(.easeOut(duration: 0.15)) {
+                                        if openWorktrees.contains(project.id) {
+                                            openWorktrees.remove(project.id)
+                                        } else {
+                                            openWorktrees.insert(project.id)
+                                        }
+                                    }
+                                },
+                                mergedWorktrees: merged.count,
+                                onDeleteMerged: {
+                                    deletion = WorktreeDeletionPlan(worktrees: merged, uncommitted: 0)
+                                }
+                            )
+                            worktreeRows(for: project, inFolder: true)
+                        }
+                    }
+                    .padding(.top, 2)
+                }
+            }
         }
     }
 
@@ -696,23 +778,25 @@ private struct SidebarView: View {
         (worktreesByMain[project.path] ?? []).filter { $0.status == .stopped && $0.pullRequest?.state == .merged }
     }
 
-    /// A project's worktrees, under it. Those running (and the one open)
-    /// always show; the rest fold into one quiet row, so a project with
-    /// twenty worktrees takes one extra line, not twenty.
+    /// A project's worktrees, under it or in its folder. Under the project,
+    /// those running (and the one open) always show and the rest fold into
+    /// one quiet row, so twenty worktrees take one extra line, not twenty.
+    /// A closed folder shows none; its row says when one is running.
     @ViewBuilder
-    private func worktreeRows(for project: HunProject) -> some View {
+    private func worktreeRows(for project: HunProject, inFolder: Bool = false) -> some View {
         let all = worktreesByMain[project.path] ?? []
         if !all.isEmpty {
             let searching = !query.isEmpty
             let open = searching || openWorktrees.contains(project.id)
-            let candidates = searching ? all.filter(matches) : all
+            // A folder found by its project's name shows all its worktrees.
+            let candidates = searching && !(inFolder && matches(project)) ? all.filter(matches) : all
             // Running ones stay on top, the rest follow newest first.
             // Selecting one never moves it: unfolded, it keeps its place;
             // folded, it shows alone below the running ones.
             let running = candidates.filter { $0.status != .stopped }
             let idle = candidates.filter { $0.status == .stopped }
             let pinned = running + idle.filter { $0.id == activeID }
-            let shown = open ? running + idle : pinned
+            let shown = open ? running + idle : (inFolder ? [] : pinned)
             ForEach(shown) { worktree in
                 SidebarWorktreeRow(
                     worktree: worktree,
@@ -723,7 +807,7 @@ private struct SidebarView: View {
                 )
             }
             let folded = all.count - pinned.count
-            if !searching && (folded > 0 || open) {
+            if !inFolder && !searching && (folded > 0 || open) {
                 let noun = folded == 1 ? "worktree" : "worktrees"
                 SidebarWorktreesToggle(
                     label: open ? "Hide idle worktrees" : (pinned.isEmpty ? "\(folded) \(noun)" : "\(folded) more \(noun)"),
@@ -761,7 +845,9 @@ private struct SidebarView: View {
                                 deletion = WorktreeDeletionPlan(worktrees: mergedIdleWorktrees(of: project), uncommitted: 0)
                             }
                         )
-                        worktreeRows(for: project)
+                        if !worktreesSection {
+                            worktreeRows(for: project)
+                        }
                     }
                 }
                 .padding(.top, 2)
@@ -1024,6 +1110,7 @@ private struct SidebarUpdateSlot: View {
                 onUpdate: updater.checkForUpdates
             )
             .padding(.horizontal, SidebarMetrics.inset)
+            .padding(.top, 6)
             .padding(.bottom, 4)
             .transition(.opacity.combined(with: .move(edge: .bottom)))
         }
@@ -1453,6 +1540,94 @@ private struct SidebarWorktreeRow: View {
             Button("Remove", role: .destructive, action: onRemove)
         } message: {
             Text("Hun stops its services and stops listing it. The worktree itself is not touched.")
+        }
+    }
+}
+
+/// A project in the Worktrees section, standing for the folder of its
+/// worktrees: its icon, name and how many it has. Clicking opens or folds
+/// it. Folded with a worktree running, it carries the running marker.
+private struct SidebarWorktreeFolderRow: View {
+    let project: HunProject
+    let count: Int
+    /// The status of a running worktree inside, if any.
+    let runningStatus: ProjectStatus?
+    let open: Bool
+    let onToggle: () -> Void
+    var mergedWorktrees = 0
+    var onDeleteMerged: () -> Void = {}
+    @State private var hovering = false
+    @AppStorage(HunRunningMarker.key) private var runningMarkerName = HunRunningMarker.defaultValue.rawValue
+    private var runningMarker: HunRunningMarker {
+        HunRunningMarker(rawValue: runningMarkerName) ?? .defaultValue
+    }
+
+    /// Shown only while folded: open, the running rows speak for themselves.
+    private var liveColor: Color? {
+        guard !open, let status = runningStatus else { return nil }
+        switch status {
+        case .starting: return AppTheme.warning
+        case .crashed: return AppTheme.danger
+        default: return AppTheme.liveMarker
+        }
+    }
+
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(spacing: 10) {
+                ProjectIconView(
+                    name: project.name,
+                    iconPath: project.iconPath,
+                    size: 17,
+                    cornerRadius: 4
+                )
+                Text(project.name)
+                    .font(.system(size: 13))
+                    .foregroundStyle(hovering || open ? AppTheme.textPrimary : AppTheme.textSecondary)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                if let liveColor, runningMarker == .activity {
+                    HunActivityBars(color: liveColor)
+                }
+                Text(String(count))
+                    .font(.system(size: 11).monospacedDigit())
+                    .foregroundStyle(AppTheme.textTertiary)
+                // Trailing, like a section's, so the icon keeps its column.
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(AppTheme.textTertiary)
+                    .rotationEffect(.degrees(open ? 90 : 0))
+            }
+            .padding(.leading, SidebarMetrics.rowPadding + SidebarMetrics.nestedIndent)
+            .padding(.trailing, SidebarMetrics.rowPadding)
+            .frame(height: SidebarMetrics.rowHeight)
+            .background(HunRoundedShape().fill(hovering ? AppTheme.rowHover : .clear))
+            .overlay(alignment: .leading) {
+                if let liveColor, runningMarker == .bar {
+                    HunRunningBar(color: liveColor)
+                        .padding(.leading, SidebarMetrics.nestedIndent - 3)
+                        .transition(.opacity)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .accessibilityLabel("\(project.name) worktrees, \(count)\(runningStatus == nil ? "" : ", one running")")
+        .accessibilityHint(open ? "Folds the idle worktrees" : "Shows all worktrees")
+        .contextMenu {
+            Button {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: project.path)])
+            } label: {
+                Label("Reveal Project in Finder", systemImage: "folder")
+            }
+            if mergedWorktrees > 0 {
+                Section {
+                    Button(role: .destructive, action: onDeleteMerged) {
+                        Label("Delete \(String(mergedWorktrees)) Merged Worktrees…", systemImage: "trash")
+                    }
+                }
+            }
         }
     }
 }
