@@ -98,6 +98,12 @@ struct hunTests {
         #expect(HunDaemonSupervisor.projectsToRestart(focus).map(\.mode) == [.exclusive])
     }
 
+    @Test func aReplyNamingAWorktreeHunCantDeleteSaysSo() {
+        #expect(HunStore.cleanupNote(cantDelete: []) == nil)
+        #expect(HunStore.cleanupNote(cantDelete: ["wip"]) == "Hun can't delete wip: it isn't an idle worktree of this project.")
+        #expect(HunStore.cleanupNote(cantDelete: ["a", "b"])?.contains("they aren't idle worktrees") == true)
+    }
+
     @Test func cleanupCardsSavedByOlderVersionsStillLoad() throws {
         let old = try JSONDecoder().decode(HunWorktreeCleanup.self, from: Data("""
         {"items": [{"name": "ott-1", "path": "/w/otto/.claude/worktrees/ott-1"}], "state": "deleted"}
@@ -285,7 +291,8 @@ struct hunTests {
     }
 
     @Test func anEndedBetaLicenseAsksForAPaidOneAndRemembersIt() async {
-        let defaults = UserDefaults(suiteName: "hun-tests-\(UUID().uuidString)")!
+        let (defaults, removeDefaults) = scratchDefaults()
+        defer { removeDefaults() }
         let service = MockLicenseService()
         service.isValid = false
         let store = InMemoryLicenseStore(license: HunStoredLicense(
@@ -331,6 +338,8 @@ struct hunTests {
     }
 
     @Test func anInvalidPaidLicenseExplainsItselfWithoutMentioningTheBeta() async {
+        let (defaults, removeDefaults) = scratchDefaults()
+        defer { removeDefaults() }
         let service = MockLicenseService()
         service.isValid = false
         let manager = HunLicenseManager(
@@ -349,7 +358,7 @@ struct hunTests {
                 productName: "Hun",
                 lastValidatedAt: Date(timeIntervalSince1970: 1_000)
             )),
-            defaults: UserDefaults(suiteName: "hun-tests-\(UUID().uuidString)")!,
+            defaults: defaults,
             now: { Date(timeIntervalSince1970: 2_000) }
         )
 
@@ -360,6 +369,8 @@ struct hunTests {
     }
 
     @Test func recheckingOnlyRunsForAnActiveLicense() async {
+        let (defaults, removeDefaults) = scratchDefaults()
+        defer { removeDefaults() }
         let service = MockLicenseService()
         let manager = HunLicenseManager(
             configuration: HunLicenseConfiguration(
@@ -370,7 +381,7 @@ struct hunTests {
             ),
             service: service,
             store: InMemoryLicenseStore(),
-            defaults: UserDefaults(suiteName: "hun-tests-\(UUID().uuidString)")!
+            defaults: defaults
         )
         await manager.restore()
         await manager.recheck()
@@ -2284,6 +2295,19 @@ private extension HunGitStatus {
             ]
         )
     }
+}
+
+/// A throwaway settings suite for one test, and how to remove it and its
+/// file from ~/Library/Preferences once the test is done.
+private func scratchDefaults() -> (UserDefaults, () -> Void) {
+    let name = "hun-tests-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: name)!
+    return (defaults, {
+        defaults.removePersistentDomain(forName: name)
+        let file = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Preferences/\(name).plist")
+        try? FileManager.default.removeItem(at: file)
+    })
 }
 
 private final class MockDaemonClient: HunDaemonClientProtocol {

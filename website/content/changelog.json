@@ -1,5 +1,27 @@
 [
   {
+    "version": "0.6.5",
+    "date": "2026-11-05",
+    "title": "Services stay up",
+    "summary": "Updating Hun no longer stops the services it was running, and a worktree you confirm deleting in the chat is deleted, uncommitted changes and all.",
+    "groups": [
+      {
+        "title": "Fixed",
+        "changes": [
+          "Updating Hun, or Restart daemon in Settings, stopped every service Hun was running. They now start again on the new daemon, each with its last profile.",
+          "Confirming a worktree clean-up in a project's chat could say Deleted while git kept a worktree with uncommitted changes. The card now shows each worktree's uncommitted changes before you confirm, deletes it with them, and says what happened to each.",
+          "When the chat names a worktree Hun can't delete, the reply says so instead of promising a delete."
+        ]
+      },
+      {
+        "title": "Improved",
+        "changes": [
+          "The chat sees how many uncommitted changes each worktree has, and says what confirming would throw away."
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.6.4",
     "date": "2026-11-05",
     "title": "Worktrees section",

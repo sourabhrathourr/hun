@@ -512,6 +512,16 @@ final class HunStore {
         return done
     }
 
+    /// What to add to a reply for worktrees it named that Hun can't offer:
+    /// not listed, or not idle.
+    nonisolated static func cleanupNote(cantDelete names: [String]) -> String? {
+        guard !names.isEmpty else { return nil }
+        let list = ListFormatter.localizedString(byJoining: names)
+        return names.count == 1
+            ? "Hun can't delete \(list): it isn't an idle worktree of this project."
+            : "Hun can't delete \(list): they aren't idle worktrees of this project."
+    }
+
     private func updateCleanup(
         _ messageID: UUID, path: String, save: Bool = true, _ update: (inout HunWorktreeCleanup) -> Void
     ) {
@@ -717,6 +727,16 @@ final class HunStore {
         let items = worktrees(for: project)
             .filter { wanted.contains($0.worktreeName) && $0.status == .stopped }
             .map { HunWorktreeCleanup.Item(name: $0.worktreeName, path: $0.path) }
+        // A name Hun can't offer gets said, rather than a reply promising a
+        // delete that never comes.
+        let offered = Set(items.map(\.name))
+        var missing: [String] = []
+        for name in names where !offered.contains(name) && !missing.contains(name) {
+            missing.append(name)
+        }
+        if let note = Self.cleanupNote(cantDelete: missing) {
+            updateLastAgentMessage(path: path) { $0.text += "\n\n" + note }
+        }
         guard !items.isEmpty else { return }
         var messageID: UUID?
         updateLastAgentMessage(path: path) { message in
