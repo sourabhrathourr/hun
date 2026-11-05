@@ -378,7 +378,7 @@ final class HunStore {
                 agent, path: project.path,
                 prompt: HunAgentBrief.change(
                     steering ? "Change of plan, this replaces what I asked just before: \(request)" : request,
-                    current: current, state: state, worktrees: worktreeState(for: project)
+                    current: current, state: state, worktrees: await worktreeState(for: project)
                 ),
                 resuming: chat.sessionID,
                 previousConfig: current
@@ -441,11 +441,18 @@ final class HunStore {
         return model.projects.filter { $0.worktreeOf == main }.sorted(by: HunProject.newestWorktreeFirst)
     }
 
-    private func worktreeState(for project: HunProject) -> String? {
+    private func worktreeState(for project: HunProject) async -> String? {
         let list = worktrees(for: project)
         guard !list.isEmpty else { return nil }
+        var uncommitted: [String: Int] = [:]
+        for worktree in list {
+            uncommitted[worktree.id] = await uncommittedChanges(in: worktree)
+        }
         return list.map { worktree in
             var parts = [worktree.status == .stopped ? "idle" : "running"]
+            if let count = uncommitted[worktree.id] {
+                parts.append(count == 0 ? "nothing uncommitted" : "\(count) uncommitted \(count == 1 ? "change" : "changes")")
+            }
             if let branch = worktree.branch { parts.append("branch \(branch)") }
             if let pr = worktree.pullRequest {
                 var text = "PR #\(pr.number) \(pr.state.rawValue)"
@@ -458,20 +465,64 @@ final class HunStore {
         }.joined(separator: "\n")
     }
 
-    /// Deletes the worktrees a reply offered, once the person confirms.
+    /// Deletes the worktrees a reply offered, once the person confirms, and
+    /// puts what happened to each on the card. The card showed each one's
+    /// uncommitted changes, so confirming throws those away.
     func confirmWorktreeCleanup(_ messageID: UUID, for project: HunProject, delete: Bool) {
-        guard var chat = agentChats[project.path],
-              let index = chat.messages.firstIndex(where: { $0.id == messageID }),
-              let cleanup = chat.messages[index].worktreeCleanup, cleanup.state == .pending
+        guard let cleanup = agentChats[project.path]?.messages.first(where: { $0.id == messageID })?.worktreeCleanup,
+              cleanup.state == .pending
         else { return }
-        if delete {
-            let paths = Set(cleanup.items.map(\.path))
-            let targets = model.projects.filter { paths.contains($0.path) && $0.status == .stopped }
-            deleteWorktrees(targets, discardChanges: false)
+        guard delete else {
+            updateCleanup(messageID, path: project.path) { $0.state = .kept }
+            return
         }
-        chat.messages[index].worktreeCleanup?.state = delete ? .deleted : .kept
-        agentChats[project.path] = chat
-        HunAgentChatArchive.save(chat, for: project.path)
+        updateCleanup(messageID, path: project.path, save: false) { $0.state = .deleting }
+        Task {
+            let items = await deleteForCleanup(cleanup.items)
+            updateCleanup(messageID, path: project.path) {
+                $0.items = items
+                $0.state = .deleted
+            }
+            await refresh(force: true)
+        }
+    }
+
+    /// Deletes each worktree on a confirmed card, throwing away the
+    /// uncommitted changes the card showed, and returns the items with what
+    /// happened to each. One git refuses doesn't stop the rest.
+    func deleteForCleanup(_ items: [HunWorktreeCleanup.Item]) async -> [HunWorktreeCleanup.Item] {
+        var done = items
+        for index in done.indices {
+            let item = done[index]
+            guard let worktree = model.projects.first(where: { $0.path == item.path }) else {
+                done[index].outcome = "" // Already gone.
+                continue
+            }
+            do {
+                _ = try await client.deleteWorktree(worktree.id, discardChanges: (item.uncommitted ?? 0) > 0)
+                done[index].outcome = ""
+                if selectedProjectID == worktree.id,
+                   let main = model.projects.first(where: { $0.path == worktree.worktreeOf }) {
+                    selectProject(main.id)
+                }
+            } catch {
+                done[index].outcome = error.localizedDescription
+            }
+        }
+        return done
+    }
+
+    private func updateCleanup(
+        _ messageID: UUID, path: String, save: Bool = true, _ update: (inout HunWorktreeCleanup) -> Void
+    ) {
+        guard var chat = agentChats[path],
+              let index = chat.messages.firstIndex(where: { $0.id == messageID }),
+              var cleanup = chat.messages[index].worktreeCleanup
+        else { return }
+        update(&cleanup)
+        chat.messages[index].worktreeCleanup = cleanup
+        agentChats[path] = chat
+        if save { HunAgentChatArchive.save(chat, for: path) }
     }
 
     private func liveState(for project: HunProject) async -> String? {
@@ -667,8 +718,26 @@ final class HunStore {
             .filter { wanted.contains($0.worktreeName) && $0.status == .stopped }
             .map { HunWorktreeCleanup.Item(name: $0.worktreeName, path: $0.path) }
         guard !items.isEmpty else { return }
+        var messageID: UUID?
         updateLastAgentMessage(path: path) { message in
-            message.worktreeCleanup = HunWorktreeCleanup(items: items, state: .pending)
+            message.worktreeCleanup = HunWorktreeCleanup(items: items, state: .pending, counted: false)
+            messageID = message.id
+        }
+        guard let messageID else { return }
+        // Count what each would lose, so the card says so before anyone
+        // confirms.
+        Task {
+            var counted = items
+            for index in counted.indices {
+                if let worktree = model.projects.first(where: { $0.path == counted[index].path }) {
+                    counted[index].uncommitted = await uncommittedChanges(in: worktree)
+                }
+            }
+            updateCleanup(messageID, path: path) { cleanup in
+                guard cleanup.state == .pending else { return }
+                cleanup.items = counted
+                cleanup.counted = true
+            }
         }
     }
 
