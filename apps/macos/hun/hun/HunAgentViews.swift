@@ -840,30 +840,39 @@ private struct HunWorktreeCleanupCard: View {
     @State private var hoveringDelete = false
     @State private var hoveringKeep = false
 
+    /// Older versions saved the card without counts or outcomes.
+    private var counting: Bool { cleanup.counted == false }
+
     private var footer: String {
         switch cleanup.state {
-        case .pending: return "Ones with uncommitted changes are kept"
-        case .deleted: return cleanup.items.count == 1 ? "Deleted" : "Deleted \(cleanup.items.count) worktrees"
-        case .kept: return "Kept"
+        case .pending:
+            if counting { return "Checking for uncommitted changes…" }
+            let lose = cleanup.changesToLose
+            return lose == 0 ? "Nothing uncommitted" : "\(lose) uncommitted \(lose == 1 ? "change" : "changes") will be lost"
+        case .deleting:
+            return "Deleting…"
+        case .deleted:
+            let deleted = cleanup.items.filter { $0.outcome == nil || $0.wasDeleted }.count
+            if deleted == cleanup.items.count {
+                return deleted == 1 ? "Deleted" : "Deleted \(deleted) worktrees"
+            }
+            return deleted == 0 ? "Nothing deleted" : "Deleted \(deleted) of \(cleanup.items.count)"
+        case .kept:
+            return "Kept"
         }
+    }
+
+    private var deleteTitle: String {
+        let lose = cleanup.changesToLose
+        if lose > 0 { return "Delete and Lose \(lose) \(lose == 1 ? "Change" : "Changes")" }
+        return cleanup.items.count == 1 ? "Delete" : "Delete \(cleanup.items.count)"
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
-                ForEach(cleanup.items, id: \.self) { item in
-                    HStack(spacing: 8) {
-                        Image(systemName: "arrow.triangle.branch")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(AppTheme.textTertiary)
-                            .frame(width: 10)
-                        Text(item.name)
-                            .font(.system(size: 11.5, design: .monospaced))
-                            .foregroundStyle(cleanup.state == .pending ? AppTheme.textPrimary : AppTheme.textTertiary)
-                            .strikethrough(cleanup.state == .deleted)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
+                ForEach(cleanup.items, id: \.path) { item in
+                    row(item)
                 }
             }
             .padding(12)
@@ -873,7 +882,7 @@ private struct HunWorktreeCleanupCard: View {
             HStack(spacing: 14) {
                 Text(footer)
                     .font(.system(size: 11))
-                    .foregroundStyle(AppTheme.textTertiary)
+                    .foregroundStyle(cleanup.state == .pending && cleanup.changesToLose > 0 ? AppTheme.warning : AppTheme.textTertiary)
                 Spacer()
                 if cleanup.state == .pending {
                     Button { onConfirm(false) } label: {
@@ -884,12 +893,15 @@ private struct HunWorktreeCleanupCard: View {
                     .buttonStyle(.plain)
                     .onHover { hoveringKeep = $0 }
                     Button { onConfirm(true) } label: {
-                        Text(cleanup.items.count == 1 ? "Delete" : "Delete \(cleanup.items.count)")
+                        Text(deleteTitle)
                             .font(.system(size: 11.5, weight: .semibold))
                             .foregroundStyle(hoveringDelete ? AppTheme.danger : AppTheme.danger.opacity(0.85))
                     }
                     .buttonStyle(.plain)
                     .onHover { hoveringDelete = $0 }
+                    // Not before the card can say what deleting loses.
+                    .disabled(counting)
+                    .opacity(counting ? 0.4 : 1)
                 }
             }
             .padding(.horizontal, 12)
@@ -897,6 +909,38 @@ private struct HunWorktreeCleanupCard: View {
         }
         .background(HunRoundedShape().fill(AppTheme.elevated))
         .overlay(HunRoundedShape().strokeBorder(AppTheme.divider, lineWidth: 1))
+    }
+
+    @ViewBuilder
+    private func row(_ item: HunWorktreeCleanup.Item) -> some View {
+        let deleted = item.wasDeleted || (cleanup.state == .deleted && item.outcome == nil)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(AppTheme.textTertiary)
+                    .frame(width: 10)
+                Text(item.name)
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .foregroundStyle(cleanup.state == .pending || item.keptBecause != nil ? AppTheme.textPrimary : AppTheme.textTertiary)
+                    .strikethrough(deleted)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 6)
+                if cleanup.state == .pending, let count = item.uncommitted, count > 0 {
+                    Text("\(count) uncommitted")
+                        .font(.system(size: 11))
+                        .foregroundStyle(AppTheme.warning)
+                }
+            }
+            if let reason = item.keptBecause {
+                Text("Kept: \(reason)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(AppTheme.danger)
+                    .padding(.leading, 18)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 }
 

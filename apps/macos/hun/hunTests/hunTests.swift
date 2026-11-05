@@ -40,6 +40,93 @@ struct hunTests {
         #expect(required == properties)
     }
 
+    @Test func confirmingACleanupCardDeletesUncommittedWorkAndReportsEachOutcome() async throws {
+        let client = MockDaemonClient()
+        client.nextSnapshot = try JSONDecoder().decode(HunDaemonSnapshot.self, from: Data("""
+        {"protocol": 17, "mode": "multitask", "scan_dirs": [], "projects": [
+          {"id": "otto", "name": "otto", "path": "/w/otto", "status": "stopped", "is_active": true, "services": []},
+          {"id": "otto-wip", "name": "otto", "path": "/w/otto/.claude/worktrees/wip", "status": "stopped",
+           "is_active": false, "services": [], "worktree_of": "/w/otto"},
+          {"id": "otto-clean", "name": "otto", "path": "/w/otto/.claude/worktrees/clean", "status": "stopped",
+           "is_active": false, "services": [], "worktree_of": "/w/otto"},
+          {"id": "otto-locked", "name": "otto", "path": "/w/otto/.claude/worktrees/locked", "status": "stopped",
+           "is_active": false, "services": [], "worktree_of": "/w/otto"}
+        ]}
+        """.utf8))
+        client.deleteWorktreeErrors["otto-locked"] = "otto-locked is locked"
+        let store = HunStore(client: client, supervisor: MockSupervisor(), startAutomatically: false, findsCodingAgents: false)
+        await store.refresh(force: true)
+
+        let items = await store.deleteForCleanup([
+            .init(name: "wip", path: "/w/otto/.claude/worktrees/wip", uncommitted: 20),
+            .init(name: "clean", path: "/w/otto/.claude/worktrees/clean", uncommitted: 0),
+            .init(name: "locked", path: "/w/otto/.claude/worktrees/locked", uncommitted: 0),
+            .init(name: "gone", path: "/w/otto/.claude/worktrees/gone", uncommitted: 0)
+        ])
+
+        // The card showed wip's 20 changes, so confirming throws them away;
+        // a clean one isn't forced.
+        #expect(client.actions.contains("delete_worktree:otto-wip:true"))
+        #expect(client.actions.contains("delete_worktree:otto-clean:false"))
+        #expect(items.map(\.wasDeleted) == [true, true, false, true])
+        #expect(items[2].keptBecause?.contains("locked") == true)
+    }
+
+    @Test func restartingTheDaemonStartsAgainWhatHunWasRunning() throws {
+        func snapshot(mode: String, _ projects: String) throws -> HunDaemonSnapshot {
+            try JSONDecoder().decode(HunDaemonSnapshot.self, from: Data("""
+            {"protocol": 20, "mode": "\(mode)", "scan_dirs": [], "projects": [\(projects)]}
+            """.utf8))
+        }
+        func service(_ id: String, running: Bool, origin: String) -> String {
+            """
+            {"id": "\(id)", "name": "\(id)", "pid": 1, "port": 3000, "status": "\(running ? "running" : "stopped")",
+             "running": \(running), "ready": \(running), "origin": "\(origin)"}
+            """
+        }
+        func project(_ id: String, running: Bool, origin: String = "hun") -> String {
+            // web runs (or not); api and db never do, so they mustn't come back.
+            """
+            {"id": "\(id)", "name": "\(id)", "path": "/w/\(id)", "status": "\(running ? "running" : "stopped")",
+             "is_active": false, "services": [\(service("web", running: running, origin: origin)),
+             \(service("api", running: false, origin: "hun")), \(service("db", running: false, origin: "hun"))]}
+            """
+        }
+        let multitask = try snapshot(mode: "multitask", [
+            project("hun", running: true), project("idle", running: false), project("terminal", running: true, origin: "external"),
+            project("otto", running: true)
+        ].joined(separator: ","))
+        let restart = HunDaemonSupervisor.projectsToRestart(multitask)
+        // Services started outside Hun outlive the daemon, so they're left be.
+        #expect(restart.map(\.id) == ["hun", "otto"])
+        // Only what was running comes back, not the rest of a profile.
+        #expect(restart.allSatisfy { $0.services == ["web"] })
+        #expect(restart.allSatisfy { $0.mode == .parallel })
+
+        let focus = try snapshot(mode: "focus", project("hun", running: true))
+        #expect(HunDaemonSupervisor.projectsToRestart(focus).map(\.mode) == [.exclusive])
+    }
+
+    @Test func aReplyNamingAWorktreeHunCantDeleteSaysSo() {
+        #expect(HunStore.cleanupNote(cantDelete: []) == nil)
+        #expect(HunStore.cleanupNote(cantDelete: ["wip"]) == "Hun can't delete wip: it isn't an idle worktree of this project.")
+        #expect(HunStore.cleanupNote(cantDelete: ["a", "b"])?.contains("they aren't idle worktrees") == true)
+    }
+
+    @Test func cleanupCardsSavedByOlderVersionsStillLoad() throws {
+        let old = try JSONDecoder().decode(HunWorktreeCleanup.self, from: Data("""
+        {"items": [{"name": "ott-1", "path": "/w/otto/.claude/worktrees/ott-1"}], "state": "deleted"}
+        """.utf8))
+        #expect(old.items[0].uncommitted == nil)
+        #expect(old.items[0].outcome == nil)
+        #expect(old.counted == nil)
+        #expect(old.changesToLose == 0)
+        let counted = HunWorktreeCleanup(items: [
+            .init(name: "a", path: "/a", uncommitted: 3), .init(name: "b", path: "/b", uncommitted: nil)
+        ], state: .pending, counted: true)
+        #expect(counted.changesToLose == 3)
+    }
+
     @Test func worktreePullRequestDecodesAndAnUnknownStateIsIgnored() throws {
         func project(_ pullRequest: String) throws -> HunProject {
             let json = """
@@ -213,7 +300,8 @@ struct hunTests {
     }
 
     @Test func anEndedBetaLicenseAsksForAPaidOneAndRemembersIt() async {
-        let defaults = UserDefaults(suiteName: "hun-tests-\(UUID().uuidString)")!
+        let (defaults, removeDefaults) = scratchDefaults()
+        defer { removeDefaults() }
         let service = MockLicenseService()
         service.isValid = false
         let store = InMemoryLicenseStore(license: HunStoredLicense(
@@ -259,6 +347,8 @@ struct hunTests {
     }
 
     @Test func anInvalidPaidLicenseExplainsItselfWithoutMentioningTheBeta() async {
+        let (defaults, removeDefaults) = scratchDefaults()
+        defer { removeDefaults() }
         let service = MockLicenseService()
         service.isValid = false
         let manager = HunLicenseManager(
@@ -277,7 +367,7 @@ struct hunTests {
                 productName: "Hun",
                 lastValidatedAt: Date(timeIntervalSince1970: 1_000)
             )),
-            defaults: UserDefaults(suiteName: "hun-tests-\(UUID().uuidString)")!,
+            defaults: defaults,
             now: { Date(timeIntervalSince1970: 2_000) }
         )
 
@@ -288,6 +378,8 @@ struct hunTests {
     }
 
     @Test func recheckingOnlyRunsForAnActiveLicense() async {
+        let (defaults, removeDefaults) = scratchDefaults()
+        defer { removeDefaults() }
         let service = MockLicenseService()
         let manager = HunLicenseManager(
             configuration: HunLicenseConfiguration(
@@ -298,7 +390,7 @@ struct hunTests {
             ),
             service: service,
             store: InMemoryLicenseStore(),
-            defaults: UserDefaults(suiteName: "hun-tests-\(UUID().uuidString)")!
+            defaults: defaults
         )
         await manager.restore()
         await manager.recheck()
@@ -2214,6 +2306,19 @@ private extension HunGitStatus {
     }
 }
 
+/// A throwaway settings suite for one test, and how to remove it and its
+/// file from ~/Library/Preferences once the test is done.
+private func scratchDefaults() -> (UserDefaults, () -> Void) {
+    let name = "hun-tests-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: name)!
+    return (defaults, {
+        defaults.removePersistentDomain(forName: name)
+        let file = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Preferences/\(name).plist")
+        try? FileManager.default.removeItem(at: file)
+    })
+}
+
 private final class MockDaemonClient: HunDaemonClientProtocol {
     var nextSnapshot = HunDaemonSnapshot.fixture(activeProject: "app")
     var nextDaemonInfo = HunDaemonInfo(
@@ -2326,8 +2431,12 @@ private final class MockDaemonClient: HunDaemonClientProtocol {
         actions.append("remove_project:\(project)")
     }
 
+    /// Worktrees whose delete fails, with the daemon's message.
+    var deleteWorktreeErrors: [String: String] = [:]
+
     func deleteWorktree(_ project: String, discardChanges: Bool) async throws -> HunWorktreeDeletion {
         actions.append("delete_worktree:\(project):\(discardChanges)")
+        if let message = deleteWorktreeErrors[project] { throw HunDaemonError.daemon(message) }
         return try JSONDecoder().decode(HunWorktreeDeletion.self, from: Data(#"{"branch_deleted": false}"#.utf8))
     }
 

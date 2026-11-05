@@ -770,13 +770,38 @@ nonisolated final class HunDaemonSupervisor: HunDaemonSupervisorProtocol {
         try await restartDaemon(expectedRuntimeBuild: expectedRuntimeBuild.get())
     }
 
+    /// Replaces the daemon, after an update or from Settings. Stopping a
+    /// daemon stops every service it started and records them as stopped,
+    /// so the services running are noted first and exactly those started
+    /// again on the new one, nothing more.
     private func restartDaemon(expectedRuntimeBuild: HunRuntimeBuild) async throws {
         let info = try? await client.daemonInfo()
+        let toRestart = (try? await client.snapshot(force: false)).map(Self.projectsToRestart) ?? []
         try terminateExistingDaemon(
             reportedPID: info?.pid ?? 0,
             socketResponded: info?.status == "pong"
         )
         try await launchDaemon(expectedRuntimeBuild: expectedRuntimeBuild)
+        for project in toRestart {
+            for (index, service) in project.services.enumerated() {
+                // The first sets the project's mode; the rest join it.
+                try? await client.startService(project.id, service: service, mode: index == 0 ? project.mode : .parallel)
+            }
+        }
+    }
+
+    /// The services Hun started, by project, and how to start each project
+    /// again: alone in Focus with one running, side by side otherwise.
+    /// Services started elsewhere outlive the daemon and are left out.
+    nonisolated static func projectsToRestart(
+        _ snapshot: HunDaemonSnapshot
+    ) -> [(id: String, services: [String], mode: HunDaemonStartMode)] {
+        let running = snapshot.projects.compactMap { project -> (id: String, services: [String])? in
+            let services = project.services.filter { $0.running && $0.origin != "external" }.map(\.id)
+            return services.isEmpty ? nil : (project.id, services)
+        }
+        let mode: HunDaemonStartMode = snapshot.mode == "focus" && running.count == 1 ? .exclusive : .parallel
+        return running.map { (id: $0.id, services: $0.services, mode: mode) }
     }
 
     private func launchDaemon(expectedRuntimeBuild: HunRuntimeBuild) async throws {

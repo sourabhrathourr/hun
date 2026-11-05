@@ -207,7 +207,7 @@ nonisolated enum HunAgentBrief {
 
             \($0)
 
-            If they ask to delete or clean up worktrees (for example "delete my merged worktrees"), put the names of the ones they mean in `delete_worktrees`, exactly as listed, and say in `summary` which ones and why. Only idle worktrees can be deleted. "Merged" means the PR is merged. Hun shows them the list and deletes only after they confirm; it keeps any with uncommitted changes, and keeps a branch with commits its PR doesn't have. Leave the file exactly as it is. Otherwise `delete_worktrees` is empty.
+            If they ask to delete or clean up worktrees (for example "delete my merged worktrees"), put the names of the ones they mean in `delete_worktrees`, exactly as listed, and say in `summary` which ones and why. Only idle worktrees can be deleted. "Merged" means the PR is merged. Hun does the deleting itself: it shows them a card listing the worktrees and how many uncommitted changes each has, and deletes them once they confirm, uncommitted changes included. So when one has uncommitted changes, say how many in `summary`, so they know what confirming throws away. Never tell them to run git themselves or that Hun can't delete it. A local branch goes too only when its PR is merged and it has nothing the PR doesn't. Leave the file exactly as it is. Otherwise `delete_worktrees` is empty.
             """
         } ?? ""
         return """
@@ -771,16 +771,32 @@ nonisolated struct HunWorktreeCleanup: Codable, Equatable, Sendable {
     struct Item: Codable, Equatable, Sendable, Hashable {
         let name: String
         let path: String
+        /// Uncommitted changes when it was offered, which confirming throws
+        /// away; nil until counted, or if git couldn't say.
+        var uncommitted: Int?
+        /// After confirming: empty when it was deleted, otherwise why it was
+        /// kept. nil before then, and on cards saved by older versions.
+        var outcome: String?
+
+        var wasDeleted: Bool { outcome?.isEmpty == true }
+        var keptBecause: String? { outcome.flatMap { $0.isEmpty ? nil : $0 } }
     }
 
     enum State: String, Codable, Sendable {
         case pending
+        case deleting
         case deleted
         case kept
     }
 
-    let items: [Item]
+    var items: [Item]
     var state: State
+    /// Whether the uncommitted changes have been counted, so the card can
+    /// say what deleting loses before anyone confirms.
+    var counted: Bool?
+
+    /// What confirming would throw away, across every worktree on the card.
+    var changesToLose: Int { items.reduce(0) { $0 + ($1.uncommitted ?? 0) } }
 }
 
 /// What a reply changed, service by service, and how to put it back.
