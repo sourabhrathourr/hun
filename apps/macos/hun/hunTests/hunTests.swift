@@ -78,11 +78,18 @@ struct hunTests {
             {"protocol": 20, "mode": "\(mode)", "scan_dirs": [], "projects": [\(projects)]}
             """.utf8))
         }
+        func service(_ id: String, running: Bool, origin: String) -> String {
+            """
+            {"id": "\(id)", "name": "\(id)", "pid": 1, "port": 3000, "status": "\(running ? "running" : "stopped")",
+             "running": \(running), "ready": \(running), "origin": "\(origin)"}
+            """
+        }
         func project(_ id: String, running: Bool, origin: String = "hun") -> String {
+            // web runs (or not); api and db never do, so they mustn't come back.
             """
             {"id": "\(id)", "name": "\(id)", "path": "/w/\(id)", "status": "\(running ? "running" : "stopped")",
-             "is_active": false, "services": [{"id": "web", "name": "web", "pid": 1, "port": 3000,
-             "status": "\(running ? "running" : "stopped")", "running": \(running), "ready": \(running), "origin": "\(origin)"}]}
+             "is_active": false, "services": [\(service("web", running: running, origin: origin)),
+             \(service("api", running: false, origin: "hun")), \(service("db", running: false, origin: "hun"))]}
             """
         }
         let multitask = try snapshot(mode: "multitask", [
@@ -92,6 +99,8 @@ struct hunTests {
         let restart = HunDaemonSupervisor.projectsToRestart(multitask)
         // Services started outside Hun outlive the daemon, so they're left be.
         #expect(restart.map(\.id) == ["hun", "otto"])
+        // Only what was running comes back, not the rest of a profile.
+        #expect(restart.allSatisfy { $0.services == ["web"] })
         #expect(restart.allSatisfy { $0.mode == .parallel })
 
         let focus = try snapshot(mode: "focus", project("hun", running: true))
